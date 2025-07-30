@@ -1,1 +1,1 @@
-A Git based filesystem, written in rust and moutend with FUSE.
+GUSE (goo͞s) is a git based filesystem, written in rust and moutend with FUSE.
