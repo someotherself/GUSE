@@ -2,7 +2,6 @@ use std::{collections::HashMap, path::PathBuf, sync::atomic::AtomicU64, time::Sy
 
 use crate::repo::GitRepo;
 
-// Does not get stored on file. Is computed when needed
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct FileAttr {
     pub inode: u64,

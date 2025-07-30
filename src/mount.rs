@@ -1,26 +1,79 @@
 #![allow(unused_imports, unused_variables)]
 
+use fuse3::MountOptions;
 use fuse3::raw::reply::{
-    ReplyAttr, ReplyCreated, ReplyData, ReplyEntry, ReplyOpen, ReplyStatFs, ReplyWrite,
+    ReplyAttr, ReplyCreated, ReplyData, ReplyEntry, ReplyInit, ReplyOpen, ReplyStatFs, ReplyWrite,
 };
-use fuse3::{Errno, Inode, SetAttr};
+use fuse3::raw::{MountHandle, Session};
+use fuse3::{Errno, Inode, Result, SetAttr, raw::Request};
 use libc::ENOENT;
-use std::ffi::OsStr;
-use std::time::Duration;
-use std::{num::NonZeroU32, path::PathBuf, sync::Arc};
 use tracing::{Level, info};
 use tracing::{debug, error, instrument, trace, warn};
 
-use fuse3::{
-    Result,
-    raw::{Request, reply::ReplyInit},
-};
+use std::ffi::OsStr;
+use std::time::Duration;
+use std::{num::NonZeroU32, path::PathBuf, sync::Arc};
 
 use crate::fs::{FileAttr, FileType, GitFs};
 
 const TTL: Duration = Duration::from_secs(1);
 
-pub trait MountPoint {}
+pub struct MountPoint {
+    mountpoint: PathBuf,
+    data_dir: PathBuf,
+    read_only: bool,
+    allow_root: bool,
+    allow_other: bool,
+}
+
+impl MountPoint {
+    fn new(
+        mountpoint: PathBuf,
+        data_dir: PathBuf,
+        read_only: bool,
+        allow_root: bool,
+        allow_other: bool,
+    ) -> Self {
+        Self {
+            mountpoint,
+            data_dir,
+            read_only,
+            allow_root,
+            allow_other,
+        }
+    }
+}
+
+// async fn mount_fuse(opts: MountPoint) -> anyhow::Result<MountHandle> {
+//     let MountPoint {
+//         mountpoint,
+//         data_dir,
+//         read_only,
+//         allow_root,
+//         allow_other,
+//     } = opts;
+
+//     let mount_options = &mut MountOptions::default();
+
+//     if !mountpoint.exists() {
+//         std::fs::create_dir_all(&mountpoint)?;
+//     }
+
+//     let fs = GitFsAdapter::new(data_dir);
+
+//     let mount_options = mount_options
+//                                 .read_only(read_only)
+//                                 .allow_other(allow_other)
+//                                 .allow_root(allow_root)
+//                                 .fs_name("GitFs")
+//                                 .clone();
+
+//     let fs = GitFs::new(data_dir);
+//     let session = Session::new(mount_options)
+//     .mount_with_unprivileged(fs, &mountpoint).await?;
+
+//     Ok(session)
+// }
 
 struct GitFsAdapter {
     inner: Arc<GitFs>,
