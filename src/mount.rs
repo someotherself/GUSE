@@ -2,15 +2,18 @@
 
 use fuse3::MountOptions;
 use fuse3::raw::reply::{
-    ReplyAttr, ReplyCreated, ReplyData, ReplyEntry, ReplyInit, ReplyOpen, ReplyStatFs, ReplyWrite,
+    DirectoryEntry, DirectoryEntryPlus, ReplyAttr, ReplyCreated, ReplyData, ReplyEntry, ReplyInit,
+    ReplyOpen, ReplyStatFs, ReplyWrite,
 };
 use fuse3::raw::{MountHandle, Session};
 use fuse3::{Errno, Inode, Result, SetAttr, raw::Request};
+use futures_util::stream::Iter;
 use libc::ENOENT;
 use tracing::{Level, info};
 use tracing::{debug, error, instrument, trace, warn};
 
 use std::ffi::OsStr;
+use std::iter::Skip;
 use std::time::Duration;
 use std::{num::NonZeroU32, path::PathBuf, sync::Arc};
 
@@ -44,36 +47,41 @@ impl MountPoint {
     }
 }
 
-// async fn mount_fuse(opts: MountPoint) -> anyhow::Result<MountHandle> {
-//     let MountPoint {
-//         mountpoint,
-//         data_dir,
-//         read_only,
-//         allow_root,
-//         allow_other,
-//     } = opts;
+async fn mount_fuse(opts: MountPoint) -> anyhow::Result<MountHandle> {
+    let MountPoint {
+        mountpoint,
+        data_dir,
+        read_only,
+        allow_root,
+        allow_other,
+    } = opts;
 
-//     let mount_options = &mut MountOptions::default();
+    let mount_options = &mut MountOptions::default();
 
-//     if !mountpoint.exists() {
-//         std::fs::create_dir_all(&mountpoint)?;
-//     }
+    if !mountpoint.exists() {
+        std::fs::create_dir_all(&mountpoint)?;
+    }
 
-//     let fs = GitFsAdapter::new(data_dir);
+    let uid = unsafe { libc::getuid() };
+    let gid = unsafe { libc::getgid() };
 
-//     let mount_options = mount_options
-//                                 .read_only(read_only)
-//                                 .allow_other(allow_other)
-//                                 .allow_root(allow_root)
-//                                 .fs_name("GitFs")
-//                                 .clone();
+    let fs = GitFsAdapter::new(data_dir);
 
-//     let fs = GitFs::new(data_dir);
-//     let session = Session::new(mount_options)
-//     .mount_with_unprivileged(fs, &mountpoint).await?;
+    let mount_options = mount_options
+        .read_only(read_only)
+        .allow_other(allow_other)
+        .allow_root(allow_root)
+        .uid(uid)
+        .gid(gid)
+        .fs_name("GitFs")
+        .clone();
 
-//     Ok(session)
-// }
+    let session = Session::new(mount_options)
+        .mount_with_unprivileged(fs, &mountpoint)
+        .await?;
+
+    Ok(session)
+}
 
 struct GitFsAdapter {
     inner: Arc<GitFs>,
@@ -82,211 +90,242 @@ struct GitFsAdapter {
 impl GitFsAdapter {
     fn new(data_dir: PathBuf) -> Self {
         let fs = GitFs::new(data_dir);
-        Self {
+        GitFsAdapter {
             inner: Arc::new(fs),
         }
     }
 
     pub fn getfs(&self) -> Arc<GitFs> {
-        self.inner.clone()
+        // self.inner.clone()
+        todo!()
     }
 }
 
-// impl fuse3::raw::Filesystem for GitFsAdapter {
-//     #[instrument(skip(self), err(level = Level::WARN), ret(level = Level::INFO))]
-//     async fn init(&self, _req: Request) -> Result<ReplyInit> {
-//         Ok(ReplyInit {
-//             max_write: NonZeroU32::new(16 * 1024).unwrap(),
-//         })
-//     }
+pub struct DirectoryEntryIterator;
 
-//     async fn destroy(&self, _req: Request) {}
+impl Iterator for DirectoryEntryIterator {
+    type Item = Result<DirectoryEntry>;
 
-//     #[instrument(skip(self), err(level = Level::WARN), ret(level = Level::DEBUG))]
-//     async fn lookup(&self, _req: Request, parent: u64, name: &OsStr) -> Result<ReplyEntry> {
-//         // Lookup a dir (tree) by name (hash) and get attr
-//         todo!()
-//     }
+    fn next(&mut self) -> Option<Self::Item> {
+        todo!()
+    }
+}
 
-//     #[instrument(skip(self), err(level = Level::WARN), ret(level = Level::DEBUG))]
-//     async fn getattr(
-//         &self,
-//         _req: Request,
-//         inode: u64,
-//         _fh: Option<u64>,
-//         _flags: u32,
-//     ) -> Result<ReplyAttr> {
-//         match self.getfs().getattr(inode) {
-//             Err(err) => {
-//                 error!(err = %err);
-//                 return Err(ENOENT.into());
-//             }
-//             Ok(attr) => Ok(ReplyAttr {
-//                 ttl: TTL,
-//                 attr: attr.into(),
-//             }),
-//         }
-//     }
+pub struct DirectoryEntryIteratorPlus;
 
-//     #[instrument(skip(self), err(level = Level::WARN), ret(level = Level::DEBUG))]
-//     async fn setattr(
-//         &self,
-//         req: Request,
-//         inode: Inode,
-//         fh: Option<u64>,
-//         set_attr: SetAttr,
-//     ) -> Result<ReplyAttr> {
-//         let attr = self.getfs().getattr(inode).map_err(|err| {
-//             error!(err = %err);
-//             Errno::from(ENOENT)
-//         })?;
+impl Iterator for DirectoryEntryIteratorPlus {
+    type Item = Result<DirectoryEntryPlus>;
 
-//         if let Some(mode) = set_attr.mode {
-//             todo!()
-//         }
+    fn next(&mut self) -> Option<Self::Item> {
+        todo!()
+    }
+}
 
-//         if set_attr.uid.is_some() || set_attr.gid.is_some() {
-//             todo!()
-//         }
+impl fuse3::raw::Filesystem for GitFsAdapter {
+    type DirEntryPlusStream<'a>
+        = Iter<Skip<DirectoryEntryIteratorPlus>>
+    where
+        Self: 'a;
 
-//         if let Some(size) = set_attr.size {
-//             todo!()
-//         }
+    type DirEntryStream<'a>
+        = Iter<Skip<DirectoryEntryIterator>>
+    where
+        Self: 'a;
 
-//         if let Some(lock_owner) = set_attr.lock_owner {
-//             // needed?
-//             todo!()
-//         }
+    #[instrument(skip(self), err(level = Level::WARN), ret(level = Level::INFO))]
+    async fn init(&self, _req: Request) -> Result<ReplyInit> {
+        Ok(ReplyInit {
+            max_write: NonZeroU32::new(16 * 1024).unwrap(),
+        })
+    }
 
-//         if let Some(atime) = set_attr.atime {
-//             todo!()
-//         }
+    async fn destroy(&self, _req: Request) {}
 
-//         if let Some(mtime) = set_attr.mtime {
-//             todo!()
-//         }
+    #[instrument(skip(self), err(level = Level::WARN), ret(level = Level::DEBUG))]
+    async fn lookup(&self, _req: Request, parent: u64, name: &OsStr) -> Result<ReplyEntry> {
+        // Lookup a dir (tree) by name (hash) and get attr
+        todo!()
+    }
 
-//         if let Some(ctime) = set_attr.ctime {
-//             todo!()
-//         }
-//         todo!()
-//     }
+    #[instrument(skip(self), err(level = Level::WARN), ret(level = Level::DEBUG))]
+    async fn getattr(
+        &self,
+        _req: Request,
+        inode: u64,
+        _fh: Option<u64>,
+        _flags: u32,
+    ) -> Result<ReplyAttr> {
+        match self.getfs().getattr(inode) {
+            Err(err) => {
+                error!(err = %err);
+                return Err(ENOENT.into());
+            }
+            Ok(attr) => Ok(ReplyAttr {
+                ttl: TTL,
+                attr: attr.into(),
+            }),
+        }
+    }
 
-//     #[instrument(skip(self), err(level = Level::WARN), ret(level = Level::DEBUG))]
-//     async fn mknod(
-//         &self,
-//         req: Request,
-//         parent: Inode,
-//         name: &OsStr,
-//         mode: u32,
-//         rdev: u32,
-//     ) -> Result<ReplyEntry> {
-//         todo!()
-//     }
+    #[instrument(skip(self), err(level = Level::WARN), ret(level = Level::DEBUG))]
+    async fn setattr(
+        &self,
+        req: Request,
+        inode: Inode,
+        fh: Option<u64>,
+        set_attr: SetAttr,
+    ) -> Result<ReplyAttr> {
+        let attr = self.getfs().getattr(inode).map_err(|err| {
+            error!(err = %err);
+            Errno::from(ENOENT)
+        })?;
 
-//     #[instrument(skip(self, name), fields(name = name.to_str().unwrap()), err(level = Level::WARN), ret(level = Level::DEBUG))]
-//     async fn mkdir(
-//         &self,
-//         req: Request,
-//         parent: Inode,
-//         name: &OsStr,
-//         mode: u32,
-//         umask: u32,
-//     ) -> Result<ReplyEntry> {
-//         todo!()
-//     }
+        if let Some(mode) = set_attr.mode {
+            todo!()
+        }
 
-//     #[instrument(skip(self, name), fields(name = name.to_str().unwrap()), err(level = Level::WARN), ret(level = Level::DEBUG))]
-//     async fn unlink(&self, req: Request, parent: Inode, name: &OsStr) -> Result<()> {
-//         todo!()
-//     }
-//     #[instrument(skip(self, name), fields(name = name.to_str().unwrap()), err(level = Level::WARN), ret(level = Level::DEBUG))]
-//     async fn rmdir(&self, req: Request, parent: Inode, name: &OsStr) -> Result<()> {
-//         todo!()
-//     }
-//     #[instrument(skip(self, name, new_name), fields(name = name.to_str().unwrap(), new_name = new_name.to_str().unwrap()), err(level = Level::WARN), ret(level = Level::DEBUG))]
-//     async fn rename(
-//         &self,
-//         req: Request,
-//         parent: Inode,
-//         name: &OsStr,
-//         new_parent: Inode,
-//         new_name: &OsStr,
-//     ) -> Result<()> {
-//         todo!()
-//     }
+        if set_attr.uid.is_some() || set_attr.gid.is_some() {
+            todo!()
+        }
 
-//     #[instrument(skip(self), err(level = Level::WARN), ret(level = Level::DEBUG))]
-//     async fn open(&self, req: Request, inode: Inode, flags: u32) -> Result<ReplyOpen> {
-//         todo!()
-//     }
+        if let Some(size) = set_attr.size {
+            todo!()
+        }
 
-//     #[instrument(skip(self), err(level = Level::WARN))]
-//     async fn read(
-//         &self,
-//         req: Request,
-//         inode: u64,
-//         fh: u64,
-//         offset: u64,
-//         size: u32,
-//     ) -> Result<ReplyData> {
-//         todo!()
-//     }
+        if let Some(lock_owner) = set_attr.lock_owner {
+            // needed?
+            todo!()
+        }
 
-//     #[instrument(skip(self, data), err(level = Level::WARN), ret(level = Level::DEBUG))]
-//     async fn write(
-//         &self,
-//         req: Request,
-//         inode: Inode,
-//         fh: u64,
-//         offset: u64,
-//         data: &[u8],
-//         write_flags: u32,
-//         flags: u32,
-//     ) -> Result<ReplyWrite> {
-//         todo!()
-//     }
+        if let Some(atime) = set_attr.atime {
+            todo!()
+        }
 
-//     #[instrument(skip(self), err(level = Level::WARN), ret(level = Level::DEBUG))]
-//     async fn statfs(&self, req: Request, inode: u64) -> Result<ReplyStatFs> {
-//         todo!()
-//     }
+        if let Some(mtime) = set_attr.mtime {
+            todo!()
+        }
 
-//     #[instrument(skip(self), err(level = Level::WARN), ret(level = Level::DEBUG))]
-//     async fn release(
-//         &self,
-//         req: Request,
-//         inode: Inode,
-//         fh: u64,
-//         flags: u32,
-//         lock_owner: u64,
-//         flush: bool,
-//     ) -> Result<()> {
-//         todo!()
-//     }
+        if let Some(ctime) = set_attr.ctime {
+            todo!()
+        }
+        todo!()
+    }
 
-//     #[instrument(skip(self), err(level = Level::WARN), ret(level = Level::DEBUG))]
-//     async fn flush(&self, req: Request, inode: Inode, fh: u64, lock_owner: u64) -> Result<()> {
-//         todo!()
-//     }
+    #[instrument(skip(self), err(level = Level::WARN), ret(level = Level::DEBUG))]
+    async fn mknod(
+        &self,
+        req: Request,
+        parent: Inode,
+        name: &OsStr,
+        mode: u32,
+        rdev: u32,
+    ) -> Result<ReplyEntry> {
+        todo!()
+    }
 
-//     #[instrument(skip(self), err(level = Level::WARN), ret(level = Level::DEBUG))]
-//     async fn opendir(&self, req: Request, inode: Inode, flags: u32) -> Result<ReplyOpen> {
-//         todo!()
-//     }
+    #[instrument(skip(self, name), fields(name = name.to_str().unwrap()), err(level = Level::WARN), ret(level = Level::DEBUG))]
+    async fn mkdir(
+        &self,
+        req: Request,
+        parent: Inode,
+        name: &OsStr,
+        mode: u32,
+        umask: u32,
+    ) -> Result<ReplyEntry> {
+        todo!()
+    }
 
-//     #[instrument(skip(self, name), fields(name = name.to_str().unwrap()), err(level = Level::WARN), ret(level = Level::DEBUG))]
-//     async fn create(
-//         &self,
-//         req: Request,
-//         parent: Inode,
-//         name: &OsStr,
-//         mode: u32,
-//         flags: u32,
-//     ) -> Result<ReplyCreated> {
-//         todo!()
-//     }
-// }
+    #[instrument(skip(self, name), fields(name = name.to_str().unwrap()), err(level = Level::WARN), ret(level = Level::DEBUG))]
+    async fn unlink(&self, req: Request, parent: Inode, name: &OsStr) -> Result<()> {
+        todo!()
+    }
+    #[instrument(skip(self, name), fields(name = name.to_str().unwrap()), err(level = Level::WARN), ret(level = Level::DEBUG))]
+    async fn rmdir(&self, req: Request, parent: Inode, name: &OsStr) -> Result<()> {
+        todo!()
+    }
+    #[instrument(skip(self, name, new_name), fields(name = name.to_str().unwrap(), new_name = new_name.to_str().unwrap()), err(level = Level::WARN), ret(level = Level::DEBUG))]
+    async fn rename(
+        &self,
+        req: Request,
+        parent: Inode,
+        name: &OsStr,
+        new_parent: Inode,
+        new_name: &OsStr,
+    ) -> Result<()> {
+        todo!()
+    }
+
+    #[instrument(skip(self), err(level = Level::WARN), ret(level = Level::DEBUG))]
+    async fn open(&self, req: Request, inode: Inode, flags: u32) -> Result<ReplyOpen> {
+        todo!()
+    }
+
+    #[instrument(skip(self), err(level = Level::WARN))]
+    async fn read(
+        &self,
+        req: Request,
+        inode: u64,
+        fh: u64,
+        offset: u64,
+        size: u32,
+    ) -> Result<ReplyData> {
+        todo!()
+    }
+
+    #[instrument(skip(self, data), err(level = Level::WARN), ret(level = Level::DEBUG))]
+    async fn write(
+        &self,
+        req: Request,
+        inode: Inode,
+        fh: u64,
+        offset: u64,
+        data: &[u8],
+        write_flags: u32,
+        flags: u32,
+    ) -> Result<ReplyWrite> {
+        todo!()
+    }
+
+    #[instrument(skip(self), err(level = Level::WARN), ret(level = Level::DEBUG))]
+    async fn statfs(&self, req: Request, inode: u64) -> Result<ReplyStatFs> {
+        todo!()
+    }
+
+    #[instrument(skip(self), err(level = Level::WARN), ret(level = Level::DEBUG))]
+    async fn release(
+        &self,
+        req: Request,
+        inode: Inode,
+        fh: u64,
+        flags: u32,
+        lock_owner: u64,
+        flush: bool,
+    ) -> Result<()> {
+        todo!()
+    }
+
+    #[instrument(skip(self), err(level = Level::WARN), ret(level = Level::DEBUG))]
+    async fn flush(&self, req: Request, inode: Inode, fh: u64, lock_owner: u64) -> Result<()> {
+        todo!()
+    }
+
+    #[instrument(skip(self), err(level = Level::WARN), ret(level = Level::DEBUG))]
+    async fn opendir(&self, req: Request, inode: Inode, flags: u32) -> Result<ReplyOpen> {
+        todo!()
+    }
+
+    #[instrument(skip(self, name), fields(name = name.to_str().unwrap()), err(level = Level::WARN), ret(level = Level::DEBUG))]
+    async fn create(
+        &self,
+        req: Request,
+        parent: Inode,
+        name: &OsStr,
+        mode: u32,
+        flags: u32,
+    ) -> Result<ReplyCreated> {
+        todo!()
+    }
+}
 
 impl From<FileAttr> for fuse3::raw::prelude::FileAttr {
     fn from(from: FileAttr) -> Self {
