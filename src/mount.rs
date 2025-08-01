@@ -65,7 +65,7 @@ async fn mount_fuse(opts: MountPoint) -> anyhow::Result<MountHandle> {
     let uid = unsafe { libc::getuid() };
     let gid = unsafe { libc::getgid() };
 
-    let fs = GitFsAdapter::new(data_dir);
+    let fs = GitFsAdapter::new(data_dir, read_only)?;
 
     let mount_options = mount_options
         .read_only(read_only)
@@ -88,16 +88,13 @@ struct GitFsAdapter {
 }
 
 impl GitFsAdapter {
-    fn new(data_dir: PathBuf) -> Self {
-        let fs = GitFs::new(data_dir);
-        GitFsAdapter {
-            inner: Arc::new(fs),
-        }
+    fn new(data_dir: PathBuf, read_only: bool) -> anyhow::Result<Self> {
+        let fs = GitFs::new(data_dir, read_only)?;
+        Ok(GitFsAdapter { inner: fs })
     }
 
     pub fn getfs(&self) -> Arc<GitFs> {
-        // self.inner.clone()
-        todo!()
+        self.inner.clone()
     }
 }
 
