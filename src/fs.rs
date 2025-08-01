@@ -279,6 +279,10 @@ impl GitFs {
     pub fn getattr(&self, _inode: u64) -> std::io::Result<FileAttr> {
         todo!()
     }
+
+    pub fn find_by_name(&self) -> anyhow::Result<Option<FileAttr>> {
+        todo!()
+    }
 }
 
 // lookup               -> git ls-tree
