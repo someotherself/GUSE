@@ -1,15 +1,16 @@
 #![allow(unused_imports, unused_variables)]
 
 use fuser::{MountOption, ReplyAttr, ReplyData, ReplyEntry, ReplyOpen, ReplyWrite};
-use libc::ENOENT;
+use libc::{EIO, ENOENT};
 use tracing::{Level, info};
 use tracing::{debug, error, instrument, trace, warn};
 
 use std::ffi::OsStr;
 use std::io::{BufRead, BufReader, ErrorKind};
 use std::iter::Skip;
+use std::rc::Rc;
 use std::time::{Duration, SystemTime};
-use std::{num::NonZeroU32, path::PathBuf, sync::Arc};
+use std::{num::NonZeroU32, path::PathBuf};
 
 use crate::fs::{FileAttr, FileType, GitFs};
 
@@ -17,23 +18,23 @@ const TTL: Duration = Duration::from_secs(1);
 
 pub struct MountPoint {
     mountpoint: PathBuf,
-    data_dir: PathBuf,
+    repos_dir: PathBuf,
     read_only: bool,
     allow_root: bool,
     allow_other: bool,
 }
 
 impl MountPoint {
-    fn new(
+    pub fn new(
         mountpoint: PathBuf,
-        data_dir: PathBuf,
+        repos_dir: PathBuf,
         read_only: bool,
         allow_root: bool,
         allow_other: bool,
     ) -> Self {
         Self {
             mountpoint,
-            data_dir,
+            repos_dir,
             read_only,
             allow_root,
             allow_other,
@@ -41,17 +42,17 @@ impl MountPoint {
     }
 }
 
-fn mount_fuse(opts: MountPoint) -> anyhow::Result<()> {
+pub fn mount_fuse(opts: MountPoint) -> anyhow::Result<()> {
     let MountPoint {
         mountpoint,
-        data_dir,
+        repos_dir,
         read_only,
         allow_root,
         allow_other,
     } = opts;
 
     if !mountpoint.exists() {
-        std::fs::create_dir_all(&mountpoint)?;
+        std::fs::create_dir(&mountpoint)?;
     }
 
     let mut options = vec![
@@ -68,19 +69,27 @@ fn mount_fuse(opts: MountPoint) -> anyhow::Result<()> {
     if allow_root {
         options.push(MountOption::AllowRoot);
     }
+    dbg!("test1");
 
-    let fs = GitFsAdapter::new(data_dir, opts.read_only)?;
+    let fs = GitFsAdapter::new(repos_dir, opts.read_only)?;
+    dbg!("test2");
+    dbg!(&mountpoint);
 
     match fuser::mount2(fs, mountpoint, &options) {
         Ok(()) => {
             info!("Filesystem unmounted cleanly");
+            dbg!("test3-a");
             Ok(())
         }
         Err(e) if e.kind() == ErrorKind::PermissionDenied => {
             error!("Permission denied: {}", e);
+            dbg!("test3-b");
             std::process::exit(2);
         }
-        Err(e) => Err(e.into()),
+        Err(e) => {
+            dbg!("test3-c");
+            Err(e.into())
+        }
     }
 }
 
@@ -95,16 +104,16 @@ fn fuse_allow_other_enabled() -> std::io::Result<bool> {
 }
 
 struct GitFsAdapter {
-    inner: Arc<GitFs>,
+    inner: Rc<GitFs>,
 }
 
 impl GitFsAdapter {
-    fn new(data_dir: PathBuf, read_only: bool) -> anyhow::Result<Self> {
-        let fs = GitFs::new(data_dir, read_only)?;
+    fn new(repos_dir: PathBuf, read_only: bool) -> anyhow::Result<Self> {
+        let fs = GitFs::new(repos_dir, read_only)?;
         Ok(GitFsAdapter { inner: fs })
     }
 
-    pub fn getfs(&self) -> Arc<GitFs> {
+    pub fn getfs(&self) -> Rc<GitFs> {
         self.inner.clone()
     }
 }
@@ -145,36 +154,29 @@ impl fuser::Filesystem for GitFsAdapter {
     fn init(
         &mut self,
         _req: &fuser::Request<'_>,
-        _config: &mut fuser::KernelConfig,
+        config: &mut fuser::KernelConfig,
     ) -> Result<(), libc::c_int> {
-        // Ok(ReplyInit {
-        //         max_write: NonZeroU32::new(16 * 1024).unwrap(),
-        //     })
-        todo!()
+        config.set_max_readahead(128 * 1024).unwrap();
+        Ok(())
     }
 
     fn destroy(&mut self) {}
 
     fn lookup(&mut self, _req: &fuser::Request<'_>, parent: u64, name: &OsStr, reply: ReplyEntry) {
-        // Lookup a dir (tree) by name (hash) and get attr
+        // Lookup a dir (tree) by name (real name) and get attr
         // TODO: Should check the access?
 
-        // let attr = match self.getfs().find_by_name() {
-        //     Ok(Some(attr)) => attr,
-        //     Err(err) => {
-        //         return Err(ENOENT.into());
-        //     }
-        //     _ => {
-        //         return Err(ENOENT.into());
-        //     }
-        // };
-
-        // Ok(ReplyEntry {
-        //     ttl: TTL,
-        //     attr: attr.into(),
-        //     generation: 0,
-        // })
-        todo!()
+        match self.getfs().find_by_name(parent, name) {
+            Ok(Some(attr)) => reply.entry(&TTL, &attr.into(), 0),
+            Err(err) => {
+                // The name does is not found under this parent
+                reply.error(ENOENT);
+            }
+            _ => {
+                // Other internal error
+                reply.error(EIO);
+            }
+        };
     }
 
     fn getattr(&mut self, _req: &fuser::Request<'_>, ino: u64, fh: Option<u64>, reply: ReplyAttr) {
@@ -280,6 +282,28 @@ impl fuser::Filesystem for GitFsAdapter {
 
     // TODO
     fn open(&mut self, _req: &fuser::Request<'_>, _ino: u64, _flags: i32, reply: ReplyOpen) {
+        todo!()
+    }
+
+    fn readdir(
+        &mut self,
+        _req: &fuser::Request<'_>,
+        ino: u64,
+        fh: u64,
+        offset: i64,
+        reply: fuser::ReplyDirectory,
+    ) {
+        todo!()
+    }
+
+    fn readdirplus(
+        &mut self,
+        _req: &fuser::Request<'_>,
+        ino: u64,
+        fh: u64,
+        offset: i64,
+        reply: fuser::ReplyDirectoryPlus,
+    ) {
         todo!()
     }
 

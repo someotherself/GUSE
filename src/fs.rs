@@ -1,17 +1,15 @@
+use std::ffi::OsStr;
+use std::rc::Rc;
 use std::sync::Mutex;
 use std::{
     collections::{HashMap, VecDeque},
-    ffi::OsString,
     path::PathBuf,
-    sync::{
-        Arc,
-        atomic::{AtomicU64, Ordering},
-    },
+    sync::atomic::{AtomicU64, Ordering},
     time::SystemTime,
 };
 
-use anyhow::{Context, Ok};
-use git2::Oid;
+use anyhow::{Context, Ok, bail};
+use git2::{ObjectType, Oid};
 use tracing::instrument;
 
 use crate::repo::GitRepo;
@@ -30,8 +28,11 @@ pub(crate) const ROOT_INODE: u64 = 1;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct FileAttr {
+    // Inode in the fuse fs
     pub inode: u64,
+    // SHA-1 in git
     pub oid: Oid,
+    // Blob size
     pub size: u64,
     pub blocks: u64,
     pub atime: SystemTime,
@@ -39,6 +40,7 @@ pub struct FileAttr {
     pub ctime: SystemTime,
     pub crtime: SystemTime,
     pub kind: FileType,
+    // mode bits
     pub perm: u16,
     pub nlink: u32,
     pub uid: u32,
@@ -131,6 +133,17 @@ pub enum FileType {
     Symlink,
 }
 
+impl FileType {
+    pub fn from_filemode(mode: ObjectType) -> anyhow::Result<FileType> {
+        match mode {
+            ObjectType::Blob => Ok(FileType::File),
+            ObjectType::Tree => Ok(FileType::Directory),
+            ObjectType::Tag => Ok(FileType::Symlink),
+            _ => bail!("Invalid file type {:?}", mode),
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct CreateFileAttr {
     pub kind: FileType,
@@ -170,12 +183,15 @@ impl From<CreateFileAttr> for FileAttr {
 }
 
 pub struct DirectoryEntry {
+    pub inode: u64,
     // The git Oid (SHA-1)
-    pub inode: Oid,
+    pub oid: Oid,
     // The real filename
-    pub name: OsString,
+    pub name: String,
     // File (Blob), Dir (Tree), or Symlink
     pub kind: FileType,
+    // Mode (permissions)
+    pub filemode: i32,
 }
 
 pub struct DirectoryEntryIterator(VecDeque<DirectoryEntry>);
@@ -229,7 +245,7 @@ pub struct GitFs {
 }
 
 impl GitFs {
-    pub fn new(repos_dir: PathBuf, read_only: bool) -> anyhow::Result<Arc<Self>> {
+    pub fn new(repos_dir: PathBuf, read_only: bool) -> anyhow::Result<Rc<Self>> {
         let fs = Self {
             repos_dir,
             repo: HashMap::new(),
@@ -238,12 +254,11 @@ impl GitFs {
         };
         fs.ensure_base_dirs()
             .context("Initializing base directories")?;
-        Ok(Arc::new(fs).clone())
+        Ok(Rc::new(fs).clone())
     }
 
     fn ensure_base_dirs(&self) -> anyhow::Result<()> {
-        // Only if `repos_dir` doesn't exist
-        if !self.exists(ROOT_INODE) {
+        if !self.repos_dir.exists() {
             let mut attr: FileAttr = CreateFileAttr {
                 kind: FileType::Directory,
                 perm: 0o755,
@@ -258,10 +273,10 @@ impl GitFs {
                 attr.gid = libc::getgid();
             }
 
-            self.write_inode_to_db(&attr)?;
+            // self.write_inode_to_db(&attr)?; // TODO
             let repos_dir = &self.repos_dir; // TODO change to attr.ino
             std::fs::create_dir_all(repos_dir)
-                .with_context(|| format!("creating repos dir {repos_dir:?}"))?;
+                .with_context(|| format!("Failed to create repos dir {repos_dir:?}"))?;
 
             // TODO Insert directory entry
         }
@@ -272,15 +287,29 @@ impl GitFs {
         todo!()
     }
 
-    fn write_inode_to_db(&self, _attr: &FileAttr) -> anyhow::Result<()> {
+    pub fn get_ino_from_db(&self, _parent: u64, _name: &str) -> anyhow::Result<u64> {
+        todo!()
+    }
+
+    pub fn write_inode_to_db(&self, _attr: &FileAttr) -> anyhow::Result<()> {
         todo!()
     }
 
     pub fn getattr(&self, _inode: u64) -> std::io::Result<FileAttr> {
+        // Check is not tree
+
+        // Check blob exists
+
+        // Get or compute FileAttr
         todo!()
     }
 
-    pub fn find_by_name(&self) -> anyhow::Result<Option<FileAttr>> {
+    pub fn find_by_name(&self, _parent: u64, _name: &OsStr) -> anyhow::Result<Option<FileAttr>> {
+        // Check parent exists
+
+        // Check parent is a tree
+
+        // getattr()
         todo!()
     }
 }
