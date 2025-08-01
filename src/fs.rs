@@ -1,4 +1,3 @@
-use std::ffi::OsStr;
 use std::rc::Rc;
 use std::sync::Mutex;
 use std::{
@@ -304,7 +303,7 @@ impl GitFs {
         todo!()
     }
 
-    pub fn find_by_name(&self, _parent: u64, _name: &OsStr) -> anyhow::Result<Option<FileAttr>> {
+    pub fn find_by_name(&self, _parent: u64, _name: &str) -> anyhow::Result<Option<FileAttr>> {
         // Check parent exists
 
         // Check parent is a tree

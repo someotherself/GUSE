@@ -166,7 +166,7 @@ impl fuser::Filesystem for GitFsAdapter {
         // Lookup a dir (tree) by name (real name) and get attr
         // TODO: Should check the access?
 
-        match self.getfs().find_by_name(parent, name) {
+        match self.getfs().find_by_name(parent, name.to_str().unwrap()) {
             Ok(Some(attr)) => reply.entry(&TTL, &attr.into(), 0),
             Err(err) => {
                 // The name does is not found under this parent
