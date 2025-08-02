@@ -1,9 +1,9 @@
 use anyhow::anyhow;
-use git2::{Oid, Repository, Tree};
+use git2::{ObjectType, Oid, Repository, Tree};
 
 use std::path::Path;
 
-use crate::fs::{DirectoryEntry, DirectoryEntryPlus, FileType, GitFs};
+use crate::fs::{DirectoryEntry, DirectoryEntryPlus, FileType, GitFs, ObjectAttr};
 
 pub struct GitRepo {
     inner: Repository,
@@ -20,6 +20,55 @@ impl GitRepo {
         let head = repo.revparse_single("HEAD")?.id();
 
         Ok(GitRepo { inner: repo, head })
+    }
+
+    pub fn getattr<P: AsRef<Path>>(&self, path: P) -> anyhow::Result<ObjectAttr> {
+        // Get the commit the head points to
+        let commit = self.inner.head()?.peel_to_commit()?;
+        // Get the root tree
+        let mut tree = commit.tree()?;
+        let last_comp = path
+            .as_ref()
+            .components()
+            .next_back()
+            .ok_or_else(|| anyhow!("empty path"))?;
+
+        for comp in path.as_ref().components() {
+            let name = comp.as_os_str().to_str().unwrap();
+            let is_last_comp = comp == last_comp;
+
+            // Lookup this name in the current tree
+            let entry = tree.clone();
+            let entry = entry
+                .get_name(name)
+                .ok_or_else(|| anyhow!("component {:?} not found in tree", name))?;
+
+            if entry.kind() == Some(ObjectType::Tree) {
+                // Descend into that sub-tree for further components
+                tree = self.inner.find_tree(entry.id())?;
+            } else {
+                // If it's the last componentn
+                if is_last_comp {
+                    // and a blob. return the ObjectAttr
+                    if entry.kind().unwrap() == git2::ObjectType::Blob {
+                        // blob with mode 0o120000 will be a symlink
+                        return Ok(ObjectAttr {
+                            oid: entry.id(),
+                            kind: entry.kind().unwrap(),
+                            filemode: entry.filemode(),
+                        });
+                    }
+                // Not a final component and not a tree either. Something is wrong
+                } else {
+                    return Err(anyhow!("path {:?} is not a directory", path.as_ref()));
+                }
+            }
+        }
+        Ok(ObjectAttr {
+            oid: tree.id(),
+            kind: ObjectType::Tree,
+            filemode: 0o040000,
+        })
     }
 
     // Read_dir
