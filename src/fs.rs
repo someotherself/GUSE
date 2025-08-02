@@ -1,5 +1,7 @@
+use std::hash::Hash;
 use std::rc::Rc;
 use std::sync::Mutex;
+use std::time::{Duration, UNIX_EPOCH};
 use std::{
     collections::{HashMap, VecDeque},
     path::PathBuf,
@@ -7,7 +9,7 @@ use std::{
     time::SystemTime,
 };
 
-use anyhow::{Context, Ok, bail};
+use anyhow::{Context, Ok, anyhow, bail};
 use git2::{ObjectType, Oid};
 use tracing::instrument;
 
@@ -17,7 +19,10 @@ use crate::repo::GitRepo;
 pub(crate) const META_STORE: &str = "fs_meta";
 pub(crate) const ROOT_INODE: u64 = 1;
 
+const REPO_SHIFT: u8 = 48;
+
 // Disk structure
+// MOUNT_POINT/
 // repos_dir/repo1
 //        ├── repository_name1/
 //        └── fs_meta/fs_meta.db
@@ -54,6 +59,8 @@ pub struct ObjectAttr {
     pub oid: Oid,
     pub kind: git2::ObjectType,
     pub filemode: i32,
+    pub size: u64,
+    pub commit_time: git2::Time,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -244,8 +251,8 @@ impl InodeAllocator {
 
 pub struct GitFs {
     repos_dir: PathBuf,
-    repo: HashMap<String, GitRepo>,
-    next_inode: AtomicU64,
+    repos_list: HashMap<u16, GitRepo>,
+    next_inode: HashMap<u16, AtomicU64>,
     read_only: bool,
     // inode_map: RwLock<HashMap<u64, Node>>
 }
@@ -254,16 +261,39 @@ impl GitFs {
     pub fn new(repos_dir: PathBuf, read_only: bool) -> anyhow::Result<Rc<Self>> {
         let fs = Self {
             repos_dir,
-            repo: HashMap::new(),
+            repos_list: HashMap::new(),
             read_only,
-            next_inode: AtomicU64::new(1),
+            next_inode: HashMap::new(),
         };
-        fs.ensure_base_dirs()
+        fs.ensure_base_dirs_exist()
             .context("Initializing base directories")?;
         Ok(Rc::new(fs).clone())
     }
 
-    fn ensure_base_dirs(&self) -> anyhow::Result<()> {
+    fn next_inode(&self, parent: u64) -> anyhow::Result<u64> {
+        let repo_id = (parent >> REPO_SHIFT) as u16;
+        let inode = self
+            .next_inode
+            .get(&repo_id)
+            .ok_or_else(|| anyhow!("No repo found for this ID"))?
+            .fetch_add(1, Ordering::SeqCst);
+        Ok(inode)
+    }
+
+    fn get_repo(&self, inode: u64) -> anyhow::Result<&GitRepo> {
+        let repo_id = (inode >> REPO_SHIFT) as u16;
+        let repo = self
+            .repos_list
+            .get(&repo_id)
+            .ok_or_else(|| anyhow!("No repo found for this ID"))?;
+        Ok(repo)
+    }
+
+    fn pack_inode(repo_id: u16, sub_ino: u64) -> u64 {
+        ((repo_id as u64) << REPO_SHIFT) | (sub_ino & ((1 << REPO_SHIFT) - 1))
+    }
+
+    fn ensure_base_dirs_exist(&self) -> anyhow::Result<()> {
         if !self.repos_dir.exists() {
             let mut attr: FileAttr = CreateFileAttr {
                 kind: FileType::Directory,
@@ -297,17 +327,66 @@ impl GitFs {
         todo!()
     }
 
+    pub fn get_path_from_db(&self, _inode: u64) -> anyhow::Result<PathBuf> {
+        todo!()
+    }
+
     pub fn write_inode_to_db(&self, _attr: &FileAttr) -> anyhow::Result<()> {
         todo!()
     }
 
-    pub fn getattr(&self, _inode: u64) -> std::io::Result<FileAttr> {
+    pub fn getattr(&self, inode: u64) -> anyhow::Result<FileAttr> {
         // Check inode exists
+        if !self.exists(inode) {
+            bail!("Inode not found!")
+        }
 
         // Get ObjectAttr from git2
+        let repo = self.get_repo(inode)?;
+        let path = self.get_path_from_db(inode)?;
 
-        // Compute FileAttr with ObjectAttr
-        todo!()
+        let git_attr = repo.getattr(path)?;
+
+        // Compute the rest of the attributes
+        let blocks = git_attr.size.div_ceil(512);
+
+        // Compute atime and mtime from commit_time
+        let commit_secs = git_attr.commit_time.seconds() as u64;
+        let time = UNIX_EPOCH + Duration::from_secs(commit_secs);
+
+        let kind = match git_attr.filemode & 0o170000 {
+            0o040000 => FileType::Directory,
+            0o120000 => FileType::Symlink,
+            _ => FileType::File,
+        };
+        let perm = (git_attr.filemode & 0o777) as u16;
+
+        let nlink = if kind == FileType::Directory { 2 } else { 1 };
+
+        let uid = unsafe { libc::getuid() };
+        let gid = unsafe { libc::getgid() };
+        let rdev = 0;
+        let blksize = 4096;
+        let flags = 0;
+
+        Ok(FileAttr {
+            inode,
+            oid: git_attr.oid,
+            size: git_attr.size,
+            blocks,
+            atime: time,
+            mtime: time,
+            ctime: time,
+            crtime: time,
+            kind,
+            perm,
+            nlink,
+            uid,
+            gid,
+            rdev,
+            blksize,
+            flags,
+        })
     }
 
     pub fn setattr(&self, _inode: u64, _attr: SetFileAttr) -> std::io::Result<FileAttr> {

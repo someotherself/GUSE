@@ -6,8 +6,9 @@ use std::path::Path;
 use crate::fs::{DirectoryEntry, DirectoryEntryPlus, FileType, GitFs, ObjectAttr};
 
 pub struct GitRepo {
-    inner: Repository,
-    head: Oid,
+    pub repo_id: u16,
+    pub inner: Repository,
+    pub head: Oid,
 }
 
 impl GitRepo {
@@ -15,16 +16,22 @@ impl GitRepo {
         todo!()
     }
 
-    pub fn open<P: AsRef<Path>>(path: P) -> anyhow::Result<Self> {
+    pub fn open<P: AsRef<Path>>(path: P, repo_id: u16) -> anyhow::Result<Self> {
+        // TODO: read root folder and get repo_id from the inode
         let repo = Repository::open(path)?;
         let head = repo.revparse_single("HEAD")?.id();
 
-        Ok(GitRepo { inner: repo, head })
+        Ok(GitRepo {
+            repo_id,
+            inner: repo,
+            head,
+        })
     }
 
     pub fn getattr<P: AsRef<Path>>(&self, path: P) -> anyhow::Result<ObjectAttr> {
         // Get the commit the head points to
         let commit = self.inner.head()?.peel_to_commit()?;
+        let commit_time = commit.time();
         // Get the root tree
         let mut tree = commit.tree()?;
         let last_comp = path
@@ -51,11 +58,15 @@ impl GitRepo {
                 if is_last_comp {
                     // and a blob. return the ObjectAttr
                     if entry.kind().unwrap() == git2::ObjectType::Blob {
+                        let blob = self.inner.find_blob(entry.id())?;
+                        let size = blob.size() as u64;
                         // blob with mode 0o120000 will be a symlink
                         return Ok(ObjectAttr {
                             oid: entry.id(),
                             kind: entry.kind().unwrap(),
                             filemode: entry.filemode(),
+                            size,
+                            commit_time,
                         });
                     }
                 // Not a final component and not a tree either. Something is wrong
@@ -68,6 +79,8 @@ impl GitRepo {
             oid: tree.id(),
             kind: ObjectType::Tree,
             filemode: 0o040000,
+            size: 0,
+            commit_time,
         })
     }
 
@@ -113,5 +126,11 @@ impl GitRepo {
             list_tree_plus.push(DirectoryEntryPlus { entry, attr });
         }
         Ok(list_tree_plus)
+    }
+}
+
+impl PartialEq for GitRepo {
+    fn eq(&self, other: &Self) -> bool {
+        self.repo_id == other.repo_id
     }
 }
