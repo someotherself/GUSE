@@ -166,10 +166,19 @@ impl fuser::Filesystem for GitFsAdapter {
         // Lookup a dir (tree) by name (real name) and get attr
         // TODO: Should check the access?
 
+        if name == OsStr::new(".") {
+            if let Ok(attr) = self.getfs().getattr(parent) {
+                reply.entry(&TTL, &attr.into(), 0);
+            } else {
+                reply.error(EIO);
+            }
+            return;
+        }
+
         match self.getfs().find_by_name(parent, name.to_str().unwrap()) {
             Ok(Some(attr)) => reply.entry(&TTL, &attr.into(), 0),
             Err(err) => {
-                // The name does is not found under this parent
+                // The name is not found under this parent
                 reply.error(ENOENT);
             }
             _ => {
@@ -180,41 +189,17 @@ impl fuser::Filesystem for GitFsAdapter {
     }
 
     fn getattr(&mut self, _req: &fuser::Request<'_>, ino: u64, fh: Option<u64>, reply: ReplyAttr) {
-        // match self.getfs().getattr(ino) {
-        //     Err(err) => {
-        //         error!(err = %err);
-        //         return Err(ENOENT.into());
-        //     }
-        //     // Ok(attr) => Ok(ReplyAttr {
-        //     //     attr: attr.into(),
-        //     // }),
-        //     Ok(attr) => reply.attr(TTL, &attr),
-        // }
-        todo!()
-    }
-
-    // TODO
-    fn setattr(
-        &mut self,
-        _req: &fuser::Request<'_>,
-        ino: u64,
-        mode: Option<u32>,
-        uid: Option<u32>,
-        gid: Option<u32>,
-        size: Option<u64>,
-        _atime: Option<fuser::TimeOrNow>,
-        _mtime: Option<fuser::TimeOrNow>,
-        _ctime: Option<SystemTime>,
-        fh: Option<u64>,
-        _crtime: Option<SystemTime>,
-        _chgtime: Option<SystemTime>,
-        _bkuptime: Option<SystemTime>,
-        flags: Option<u32>,
-        reply: ReplyAttr,
-    ) {
-        let attr = self.getfs().getattr(ino).map_err(|err| todo!());
-
-        todo!()
+        if !self.getfs().exists(ino) {
+            reply.error(ENOENT);
+            return;
+        }
+        match self.getfs().getattr(ino) {
+            Err(err) => {
+                error!("getattr({}) failed: {:?}", ino, err);
+                reply.error(ENOENT);
+            }
+            Ok(attr) => reply.attr(&TTL, &attr.into()),
+        }
     }
 
     // TODO

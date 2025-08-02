@@ -1,4 +1,4 @@
-use anyhow::anyhow;
+use anyhow::{Context, anyhow};
 use git2::{ObjectType, Oid, Repository, Tree};
 
 use std::path::Path;
@@ -126,6 +126,35 @@ impl GitRepo {
             list_tree_plus.push(DirectoryEntryPlus { entry, attr });
         }
         Ok(list_tree_plus)
+    }
+
+    pub fn find_by_name(&self, tree_oid: Oid, name: &str) -> anyhow::Result<ObjectAttr> {
+        let tree = self
+            .inner
+            .find_tree(tree_oid)
+            .context("Parent tree does not exist")?;
+
+        let entry = tree
+            .get_name(name)
+            .ok_or_else(|| anyhow!("{} not found in tree {}", name, tree_oid))?;
+        let size = match entry.kind().unwrap() {
+            ObjectType::Blob => entry
+                .to_object(&self.inner)
+                .unwrap()
+                .into_blob()
+                .unwrap()
+                .size(),
+            _ => 0,
+        };
+        let commit = self.inner.head()?.peel_to_commit()?;
+        let commit_time = commit.time();
+        Ok(ObjectAttr {
+            oid: entry.id(),
+            kind: entry.kind().unwrap(),
+            filemode: entry.filemode(),
+            size: size as u64,
+            commit_time,
+        })
     }
 }
 

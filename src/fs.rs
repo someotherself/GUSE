@@ -16,9 +16,7 @@ use tracing::instrument;
 use crate::repo::GitRepo;
 
 // Storage for the inode mapping, metadata etc. Sits inside repos/repo_/
-pub(crate) const META_STORE: &str = "fs_meta";
-pub(crate) const ROOT_INODE: u64 = 1;
-
+const META_STORE: &str = "fs_meta";
 const REPO_SHIFT: u8 = 48;
 
 // Disk structure
@@ -44,7 +42,6 @@ pub struct FileAttr {
     pub ctime: SystemTime,
     pub crtime: SystemTime,
     pub kind: FileType,
-    // mode bits
     pub perm: u16,
     pub nlink: u32,
     pub uid: u32,
@@ -63,82 +60,6 @@ pub struct ObjectAttr {
     pub commit_time: git2::Time,
 }
 
-#[derive(Clone, Copy, Debug)]
-pub struct SetFileAttr {
-    pub size: Option<u64>,
-    pub atime: Option<SystemTime>,
-    pub mtime: Option<SystemTime>,
-    pub ctime: Option<SystemTime>,
-    pub crtime: Option<SystemTime>,
-    pub perm: Option<u16>,
-    pub uid: Option<u32>,
-    pub gid: Option<u32>,
-    pub rdev: Option<u32>,
-    pub flags: Option<u32>,
-}
-
-impl SetFileAttr {
-    #[must_use]
-    pub const fn with_size(mut self, size: u64) -> Self {
-        self.size = Some(size);
-        self
-    }
-
-    #[must_use]
-    pub const fn with_atime(mut self, atime: SystemTime) -> Self {
-        self.atime = Some(atime);
-        self
-    }
-
-    #[must_use]
-    pub const fn with_mtime(mut self, mtime: SystemTime) -> Self {
-        self.mtime = Some(mtime);
-        self
-    }
-
-    #[must_use]
-    pub const fn with_ctime(mut self, ctime: SystemTime) -> Self {
-        self.ctime = Some(ctime);
-        self
-    }
-
-    #[must_use]
-    pub const fn with_crtime(mut self, crtime: SystemTime) -> Self {
-        self.crtime = Some(crtime);
-        self
-    }
-
-    #[must_use]
-    pub const fn with_perm(mut self, perm: u16) -> Self {
-        self.perm = Some(perm);
-        self
-    }
-
-    #[must_use]
-    pub const fn with_uid(mut self, uid: u32) -> Self {
-        self.uid = Some(uid);
-        self
-    }
-
-    #[must_use]
-    pub const fn with_gid(mut self, gid: u32) -> Self {
-        self.gid = Some(gid);
-        self
-    }
-
-    #[must_use]
-    pub const fn with_rdev(mut self, rdev: u32) -> Self {
-        self.rdev = Some(rdev);
-        self
-    }
-
-    #[must_use]
-    pub const fn with_flags(mut self, flags: u32) -> Self {
-        self.rdev = Some(flags);
-        self
-    }
-}
-
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub enum FileType {
     File,
@@ -146,6 +67,7 @@ pub enum FileType {
     Symlink,
 }
 
+// TODO: Link not correct. Account for the git object mode instead.
 impl FileType {
     pub fn from_filemode(mode: ObjectType) -> anyhow::Result<FileType> {
         match mode {
@@ -266,7 +188,7 @@ impl GitFs {
             next_inode: HashMap::new(),
         };
         fs.ensure_base_dirs_exist()
-            .context("Initializing base directories")?;
+            .context("Failed to initialize base directories")?;
         Ok(Rc::new(fs).clone())
     }
 
@@ -309,17 +231,22 @@ impl GitFs {
                 attr.gid = libc::getgid();
             }
 
-            // self.write_inode_to_db(&attr)?; // TODO
-            let repos_dir = &self.repos_dir; // TODO change to attr.ino
+            let repos_dir = &self.repos_dir;
             std::fs::create_dir_all(repos_dir)
                 .with_context(|| format!("Failed to create repos dir {repos_dir:?}"))?;
-
-            // TODO Insert directory entry
         }
         Ok(())
     }
 
-    fn exists(&self, _inode: u64) -> bool {
+    pub fn exists(&self, _inode: u64) -> bool {
+        todo!()
+    }
+
+    pub fn is_dir(&self, _inode: u64) -> bool {
+        todo!()
+    }
+
+    pub fn is_file(&self, _inode: u64) -> bool {
         todo!()
     }
 
@@ -335,19 +262,7 @@ impl GitFs {
         todo!()
     }
 
-    pub fn getattr(&self, inode: u64) -> anyhow::Result<FileAttr> {
-        // Check inode exists
-        if !self.exists(inode) {
-            bail!("Inode not found!")
-        }
-
-        // Get ObjectAttr from git2
-        let repo = self.get_repo(inode)?;
-        let path = self.get_path_from_db(inode)?;
-
-        let git_attr = repo.getattr(path)?;
-
-        // Compute the rest of the attributes
+    fn object_to_file_attr(&self, inode: u64, git_attr: &ObjectAttr) -> anyhow::Result<FileAttr> {
         let blocks = git_attr.size.div_ceil(512);
 
         // Compute atime and mtime from commit_time
@@ -389,16 +304,35 @@ impl GitFs {
         })
     }
 
-    pub fn setattr(&self, _inode: u64, _attr: SetFileAttr) -> std::io::Result<FileAttr> {
-        todo!()
+    pub fn getattr(&self, inode: u64) -> anyhow::Result<FileAttr> {
+        // Check inode exists
+        if !self.exists(inode) {
+            bail!("Inode not found!")
+        }
+
+        // Get ObjectAttr from git2
+        let repo = self.get_repo(inode)?;
+        let path = self.get_path_from_db(inode)?;
+
+        let git_attr = repo.getattr(path)?;
+        Ok(self.object_to_file_attr(inode, &git_attr)?)
     }
 
-    pub fn find_by_name(&self, _parent: u64, _name: &str) -> anyhow::Result<Option<FileAttr>> {
-        // Check parent exists
+    pub fn find_by_name(&self, parent: u64, name: &str) -> anyhow::Result<Option<FileAttr>> {
+        if !self.exists(parent) {
+            bail!("Inode not found!")
+        }
 
-        // Check parent is a tree
+        if !self.is_dir(parent) {
+            bail!("Inode not found!")
+        }
 
-        // getattr()
+        let parent_attr = self.getattr(parent)?;
+        let repo = self.get_repo(parent)?;
+        let _git_attr = repo.find_by_name(parent_attr.oid, name)?;
+        // let file_attr = self.object_to_file_attr(inode, &git_attr);
+
+        // TODO Implement database storage first TODO
         todo!()
     }
 }
