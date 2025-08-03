@@ -6,7 +6,7 @@ use std::path::Path;
 use crate::fs::{DirectoryEntry, DirectoryEntryPlus, FileType, GitFs, MetaDb, ObjectAttr};
 
 pub struct GitRepo {
-    // Caching the database connection.
+    // Caching the database connection for reads.
     // Must be refreshed after every write.
     pub connection: MetaDb,
     pub repo_dir: String,
@@ -17,22 +17,6 @@ pub struct GitRepo {
 
 impl GitRepo {
     pub fn new() -> Self {
-        todo!()
-    }
-
-    // Path:
-    pub fn open<P: AsRef<Path>>(_path: P) -> anyhow::Result<Self> {
-        // TODO: read root folder and get repo_id from the inode
-        // TODO: get repo_dir from the path
-        // let repo = Repository::open(path)?;
-        // let head = repo.revparse_single("HEAD")?.id();
-
-        // Ok(GitRepo {
-        //     repo_dir,
-        //     repo_id,
-        //     inner: repo,
-        //     head,
-        // })
         todo!()
     }
 

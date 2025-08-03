@@ -10,7 +10,7 @@ use std::{
 };
 
 use anyhow::{Context, Ok, anyhow, bail};
-use git2::{ObjectType, Oid};
+use git2::{ObjectType, Oid, Repository};
 use rusqlite::{Connection, OptionalExtension, Transaction, params};
 use tracing::instrument;
 
@@ -22,11 +22,11 @@ pub const ROOT_INO: u64 = 1;
 
 // Disk structure
 // MOUNT_POINT/
-// repos_dir/repo1
-//------------├── repository_name1/
+// repos_dir/repo_name1
+//------------├── git/
 //------------└── fs_meta.db
-// repos_dir/repo2
-//------------├── repository_name2/
+// repos_dir/repo_name2
+//------------├── git/
 //------------└── fs_meta.db
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -278,6 +278,36 @@ impl GitFs {
         Ok(Rc::new(fs).clone())
     }
 
+    pub fn open_repo(&self, repo_name: &str) -> anyhow::Result<GitRepo> {
+        let repo_path = PathBuf::from(&self.repos_dir).join(repo_name).join("git");
+        let repo = Repository::open(&repo_path)?;
+        let head = repo.revparse_single("HEAD")?.id();
+        let db = self.open_meta_db(repo_name)?;
+
+        let mut stmt = db.conn.prepare(
+            "SELECT inode
+               FROM inode_map
+              LIMIT 1",
+        )?;
+
+        let opt: Option<i64> = stmt
+            .query_row(params![], |row| row.get(0))
+            .optional()
+            .map_err(|e| anyhow!("DB error fetching an inode: {}", e))?;
+
+        let inode = opt.ok_or_else(|| anyhow!("no inodes in inode_map"))?;
+        let repo_id = (inode >> REPO_SHIFT) as u16;
+        drop(stmt);
+
+        Ok(GitRepo {
+            connection: db,
+            repo_dir: repo_name.to_string(),
+            repo_id,
+            inner: repo,
+            head,
+        })
+    }
+
     pub fn open_meta_db<P: AsRef<Path>>(&self, repo_name: P) -> anyhow::Result<MetaDb> {
         let db_path = PathBuf::from(&self.repos_dir)
             .join(repo_name)
@@ -289,9 +319,9 @@ impl GitFs {
 
     pub fn init_meta_db<P: AsRef<Path>>(&self, repo_name: P) -> anyhow::Result<MetaDb> {
         // Must take in the name of the folder of the REPO
-        // repos_dir/repo_name
+        // repos_dir/repo_name1
         //------------------├── fs_meta.db
-        //------------------└── repository_name1/
+        //------------------└── git/
         let db_path = PathBuf::from(&self.repos_dir)
             .join(repo_name)
             .join(META_STORE);
