@@ -178,9 +178,17 @@ impl fuser::Filesystem for GitFsAdapter {
     }
 
     fn getattr(&mut self, _req: &fuser::Request<'_>, ino: u64, fh: Option<u64>, reply: ReplyAttr) {
-        if !self.getfs().exists(ino) {
-            reply.error(ENOENT);
-            return;
+        match self.getfs().exists(ino) {
+            Err(e) => {
+                tracing::error!("exists({}) failed: {}", ino, e);
+                reply.error(EIO);
+                return;
+            }
+            Ok(false) => {
+                reply.error(ENOENT);
+                return;
+            }
+            Ok(true) => {}
         }
         match self.getfs().getattr(ino) {
             Err(err) => {

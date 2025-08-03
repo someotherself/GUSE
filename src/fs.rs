@@ -9,7 +9,7 @@ use std::{
     time::SystemTime,
 };
 
-use anyhow::{Context, anyhow, bail};
+use anyhow::{Context, Ok, anyhow, bail};
 use git2::{ObjectType, Oid};
 use rusqlite::{Connection, OptionalExtension, Transaction, params};
 use tracing::instrument;
@@ -370,16 +370,40 @@ impl GitFs {
         Ok(())
     }
 
-    pub fn exists(&self, _inode: u64) -> bool {
-        todo!()
+    // TODO Cache the DB data
+    pub fn exists(&self, inode: u64) -> anyhow::Result<bool> {
+        let conn = self.open_meta_db(&self.get_repo(inode)?.repo_dir)?;
+        Ok(conn.get_path_from_db(inode).is_ok())
     }
 
-    pub fn is_dir(&self, _inode: u64) -> bool {
-        todo!()
+    // TODO Cache the DB data
+    pub fn is_dir(&self, inode: u64) -> anyhow::Result<bool> {
+        let conn = self.open_meta_db(&self.get_repo(inode)?.repo_dir)?;
+        let repo = self.get_repo(inode)?;
+        let path = conn.get_path_from_db(inode)?;
+
+        let git_attr = repo.getattr(path)?;
+        Ok(git_attr.kind == ObjectType::Tree)
     }
 
-    pub fn is_file(&self, _inode: u64) -> bool {
-        todo!()
+    // TODO Cache the DB data
+    pub fn is_file(&self, inode: u64) -> anyhow::Result<bool> {
+        let conn = self.open_meta_db(&self.get_repo(inode)?.repo_dir)?;
+        let repo = self.get_repo(inode)?;
+        let path = conn.get_path_from_db(inode)?;
+
+        let git_attr = repo.getattr(path)?;
+        Ok(git_attr.kind == ObjectType::Blob && git_attr.filemode != 0o120000)
+    }
+
+    // TODO Cache the DB data
+    pub fn is_link(&self, inode: u64) -> anyhow::Result<bool> {
+        let conn = self.open_meta_db(&self.get_repo(inode)?.repo_dir)?;
+        let repo = self.get_repo(inode)?;
+        let path = conn.get_path_from_db(inode)?;
+
+        let git_attr = repo.getattr(path)?;
+        Ok(git_attr.kind == ObjectType::Blob && git_attr.filemode == 0o120000)
     }
 
     fn object_to_file_attr(&self, inode: u64, git_attr: &ObjectAttr) -> anyhow::Result<FileAttr> {
@@ -450,7 +474,7 @@ impl GitFs {
         }
 
         // Check inode exists
-        if !self.exists(inode) {
+        if !self.exists(inode)? {
             bail!("Inode not found!")
         }
         // Get ObjectAttr from git2
@@ -467,11 +491,11 @@ impl GitFs {
         if parent == ROOT_INO {
             return Ok(None);
         }
-        if !self.exists(parent) {
+        if !self.exists(parent)? {
             bail!("Inode not found!")
         }
 
-        if !self.is_dir(parent) {
+        if !self.is_dir(parent)? {
             bail!("Inode not found!")
         }
 
