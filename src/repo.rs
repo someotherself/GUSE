@@ -6,6 +6,8 @@ use std::path::Path;
 use crate::fs::{DirectoryEntry, DirectoryEntryPlus, FileType, GitFs, MetaDb, ObjectAttr};
 
 pub struct GitRepo {
+    // Caching the database connection.
+    // Must be refreshed after every write.
     pub connection: MetaDb,
     pub repo_dir: String,
     pub repo_id: u16,

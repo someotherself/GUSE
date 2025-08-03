@@ -226,7 +226,7 @@ impl fuser::Filesystem for GitFsAdapter {
         todo!()
     }
 
-    // TODO
+    // Do not allow. Use git rm instead.
     fn unlink(
         &mut self,
         _req: &fuser::Request<'_>,
@@ -234,10 +234,10 @@ impl fuser::Filesystem for GitFsAdapter {
         name: &OsStr,
         reply: fuser::ReplyEmpty,
     ) {
-        todo!()
+        reply.error(libc::EROFS);
     }
 
-    // TODO
+    // Do not allow. Use git rm instead.
     fn rmdir(
         &mut self,
         _req: &fuser::Request<'_>,
@@ -245,10 +245,10 @@ impl fuser::Filesystem for GitFsAdapter {
         name: &OsStr,
         reply: fuser::ReplyEmpty,
     ) {
-        todo!()
+        reply.error(libc::EROFS);
     }
 
-    // TODO
+    // Do not allow. Use git mv instead.
     fn rename(
         &mut self,
         _req: &fuser::Request<'_>,
@@ -259,7 +259,7 @@ impl fuser::Filesystem for GitFsAdapter {
         flags: u32,
         reply: fuser::ReplyEmpty,
     ) {
-        todo!()
+        reply.error(libc::EROFS);
     }
 
     // TODO
@@ -357,7 +357,7 @@ impl fuser::Filesystem for GitFsAdapter {
         }
     }
 
-    // TODO
+    // Do not allow. Use git layer instead.
     fn create(
         &mut self,
         _req: &fuser::Request<'_>,
@@ -368,7 +368,7 @@ impl fuser::Filesystem for GitFsAdapter {
         flags: i32,
         reply: fuser::ReplyCreate,
     ) {
-        todo!()
+        reply.error(libc::EROFS);
     }
 }
 

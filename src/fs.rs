@@ -509,11 +509,11 @@ impl GitFs {
 // readdirplus          -> git ls-tree + git catfile -p <object>
 // open                 -> no-op
 // read                 -> git cat-file --batch / git cat-file -p <blob>
-// create               -> git hash-object --stdin -w + git update-index --add <path>
+// create               -> Not allowed in fuse. git hash-object --stdin -w + git update-index --add <path>
 // write                -> buffer in memory then on flush: git hash-object --stdin -w
 // flush / release      -> git update-index --add <path>
-// unlink               -> git update-index --remove <path>
-// mkdir                -> update in mem tree, commit w/: git write-tree
-// rmdir                -> update in mem tree, commit w/: git write-tree
-// rename               -> git mv <old> <new> or idx update + working tree rename
+// unlink               -> Not allowed in fuse. git update-index --remove <path>
+// mkdir                -> Not allowed in fuse. update in mem tree, commit w/: git write-tree
+// rmdir                -> Not allowed in fuse. update in mem tree, commit w/: git write-tree
+// rename               -> Not allowed in fuse. git mv <old> <new> or idx update + working tree rename
 // statfs               -> fuse3::statfs::Statfs or derive from git repo
