@@ -10,8 +10,11 @@ mod mount;
 mod repo;
 
 fn main() -> anyhow::Result<()> {
-    log_init();
     let matches = handle_cli_args();
+
+    let log_level = matches.get_count("verbose") as u8;
+    init_logging(log_level);
+
     start_app(&matches)?;
     Ok(())
 }
@@ -64,6 +67,13 @@ fn handle_cli_args() -> ArgMatches {
                 .requires("mount-point")
                 .help("Allow other users to access filesystem."),
         )
+        .arg(
+            Arg::new("verbose")
+                .short('v')
+                .long("verbose")
+                .action(ArgAction::Count)
+                .help("Increase log verbosity (can be used multiple times)"),
+        )
         .get_matches()
 }
 
@@ -81,8 +91,17 @@ fn run_mount(matches: &ArgMatches) -> anyhow::Result<()> {
     Ok(())
 }
 
-fn log_init() {
-    let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("trace"));
+fn init_logging(verbosity: u8) {
+    let level = match verbosity {
+        0 => "info",
+        1 => "debug",
+        _ => "trace",
+    };
+
+    let filter = EnvFilter::try_from_default_env()
+        // If RUST_LOG was set, respect it; otherwise use our `level`
+        .unwrap_or_else(|_| EnvFilter::new(level));
+
     fmt::fmt()
         .with_env_filter(filter)
         .with_writer(std::io::stderr)
