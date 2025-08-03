@@ -11,7 +11,7 @@ use std::{
 
 use anyhow::{Context, Ok, anyhow, bail};
 use git2::{ObjectType, Oid};
-use rusqlite::{Connection, Transaction, params};
+use rusqlite::{Connection, OptionalExtension, Transaction, params};
 use tracing::instrument;
 
 use crate::repo::GitRepo;
@@ -200,12 +200,61 @@ impl MetaDb {
         Ok(())
     }
 
-    pub fn get_ino_from_db(&self, _parent: u64, _name: &str) -> anyhow::Result<u64> {
-        todo!()
+    pub fn get_ino_from_db(&self, parent: u64, name: &str) -> anyhow::Result<u64> {
+        let mut stmt = self.conn.prepare(
+            "SELECT inode
+               FROM inode_map
+              WHERE parent_inode = ?1 AND name = ?2",
+        )?;
+
+        let ino_opt: Option<i64> = stmt
+            .query_row(rusqlite::params![parent as i64, name], |row| row.get(0))
+            .optional()?;
+        if let Some(ino) = ino_opt {
+            Ok(ino as u64)
+        } else {
+            Err(anyhow!(
+                "inode not found for parent={} name={}",
+                parent,
+                name
+            ))
+        }
     }
 
-    pub fn get_path_from_db(&self, _inode: u64) -> anyhow::Result<PathBuf> {
-        todo!()
+    pub fn get_path_from_db(&self, inode: u64) -> anyhow::Result<PathBuf> {
+        let mut stmt = self.conn.prepare(
+            "SELECT parent_inode, name
+               FROM inode_map
+              WHERE inode = ?1",
+        )?;
+
+        let mut components = Vec::new();
+        let mut curr = inode as i64;
+
+        loop {
+            let row: Option<(i64, String)> = stmt
+                .query_row(params![curr], |r| {
+                    rusqlite::Result::Ok((r.get(0)?, r.get(1)?))
+                })
+                .optional()?;
+
+            match row {
+                Some((parent, name)) => {
+                    components.push(name);
+                    curr = parent;
+                }
+                None => break,
+            }
+        }
+
+        if components.is_empty() && inode != ROOT_INO {
+            return Err(anyhow!("inode {} not found in meta-db", inode));
+        }
+
+        components.reverse();
+
+        let path: PathBuf = components.iter().collect();
+        Ok(path)
     }
 }
 
