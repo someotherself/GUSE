@@ -3,7 +3,7 @@
 use std::path::PathBuf;
 
 use clap::{Arg, ArgAction, ArgMatches, command, crate_authors, crate_version};
-use tracing::Level;
+use tracing_subscriber::{EnvFilter, fmt};
 
 mod fs;
 mod mount;
@@ -83,8 +83,12 @@ async fn run_mount(matches: &ArgMatches) -> anyhow::Result<()> {
 }
 
 fn log_init() {
-    let subscriber = tracing_subscriber::fmt()
-        .with_max_level(Level::DEBUG)
-        .finish();
-    tracing::subscriber::set_global_default(subscriber).unwrap();
+    let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("trace"));
+    fmt::fmt()
+        .with_env_filter(filter)
+        .with_writer(std::io::stderr)
+        .init();
+    // let subscriber = tracing_subscriber::fmt()
+    //     .with_max_level(Level::DEBUG)
+    //     .finish();
 }

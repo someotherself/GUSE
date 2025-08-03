@@ -1,6 +1,6 @@
 use std::hash::Hash;
+use std::path::Path;
 use std::rc::Rc;
-use std::sync::Mutex;
 use std::time::{Duration, UNIX_EPOCH};
 use std::{
     collections::{HashMap, VecDeque},
@@ -11,22 +11,23 @@ use std::{
 
 use anyhow::{Context, Ok, anyhow, bail};
 use git2::{ObjectType, Oid};
+use rusqlite::Connection;
 use tracing::instrument;
 
 use crate::repo::GitRepo;
 
-// Storage for the inode mapping, metadata etc. Sits inside repos/repo_/
-const META_STORE: &str = "fs_meta";
+const META_STORE: &str = "fs_meta.db";
 const REPO_SHIFT: u8 = 48;
+pub const ROOT_INO: u64 = 1;
 
 // Disk structure
 // MOUNT_POINT/
 // repos_dir/repo1
-//        ├── repository_name1/
-//        └── fs_meta/fs_meta.db
+//------------├── repository_name1/
+//------------└── fs_meta.db
 // repos_dir/repo2
-//        ├── repository_name2/
-//        └── fs_meta/fs_meta.db
+//------------├── repository_name2/
+//------------└── fs_meta.db
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct FileAttr {
@@ -158,16 +159,25 @@ impl Iterator for DirectoryEntryPlusIterator {
     }
 }
 
-struct InodeAllocator {
-    next: AtomicU64,
-    map: Mutex<HashMap<Oid, u64>>,
+pub struct MetaDb {
+    pub conn: Connection,
 }
 
-impl InodeAllocator {
-    fn get_or_alloc(&self, oid: &Oid) -> u64 {
-        let mut map = self.map.lock().unwrap();
-        *map.entry(*oid)
-            .or_insert_with(|| self.next.fetch_add(1, Ordering::SeqCst))
+impl MetaDb {
+    pub fn meta_db_allocate_inode() -> anyhow::Result<()> {
+        todo!()
+    }
+
+    pub fn get_ino_from_db(&self, _parent: u64, _name: &str) -> anyhow::Result<u64> {
+        todo!()
+    }
+
+    pub fn write_inode_to_db(&self, _attr: &FileAttr) -> anyhow::Result<()> {
+        todo!()
+    }
+
+    pub fn get_path_from_db(&self, _inode: u64) -> anyhow::Result<PathBuf> {
+        todo!()
     }
 }
 
@@ -176,7 +186,6 @@ pub struct GitFs {
     repos_list: HashMap<u16, GitRepo>,
     next_inode: HashMap<u16, AtomicU64>,
     read_only: bool,
-    // inode_map: RwLock<HashMap<u64, Node>>
 }
 
 impl GitFs {
@@ -190,6 +199,51 @@ impl GitFs {
         fs.ensure_base_dirs_exist()
             .context("Failed to initialize base directories")?;
         Ok(Rc::new(fs).clone())
+    }
+
+    pub fn open_meta_db<P: AsRef<Path>>(&self, repo_name: P) -> anyhow::Result<MetaDb> {
+        let db_path = PathBuf::from(&self.repos_dir)
+            .join(repo_name)
+            .join(META_STORE);
+        let conn = Connection::open(&db_path)
+            .with_context(|| format!("Could not find db at path {}", db_path.display()))?;
+        Ok(MetaDb { conn })
+    }
+
+    pub fn init_meta_db<P: AsRef<Path>>(&self, repo_name: P) -> anyhow::Result<MetaDb> {
+        // Must take in the name of the folder of the REPO
+        // repos_dir/repo_name
+        //------------------├── fs_meta.db
+        //------------------└── repository_name1/
+        let db_path = PathBuf::from(&self.repos_dir)
+            .join(repo_name)
+            .join(META_STORE);
+        let conn = Connection::open(&db_path)
+            .with_context(|| format!("Could not find db at path {}", db_path.display()))?;
+
+        // DB layout
+        //   inode        INTEGER   PRIMARY KEY,    -> the u64 inode
+        //   parent_inode INTEGER   NOT NULL,       -> the parent directory’s inode
+        //   name         TEXT      NOT NULL,       -> the filename or directory name
+        //   oid          TEXT      NOT NULL,       -> the Git OID
+        //   filemode     INTEGER   NOT NULL        -> the raw Git filemode
+        conn.execute_batch(
+            r#"
+                CREATE TABLE IF NOT EXISTS inode_map (
+                    inode        INTEGER PRIMARY KEY,
+                    parent_inode INTEGER NOT NULL,
+                    name         TEXT    NOT NULL,
+                    oid          TEXT    NOT NULL,
+                    filemode     INTEGER NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS meta (
+                    key   TEXT    PRIMARY KEY,
+                    value INTEGER NOT NULL
+                );
+            "#,
+        )?;
+
+        Ok(MetaDb { conn })
     }
 
     fn next_inode(&self, parent: u64) -> anyhow::Result<u64> {
@@ -250,18 +304,6 @@ impl GitFs {
         todo!()
     }
 
-    pub fn get_ino_from_db(&self, _parent: u64, _name: &str) -> anyhow::Result<u64> {
-        todo!()
-    }
-
-    pub fn get_path_from_db(&self, _inode: u64) -> anyhow::Result<PathBuf> {
-        todo!()
-    }
-
-    pub fn write_inode_to_db(&self, _attr: &FileAttr) -> anyhow::Result<()> {
-        todo!()
-    }
-
     fn object_to_file_attr(&self, inode: u64, git_attr: &ObjectAttr) -> anyhow::Result<FileAttr> {
         let blocks = git_attr.size.div_ceil(512);
 
@@ -305,20 +347,46 @@ impl GitFs {
     }
 
     pub fn getattr(&self, inode: u64) -> anyhow::Result<FileAttr> {
+        if inode == ROOT_INO {
+            let now = SystemTime::now();
+            return Ok(FileAttr {
+                inode: ROOT_INO,
+                oid: Oid::zero(), // no real Git object
+                size: 0,
+                blocks: 0,
+                atime: now,
+                mtime: now,
+                ctime: now,
+                crtime: now,
+                kind: FileType::Directory,
+                perm: 0o644,
+                nlink: 2,
+                uid: unsafe { libc::getuid() } as u32,
+                gid: unsafe { libc::getgid() } as u32,
+                rdev: 0,
+                blksize: 4096,
+                flags: 0,
+            });
+        }
+
         // Check inode exists
         if !self.exists(inode) {
             bail!("Inode not found!")
         }
-
         // Get ObjectAttr from git2
         let repo = self.get_repo(inode)?;
-        let path = self.get_path_from_db(inode)?;
+        let db_conn = self.open_meta_db(&repo.repo_dir)?;
+        let path = db_conn.get_path_from_db(inode)?;
 
         let git_attr = repo.getattr(path)?;
         Ok(self.object_to_file_attr(inode, &git_attr)?)
     }
 
     pub fn find_by_name(&self, parent: u64, name: &str) -> anyhow::Result<Option<FileAttr>> {
+        // Do not look into parent. ROOT_DIR should not be accessible
+        if parent == ROOT_INO {
+            return Ok(None);
+        }
         if !self.exists(parent) {
             bail!("Inode not found!")
         }
@@ -329,11 +397,12 @@ impl GitFs {
 
         let parent_attr = self.getattr(parent)?;
         let repo = self.get_repo(parent)?;
-        let _git_attr = repo.find_by_name(parent_attr.oid, name)?;
-        // let file_attr = self.object_to_file_attr(inode, &git_attr);
+        let git_attr = repo.find_by_name(parent_attr.oid, name)?;
+        let conn = self.open_meta_db(&repo.repo_dir)?;
+        let inode = conn.get_ino_from_db(parent, name)?;
+        let file_attr = self.object_to_file_attr(inode, &git_attr)?;
 
-        // TODO Implement database storage first TODO
-        todo!()
+        Ok(Some(file_attr))
     }
 }
 

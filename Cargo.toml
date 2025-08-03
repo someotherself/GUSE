@@ -8,7 +8,8 @@ anyhow = "1.0.98"
 clap = { version = "4.5.42", features = ["cargo"] }
 libc = "0.2.174"
 tracing = { version = "0.1.41", features = ["max_level_trace", "release_max_level_info"] }
-tracing-subscriber = "0.3.19"
+tracing-subscriber = { version = "0.3.19", features = ["env-filter"] }
 tokio = { version = "1.47.1", features = ["full"] }
 git2 = "0.20.2"
 fuser = "0.15.1"
+rusqlite = "0.37.0"

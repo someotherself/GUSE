@@ -2,7 +2,7 @@
 
 use fuser::{MountOption, ReplyAttr, ReplyData, ReplyEntry, ReplyOpen, ReplyWrite};
 use libc::{EIO, ENOENT};
-use tracing::{Level, info};
+use tracing::{Level, Span, info};
 use tracing::{debug, error, instrument, trace, warn};
 
 use std::ffi::OsStr;
@@ -12,7 +12,7 @@ use std::rc::Rc;
 use std::time::{Duration, SystemTime};
 use std::{num::NonZeroU32, path::PathBuf};
 
-use crate::fs::{FileAttr, FileType, GitFs};
+use crate::fs::{FileAttr, FileType, GitFs, ROOT_INO};
 
 const TTL: Duration = Duration::from_secs(1);
 
@@ -69,27 +69,19 @@ pub fn mount_fuse(opts: MountPoint) -> anyhow::Result<()> {
     if allow_root {
         options.push(MountOption::AllowRoot);
     }
-    dbg!("test1");
 
     let fs = GitFsAdapter::new(repos_dir, opts.read_only)?;
-    dbg!("test2");
-    dbg!(&mountpoint);
 
     match fuser::mount2(fs, mountpoint, &options) {
         Ok(()) => {
             info!("Filesystem unmounted cleanly");
-            dbg!("test3-a");
             Ok(())
         }
         Err(e) if e.kind() == ErrorKind::PermissionDenied => {
             error!("Permission denied: {}", e);
-            dbg!("test3-b");
             std::process::exit(2);
         }
-        Err(e) => {
-            dbg!("test3-c");
-            Err(e.into())
-        }
+        Err(e) => Err(e.into()),
     }
 }
 
@@ -163,9 +155,6 @@ impl fuser::Filesystem for GitFsAdapter {
     fn destroy(&mut self) {}
 
     fn lookup(&mut self, _req: &fuser::Request<'_>, parent: u64, name: &OsStr, reply: ReplyEntry) {
-        // Lookup a dir (tree) by name (real name) and get attr
-        // TODO: Should check the access?
-
         if name == OsStr::new(".") {
             if let Ok(attr) = self.getfs().getattr(parent) {
                 reply.entry(&TTL, &attr.into(), 0);
@@ -354,8 +343,10 @@ impl fuser::Filesystem for GitFsAdapter {
     }
 
     // TODO
-    fn opendir(&mut self, _req: &fuser::Request<'_>, _ino: u64, _flags: i32, reply: ReplyOpen) {
-        todo!()
+    fn opendir(&mut self, _req: &fuser::Request<'_>, ino: u64, flags: i32, reply: ReplyOpen) {
+        if ino == ROOT_INO {
+            reply.error(ENOENT);
+        }
     }
 
     // TODO

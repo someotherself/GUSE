@@ -6,6 +6,7 @@ use std::path::Path;
 use crate::fs::{DirectoryEntry, DirectoryEntryPlus, FileType, GitFs, ObjectAttr};
 
 pub struct GitRepo {
+    pub repo_dir: String,
     pub repo_id: u16,
     pub inner: Repository,
     pub head: Oid,
@@ -16,16 +17,20 @@ impl GitRepo {
         todo!()
     }
 
-    pub fn open<P: AsRef<Path>>(path: P, repo_id: u16) -> anyhow::Result<Self> {
+    // Path:
+    pub fn open<P: AsRef<Path>>(_path: P) -> anyhow::Result<Self> {
         // TODO: read root folder and get repo_id from the inode
-        let repo = Repository::open(path)?;
-        let head = repo.revparse_single("HEAD")?.id();
+        // TODO: get repo_dir from the path
+        // let repo = Repository::open(path)?;
+        // let head = repo.revparse_single("HEAD")?.id();
 
-        Ok(GitRepo {
-            repo_id,
-            inner: repo,
-            head,
-        })
+        // Ok(GitRepo {
+        //     repo_dir,
+        //     repo_id,
+        //     inner: repo,
+        //     head,
+        // })
+        todo!()
     }
 
     pub fn getattr<P: AsRef<Path>>(&self, path: P) -> anyhow::Result<ObjectAttr> {
@@ -95,7 +100,8 @@ impl GitRepo {
         let mut entries = Vec::with_capacity(tree.len());
         for entry in tree.iter() {
             let name = entry.name().unwrap_or("").to_string();
-            let inode = fs.get_ino_from_db(tree_inode, &name)?;
+            let conn = fs.open_meta_db(&self.repo_dir)?;
+            let inode = conn.get_ino_from_db(tree_inode, &name)?;
             entries.push(DirectoryEntry {
                 name,
                 inode,
