@@ -370,37 +370,30 @@ impl GitFs {
         Ok(())
     }
 
-    // TODO Cache the DB data
     pub fn exists(&self, inode: u64) -> anyhow::Result<bool> {
-        let conn = self.open_meta_db(&self.get_repo(inode)?.repo_dir)?;
-        Ok(conn.get_path_from_db(inode).is_ok())
+        let repo = self.get_repo(inode)?;
+        Ok(repo.connection.get_path_from_db(inode).is_ok())
     }
 
-    // TODO Cache the DB data
     pub fn is_dir(&self, inode: u64) -> anyhow::Result<bool> {
-        let conn = self.open_meta_db(&self.get_repo(inode)?.repo_dir)?;
         let repo = self.get_repo(inode)?;
-        let path = conn.get_path_from_db(inode)?;
+        let path = repo.connection.get_path_from_db(inode)?;
 
         let git_attr = repo.getattr(path)?;
         Ok(git_attr.kind == ObjectType::Tree)
     }
 
-    // TODO Cache the DB data
     pub fn is_file(&self, inode: u64) -> anyhow::Result<bool> {
-        let conn = self.open_meta_db(&self.get_repo(inode)?.repo_dir)?;
         let repo = self.get_repo(inode)?;
-        let path = conn.get_path_from_db(inode)?;
+        let path = repo.connection.get_path_from_db(inode)?;
 
         let git_attr = repo.getattr(path)?;
         Ok(git_attr.kind == ObjectType::Blob && git_attr.filemode != 0o120000)
     }
 
-    // TODO Cache the DB data
     pub fn is_link(&self, inode: u64) -> anyhow::Result<bool> {
-        let conn = self.open_meta_db(&self.get_repo(inode)?.repo_dir)?;
         let repo = self.get_repo(inode)?;
-        let path = conn.get_path_from_db(inode)?;
+        let path = repo.connection.get_path_from_db(inode)?;
 
         let git_attr = repo.getattr(path)?;
         Ok(git_attr.kind == ObjectType::Blob && git_attr.filemode == 0o120000)

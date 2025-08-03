@@ -3,9 +3,10 @@ use git2::{ObjectType, Oid, Repository, Tree};
 
 use std::path::Path;
 
-use crate::fs::{DirectoryEntry, DirectoryEntryPlus, FileType, GitFs, ObjectAttr};
+use crate::fs::{DirectoryEntry, DirectoryEntryPlus, FileType, GitFs, MetaDb, ObjectAttr};
 
 pub struct GitRepo {
+    pub connection: MetaDb,
     pub repo_dir: String,
     pub repo_id: u16,
     pub inner: Repository,
