@@ -11,7 +11,7 @@ use std::{
 
 use anyhow::{Context, Ok, anyhow, bail};
 use git2::{ObjectType, Oid};
-use rusqlite::Connection;
+use rusqlite::{Connection, Transaction, params};
 use tracing::instrument;
 
 use crate::repo::GitRepo;
@@ -44,6 +44,7 @@ pub struct FileAttr {
     pub crtime: SystemTime,
     pub kind: FileType,
     pub perm: u16,
+    pub mode: u32,
     pub nlink: u32,
     pub uid: u32,
     pub gid: u32,
@@ -56,7 +57,7 @@ pub struct FileAttr {
 pub struct ObjectAttr {
     pub oid: Oid,
     pub kind: git2::ObjectType,
-    pub filemode: i32,
+    pub filemode: u32,
     pub size: u64,
     pub commit_time: git2::Time,
 }
@@ -84,6 +85,7 @@ impl FileType {
 pub struct CreateFileAttr {
     pub kind: FileType,
     pub perm: u16,
+    pub mode: u32,
     pub uid: u32,
     pub gid: u32,
     pub rdev: u32,
@@ -104,6 +106,7 @@ impl From<CreateFileAttr> for FileAttr {
             crtime: now,
             kind: value.kind,
             perm: value.perm,
+            mode: value.mode,
             nlink: if value.kind == FileType::Directory {
                 2
             } else {
@@ -127,7 +130,7 @@ pub struct DirectoryEntry {
     // File (Blob), Dir (Tree), or Symlink
     pub kind: FileType,
     // Mode (permissions)
-    pub filemode: i32,
+    pub filemode: u32,
 }
 
 pub struct DirectoryEntryIterator(VecDeque<DirectoryEntry>);
@@ -164,15 +167,40 @@ pub struct MetaDb {
 }
 
 impl MetaDb {
-    pub fn meta_db_allocate_inode() -> anyhow::Result<()> {
-        todo!()
+    // DB layout
+    //   inode        INTEGER   PRIMARY KEY,    -> the u64 inode
+    //   parent_inode INTEGER   NOT NULL,       -> the parent directory’s inode
+    //   name         TEXT      NOT NULL,       -> the filename or directory name
+    //   oid          TEXT      NOT NULL,       -> the Git OID
+    //   filemode     INTEGER   NOT NULL        -> the raw Git filemode
+    // nodes: Vec<(parent inode, parent name, FileAttr)>
+    pub fn write_inodes_to_db(
+        &mut self,
+        nodes: Vec<(u64, String, FileAttr)>,
+    ) -> anyhow::Result<()> {
+        let tx: Transaction<'_> = self.conn.transaction()?;
+        {
+            let mut stmt = tx.prepare(
+                "INSERT INTO inode_map
+            (inode, repo_id, parent_inode, name, oid, filemode)
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            )?;
+
+            for (parent_inode, name, fileattr) in nodes {
+                stmt.execute(params![
+                    fileattr.inode as i64,
+                    parent_inode as i64,
+                    name,
+                    fileattr.oid.to_string(),
+                    fileattr.mode as i64,
+                ])?;
+            }
+        }
+        tx.commit()?;
+        Ok(())
     }
 
     pub fn get_ino_from_db(&self, _parent: u64, _name: &str) -> anyhow::Result<u64> {
-        todo!()
-    }
-
-    pub fn write_inode_to_db(&self, _attr: &FileAttr) -> anyhow::Result<()> {
         todo!()
     }
 
@@ -274,6 +302,7 @@ impl GitFs {
             let mut attr: FileAttr = CreateFileAttr {
                 kind: FileType::Directory,
                 perm: 0o755,
+                mode: 0o040000,
                 uid: 0,
                 gid: 0,
                 rdev: 0,
@@ -337,6 +366,7 @@ impl GitFs {
             crtime: time,
             kind,
             perm,
+            mode: git_attr.filemode,
             nlink,
             uid,
             gid,
@@ -360,6 +390,7 @@ impl GitFs {
                 crtime: now,
                 kind: FileType::Directory,
                 perm: 0o644,
+                mode: 0o040000,
                 nlink: 2,
                 uid: unsafe { libc::getuid() } as u32,
                 gid: unsafe { libc::getgid() } as u32,

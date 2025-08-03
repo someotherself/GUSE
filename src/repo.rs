@@ -69,7 +69,7 @@ impl GitRepo {
                         return Ok(ObjectAttr {
                             oid: entry.id(),
                             kind: entry.kind().unwrap(),
-                            filemode: entry.filemode(),
+                            filemode: entry.filemode() as u32,
                             size,
                             commit_time,
                         });
@@ -106,7 +106,7 @@ impl GitRepo {
                 name,
                 inode,
                 oid: entry.id(),
-                filemode: entry.filemode(),
+                filemode: entry.filemode() as u32,
                 kind: FileType::from_filemode(entry.kind().unwrap())?,
             });
         }
@@ -157,7 +157,7 @@ impl GitRepo {
         Ok(ObjectAttr {
             oid: entry.id(),
             kind: entry.kind().unwrap(),
-            filemode: entry.filemode(),
+            filemode: entry.filemode() as u32,
             size: size as u64,
             commit_time,
         })
