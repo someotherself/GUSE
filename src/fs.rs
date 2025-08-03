@@ -9,7 +9,7 @@ use std::{
     time::SystemTime,
 };
 
-use anyhow::{Context, Ok, anyhow, bail};
+use anyhow::{Context, anyhow, bail};
 use git2::{ObjectType, Oid};
 use rusqlite::{Connection, OptionalExtension, Transaction, params};
 use tracing::instrument;
@@ -459,7 +459,7 @@ impl GitFs {
         let path = db_conn.get_path_from_db(inode)?;
 
         let git_attr = repo.getattr(path)?;
-        Ok(self.object_to_file_attr(inode, &git_attr)?)
+        self.object_to_file_attr(inode, &git_attr)
     }
 
     pub fn find_by_name(&self, parent: u64, name: &str) -> anyhow::Result<Option<FileAttr>> {

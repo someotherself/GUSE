@@ -9,16 +9,15 @@ mod fs;
 mod mount;
 mod repo;
 
-#[tokio::main]
-async fn main() -> anyhow::Result<()> {
+fn main() -> anyhow::Result<()> {
     log_init();
     let matches = handle_cli_args();
-    start_app(&matches).await?;
+    start_app(&matches)?;
     Ok(())
 }
 
-async fn start_app(matches: &ArgMatches) -> anyhow::Result<()> {
-    run_mount(matches).await?;
+fn start_app(matches: &ArgMatches) -> anyhow::Result<()> {
+    run_mount(matches)?;
     Ok(())
 }
 
@@ -68,7 +67,7 @@ fn handle_cli_args() -> ArgMatches {
         .get_matches()
 }
 
-async fn run_mount(matches: &ArgMatches) -> anyhow::Result<()> {
+fn run_mount(matches: &ArgMatches) -> anyhow::Result<()> {
     let mountpoint = matches.get_one::<String>("mount-point").unwrap();
     let mountpoint = PathBuf::from(mountpoint);
     let repos_dir = matches.get_one::<String>("repos-dir").unwrap();
@@ -88,7 +87,4 @@ fn log_init() {
         .with_env_filter(filter)
         .with_writer(std::io::stderr)
         .init();
-    // let subscriber = tracing_subscriber::fmt()
-    //     .with_max_level(Level::DEBUG)
-    //     .finish();
 }

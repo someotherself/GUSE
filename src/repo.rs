@@ -113,6 +113,7 @@ impl GitRepo {
         Ok(entries)
     }
 
+    // read_dir plus
     pub fn list_tree_plus(
         &self,
         fs: &GitFs,

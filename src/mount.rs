@@ -58,12 +58,12 @@ pub fn mount_fuse(opts: MountPoint) -> anyhow::Result<()> {
     let mut options = vec![
         MountOption::FSName("GitFs".to_string()),
         MountOption::AutoUnmount,
-        MountOption::RO,
     ];
     if read_only {
         options.push(MountOption::RO);
     }
     if allow_other {
+        fuse_allow_other_enabled()?;
         options.push(MountOption::AllowOther);
     }
     if allow_root {
@@ -86,7 +86,7 @@ pub fn mount_fuse(opts: MountPoint) -> anyhow::Result<()> {
 }
 
 fn fuse_allow_other_enabled() -> std::io::Result<bool> {
-    let file = std::fs::File::open("/etc/fuse.conf")?;
+    let file: std::fs::File = std::fs::File::open("/etc/fuse.conf")?;
     for line in BufReader::new(file).lines() {
         if line?.trim_start().starts_with("user_allow_other") {
             return Ok(true);
