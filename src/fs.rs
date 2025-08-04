@@ -1,7 +1,7 @@
 use std::collections::HashSet;
 use std::fs::{File, OpenOptions};
 use std::hash::Hash;
-use std::io::{BufReader, BufWriter};
+use std::io::{BufReader, BufWriter, Write};
 use std::path::Path;
 use std::rc::Rc;
 use std::sync::{Mutex, RwLock};
@@ -91,7 +91,7 @@ struct ReadHandleContext {
 struct WriteHandleContext {
     ino: u64,
     attr: TimesFileAttr,
-    reader: Option<BufWriter<File>>,
+    writer: Option<BufWriter<File>>,
 }
 
 impl FileType {
@@ -529,12 +529,12 @@ impl GitFs {
     fn register_write(&self, ino: u64, fh: u64) -> anyhow::Result<()> {
         let attr = self.getattr(ino)?.into();
         let path = self.get_repo(ino)?.connection.get_path_from_db(ino)?;
-        let reader =
+        let writer =
             std::io::BufWriter::new(OpenOptions::new().read(true).write(true).open(&path)?);
         let ctx = WriteHandleContext {
             ino,
             attr,
-            reader: Some(reader),
+            writer: Some(writer),
         };
         self.write_handles
             .write()
@@ -595,6 +595,40 @@ impl GitFs {
             bail!("Fine handle is not valid!")
         }
         Ok(())
+    }
+
+    pub fn flush(&self, fh: u64) -> anyhow::Result<()> {
+        if self.read_only {
+            bail!("Filesystem is in read-only mode")
+        }
+        if fh == 0 {
+            return Ok(());
+        }
+        let read_lock = self.read_handles.read().unwrap();
+        let mut valid_fh = read_lock.get(&fh).is_some();
+        let write_lock = self.write_handles.read().unwrap();
+        if let Some(ctx) = write_lock.get(&fh) {
+            let mut ctx = ctx.lock().unwrap();
+            // Read-write locks not implemented. Write operations not allowed yet.
+            ctx.writer.as_mut().context("No writer")?.flush()?;
+            let path = self
+                .get_repo(ctx.ino)?
+                .connection
+                .get_path_from_db(ctx.ino)?;
+            File::open(path)?.sync_all()?;
+            drop(ctx);
+            self.reset_handles()?;
+            valid_fh = true;
+        }
+
+        if !valid_fh {
+            bail!("Fine handle is not valid!")
+        }
+        Ok(())
+    }
+
+    fn reset_handles(&self) -> anyhow::Result<()> {
+        todo!()
     }
 
     fn object_to_file_attr(&self, inode: u64, git_attr: &ObjectAttr) -> anyhow::Result<FileAttr> {
