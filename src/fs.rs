@@ -72,6 +72,8 @@ pub enum FileType {
     Directory,
     Symlink,
 }
+
+#[derive(Clone)]
 struct TimesFileAttr {
     pub size: u64,
     pub atime: SystemTime,
@@ -544,6 +546,54 @@ impl GitFs {
             .entry(ino)
             .or_default()
             .insert(fh);
+        Ok(())
+    }
+
+    pub fn release(&self, fh: u64) -> anyhow::Result<()> {
+        if fh == 0 {
+            return Ok(());
+        }
+
+        let mut valid_fh = false;
+
+        let ctx = self.read_handles.write().unwrap().remove(&fh);
+        if let Some(ctx) = ctx {
+            let ctx = ctx.lock().unwrap();
+            let mut opened_files_for_read = self.opened_handes_for_read.write().unwrap();
+            opened_files_for_read
+                .get_mut(&ctx.ino)
+                .context("handle is missing")?
+                .remove(&fh);
+            if opened_files_for_read
+                .get(&ctx.ino)
+                .context("handle is missing")?
+                .is_empty()
+            {
+                opened_files_for_read.remove(&ctx.ino);
+            }
+            valid_fh = true;
+        }
+
+        let ctx = self.write_handles.write().unwrap().remove(&fh);
+        if let Some(ctx) = ctx {
+            let ctx = ctx.lock().unwrap();
+            let mut opened_files_for_write = self.opened_handes_for_write.write().unwrap();
+            opened_files_for_write
+                .get_mut(&ctx.ino)
+                .context("handle is missing")?
+                .remove(&fh);
+            if opened_files_for_write
+                .get(&ctx.ino)
+                .context("handle is missing")?
+                .is_empty()
+            {
+                opened_files_for_write.remove(&ctx.ino);
+            }
+            valid_fh = true;
+        }
+        if !valid_fh {
+            bail!("Fine handle is not valid!")
+        }
         Ok(())
     }
 

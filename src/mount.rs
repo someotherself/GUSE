@@ -316,14 +316,12 @@ impl fuser::Filesystem for GitFsAdapter {
                     access_mask,
                 ) {
                     reply.error(libc::EACCES);
-                    return
+                    return;
                 };
                 let fh = fs.open(ino, read, write).unwrap();
                 reply.opened(fh, 0)
             }
-            Err(e) => {
-                reply.error(libc::ENOENT)
-            }
+            Err(e) => reply.error(libc::ENOENT),
         }
     }
 
