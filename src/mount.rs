@@ -155,19 +155,34 @@ impl fuser::Filesystem for GitFsAdapter {
 
     fn destroy(&mut self) {}
 
-    fn lookup(&mut self, _req: &fuser::Request<'_>, parent: u64, name: &OsStr, reply: ReplyEntry) {
-        if name == OsStr::new(".") {
-            if let Ok(attr) = self.getfs().getattr(parent) {
-                reply.entry(&TTL, &attr.into(), 0);
-            } else {
-                reply.error(EIO);
+    fn lookup(&mut self, req: &fuser::Request<'_>, parent: u64, name: &OsStr, reply: ReplyEntry) {
+        let attr_result = self.getfs().getattr(parent);
+        if attr_result.is_ok() {
+            let parent_attrs = attr_result.unwrap();
+            if !check_access(
+                parent_attrs.uid,
+                parent_attrs.gid,
+                parent_attrs.mode as u16,
+                req.uid(),
+                req.gid(),
+                libc::X_OK,
+            ) {
+                reply.error(libc::EACCES);
+                return;
             }
+            // Handle ROOT_INODE and ".."
+            if name == OsStr::new(".") {
+                reply.entry(&TTL, &parent_attrs.into(), 0);
+                return;
+            }
+        } else {
+            reply.error(ENOENT);
             return;
         }
 
         match self.getfs().find_by_name(parent, name.to_str().unwrap()) {
             Ok(Some(attr)) => reply.entry(&TTL, &attr.into(), 0),
-            Err(err) => {
+            Ok(None) => {
                 // The name is not found under this parent
                 reply.error(ENOENT);
             }
@@ -263,8 +278,7 @@ impl fuser::Filesystem for GitFsAdapter {
         reply.error(libc::EROFS);
     }
 
-
-    fn open(&mut self, _req: &fuser::Request<'_>, ino: u64, flags: i32, reply: ReplyOpen) {
+    fn open(&mut self, req: &fuser::Request<'_>, ino: u64, flags: i32, reply: ReplyOpen) {
         if ino == ROOT_INO {
             reply.error(EISDIR);
             return;
@@ -291,10 +305,26 @@ impl fuser::Filesystem for GitFsAdapter {
         };
 
         let fs = self.getfs();
-        let attr = fs.getattr(ino).unwrap();
-        let fh = fs.open(ino, read, write).unwrap();
-
-        reply.opened(fh, 0);
+        match fs.getattr(ino) {
+            Ok(attr) => {
+                if !check_access(
+                    attr.uid,
+                    attr.gid,
+                    attr.mode as u16,
+                    req.uid(),
+                    req.gid(),
+                    access_mask,
+                ) {
+                    reply.error(libc::EACCES);
+                    return
+                };
+                let fh = fs.open(ino, read, write).unwrap();
+                reply.opened(fh, 0)
+            }
+            Err(e) => {
+                reply.error(libc::ENOENT)
+            }
+        }
     }
 
     fn readdir(
@@ -435,7 +465,7 @@ fn check_access(
         access_mask -= access_mask & file_mode;
     }
 
-    return access_mask == 0;
+    access_mask == 0
 }
 
 impl From<FileAttr> for fuser::FileAttr {
