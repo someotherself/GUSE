@@ -92,7 +92,6 @@ struct WriteHandleContext {
     reader: Option<BufWriter<File>>,
 }
 
-// TODO: Link not correct. Account for the git object mode instead.
 impl FileType {
     pub fn from_filemode(mode: ObjectType) -> anyhow::Result<FileType> {
         match mode {

@@ -1,7 +1,7 @@
 #![allow(unused_imports, unused_variables)]
 
 use fuser::{MountOption, ReplyAttr, ReplyData, ReplyEntry, ReplyOpen, ReplyWrite};
-use libc::{EIO, ENOENT};
+use libc::{EIO, EISDIR, ENOENT};
 use tracing::{Level, Span, info};
 use tracing::{debug, error, instrument, trace, warn};
 
@@ -15,6 +15,7 @@ use std::{num::NonZeroU32, path::PathBuf};
 use crate::fs::{FileAttr, FileType, GitFs, ROOT_INO};
 
 const TTL: Duration = Duration::from_secs(1);
+const FMODE_EXEC: i32 = 0x20;
 
 pub struct MountPoint {
     mountpoint: PathBuf,
@@ -262,9 +263,37 @@ impl fuser::Filesystem for GitFsAdapter {
         reply.error(libc::EROFS);
     }
 
-    // TODO
-    fn open(&mut self, _req: &fuser::Request<'_>, _ino: u64, _flags: i32, reply: ReplyOpen) {
-        todo!()
+    fn open(&mut self, _req: &fuser::Request<'_>, ino: u64, flags: i32, reply: ReplyOpen) {
+        if ino == ROOT_INO {
+            reply.error(EISDIR);
+            return;
+        };
+        let (access_mask, read, write) = match flags & libc::O_ACCMODE {
+            libc::O_RDONLY => {
+                if flags & libc::O_TRUNC != 0 {
+                    reply.error(libc::EACCES);
+                    return;
+                }
+                if flags & FMODE_EXEC != 0 {
+                    // Open is from internal exec syscall
+                    (libc::X_OK, true, false)
+                } else {
+                    (libc::R_OK, true, false)
+                }
+            }
+            libc::O_WRONLY => (libc::W_OK, false, true),
+            libc::O_RDWR => (libc::R_OK | libc::W_OK, true, true),
+            _ => {
+                reply.error(libc::EINVAL);
+                return;
+            }
+        };
+
+        let fs = self.getfs();
+        let attr = fs.getattr(ino).unwrap();
+        let fh = fs.open(ino, read, write).unwrap();
+
+        reply.opened(fh, 0);
     }
 
     fn readdir(
