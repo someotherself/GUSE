@@ -1,6 +1,10 @@
+use std::collections::HashSet;
+use std::fs::{File, OpenOptions};
 use std::hash::Hash;
+use std::io::{BufReader, BufWriter};
 use std::path::Path;
 use std::rc::Rc;
+use std::sync::{Mutex, RwLock};
 use std::time::{Duration, UNIX_EPOCH};
 use std::{
     collections::{HashMap, VecDeque},
@@ -68,6 +72,25 @@ pub enum FileType {
     Directory,
     Symlink,
 }
+struct TimesFileAttr {
+    pub size: u64,
+    pub atime: SystemTime,
+    pub mtime: SystemTime,
+    pub ctime: SystemTime,
+    pub crtime: SystemTime,
+}
+
+struct ReadHandleContext {
+    ino: u64,
+    attr: TimesFileAttr,
+    reader: Option<BufReader<File>>,
+}
+
+struct WriteHandleContext {
+    ino: u64,
+    attr: TimesFileAttr,
+    reader: Option<BufWriter<File>>,
+}
 
 // TODO: Link not correct. Account for the git object mode instead.
 impl FileType {
@@ -77,6 +100,18 @@ impl FileType {
             ObjectType::Tree => Ok(FileType::Directory),
             ObjectType::Tag => Ok(FileType::Symlink),
             _ => bail!("Invalid file type {:?}", mode),
+        }
+    }
+}
+
+impl From<FileAttr> for TimesFileAttr {
+    fn from(value: FileAttr) -> Self {
+        Self {
+            atime: value.atime,
+            mtime: value.mtime,
+            ctime: value.ctime,
+            crtime: value.crtime,
+            size: value.size,
         }
     }
 }
@@ -261,7 +296,12 @@ impl MetaDb {
 pub struct GitFs {
     repos_dir: PathBuf,
     repos_list: HashMap<u16, GitRepo>,
-    next_inode: HashMap<u16, AtomicU64>,
+    next_inode: HashMap<u16, AtomicU64>, // Each Repo has a set of inodes
+    current_handle: AtomicU64,
+    read_handles: RwLock<HashMap<u64, Mutex<ReadHandleContext>>>, // ino
+    write_handles: RwLock<HashMap<u64, Mutex<WriteHandleContext>>>, // ino
+    opened_handes_for_read: RwLock<HashMap<u64, HashSet<u64>>>,   // (ino, fh)
+    opened_handes_for_write: RwLock<HashMap<u64, HashSet<u64>>>,  // (ino, fh)
     read_only: bool,
 }
 
@@ -271,6 +311,11 @@ impl GitFs {
             repos_dir,
             repos_list: HashMap::new(),
             read_only,
+            read_handles: RwLock::new(HashMap::new()),
+            write_handles: RwLock::new(HashMap::new()),
+            current_handle: AtomicU64::new(1),
+            opened_handes_for_read: RwLock::new(HashMap::new()),
+            opened_handes_for_write: RwLock::new(HashMap::new()),
             next_inode: HashMap::new(),
         };
         fs.ensure_base_dirs_exist()
@@ -363,6 +408,10 @@ impl GitFs {
         Ok(inode)
     }
 
+    fn next_file_handle(&self) -> u64 {
+        self.current_handle.fetch_add(1, Ordering::SeqCst)
+    }
+
     fn get_repo(&self, inode: u64) -> anyhow::Result<&GitRepo> {
         let repo_id = (inode >> REPO_SHIFT) as u16;
         let repo = self
@@ -427,6 +476,76 @@ impl GitFs {
 
         let git_attr = repo.getattr(path)?;
         Ok(git_attr.kind == ObjectType::Blob && git_attr.filemode == 0o120000)
+    }
+
+    pub fn open(&self, ino: u64, read: bool, write: bool) -> anyhow::Result<u64> {
+        if write && self.read_only {
+            bail!("Filesystem is in read only!")
+        }
+        if !write && !read {
+            bail!("Read and write cannot be false at the same time!")
+        }
+        if self.is_dir(ino)? {
+            bail!("Target must be a file!")
+        }
+
+        let mut handle: Option<u64> = None;
+        if read {
+            handle = Some(self.next_file_handle());
+            self.register_read(ino, handle.unwrap())?;
+        }
+        if write {
+            if handle.is_none() {
+                handle = Some(self.next_file_handle());
+            }
+            self.register_write(ino, handle.unwrap())?;
+        }
+        Ok(handle.unwrap())
+    }
+
+    fn register_read(&self, ino: u64, fh: u64) -> anyhow::Result<()> {
+        let attr = self.getattr(ino)?.into();
+        let path = self.get_repo(ino)?.connection.get_path_from_db(ino)?;
+        let reader = std::io::BufReader::new(OpenOptions::new().read(true).open(&path)?);
+        let ctx = ReadHandleContext {
+            ino,
+            attr,
+            reader: Some(reader),
+        };
+        self.read_handles
+            .write()
+            .unwrap()
+            .insert(fh, Mutex::from(ctx));
+        self.opened_handes_for_read
+            .write()
+            .unwrap()
+            .entry(ino)
+            .or_default()
+            .insert(fh);
+        Ok(())
+    }
+
+    fn register_write(&self, ino: u64, fh: u64) -> anyhow::Result<()> {
+        let attr = self.getattr(ino)?.into();
+        let path = self.get_repo(ino)?.connection.get_path_from_db(ino)?;
+        let reader =
+            std::io::BufWriter::new(OpenOptions::new().read(true).write(true).open(&path)?);
+        let ctx = WriteHandleContext {
+            ino,
+            attr,
+            reader: Some(reader),
+        };
+        self.write_handles
+            .write()
+            .unwrap()
+            .insert(fh, Mutex::from(ctx));
+        self.opened_handes_for_write
+            .write()
+            .unwrap()
+            .entry(ino)
+            .or_default()
+            .insert(fh);
+        Ok(())
     }
 
     fn object_to_file_attr(&self, inode: u64, git_attr: &ObjectAttr) -> anyhow::Result<FileAttr> {

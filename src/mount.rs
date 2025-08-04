@@ -338,6 +338,7 @@ impl fuser::Filesystem for GitFsAdapter {
     ) {
         todo!()
     }
+
     // TODO
     fn flush(
         &mut self,
