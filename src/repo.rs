@@ -1,7 +1,10 @@
+#![allow(unused_imports)]
+
 use anyhow::{Context, anyhow};
 use git2::{ObjectType, Oid, Repository, Tree};
+use tracing::info;
 
-use std::path::Path;
+use std::{io::Write, path::Path};
 
 use crate::fs::{DirectoryEntry, DirectoryEntryPlus, FileType, GitFs, MetaDb, ObjectAttr};
 
@@ -15,11 +18,39 @@ pub struct GitRepo {
     pub head: Option<Oid>,
 }
 
+// For customized fetch
 pub struct Remote {
     arg_remote: Option<String>,
 }
 
 impl GitRepo {
+    // pub fn fetch(&self, args: Remote) -> anyhow::Result<()> {
+    //     let remote = args.arg_remote.as_ref().map(|s| &s[..]).unwrap_or("origin");
+    //     info!("Fetching {} for repo", remote);
+
+    //     let mut callbacks = git2::RemoteCallbacks::new();
+    //     let mut remote = self.inner.find_remote(remote).or_else(|_| self.inner.remote_anonymous(remote))?;
+
+    //     callbacks.sideband_progress(|data| {
+    //         info!("remote: {}", str::from_utf8(data).unwrap());
+    //         std::io::stdout().flush().unwrap();
+    //         true
+    //     });
+
+    //     callbacks.update_tips(|refname, a, b| {
+    //         if a.is_zero() {
+    //             info!("[new]     {:20} {}", b, refname);
+    //         } else {
+    //             info!("[updated] {:10}..{:10} {}", a, b, refname);
+    //         }
+    //         true
+    //     });
+
+    //     // TODO
+
+    //     Ok(())
+    // }
+
     pub fn getattr<P: AsRef<Path>>(&self, path: P) -> anyhow::Result<ObjectAttr> {
         // Get the commit the head points to
         let commit = self.inner.head()?.peel_to_commit()?;

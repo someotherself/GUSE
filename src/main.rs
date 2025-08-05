@@ -98,9 +98,7 @@ fn init_logging(verbosity: u8) {
         _ => "trace",
     };
 
-    let filter = EnvFilter::try_from_default_env()
-        // If RUST_LOG was set, respect it; otherwise use our `level`
-        .unwrap_or_else(|_| EnvFilter::new(level));
+    let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(level));
 
     fmt::fmt()
         .with_env_filter(filter)

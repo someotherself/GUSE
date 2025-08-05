@@ -4,7 +4,6 @@ use std::hash::Hash;
 use std::io::{BufReader, BufWriter, Write};
 use std::path::Path;
 use std::rc::Rc;
-use std::sync::atomic::AtomicU16;
 use std::sync::{Mutex, RwLock};
 use std::time::{Duration, UNIX_EPOCH};
 use std::{
@@ -14,7 +13,7 @@ use std::{
     time::SystemTime,
 };
 
-use anyhow::{Context, Ok, anyhow, bail};
+use anyhow::{Context, anyhow, bail};
 use git2::{ObjectType, Oid, Repository};
 use rusqlite::{Connection, OptionalExtension, Transaction, params};
 use tracing::instrument;
@@ -322,7 +321,7 @@ impl GitFs {
         };
         fs.ensure_base_dirs_exist()
             .context("Failed to initialize base directories")?;
-        Ok(Rc::new(fs).clone())
+        Ok(Rc::new(fs))
     }
 
     pub fn new_repo(&mut self, repo_name: &str) -> anyhow::Result<Rc<GitRepo>> {
