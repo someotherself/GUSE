@@ -1,9 +1,10 @@
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
 use std::fs::{File, OpenOptions};
 use std::hash::Hash;
 use std::io::{BufReader, BufWriter, Write};
 use std::path::Path;
 use std::rc::Rc;
+use std::sync::atomic::AtomicU16;
 use std::sync::{Mutex, RwLock};
 use std::time::{Duration, UNIX_EPOCH};
 use std::{
@@ -296,7 +297,7 @@ impl MetaDb {
 
 pub struct GitFs {
     repos_dir: PathBuf,
-    repos_list: HashMap<u16, GitRepo>,
+    repos_list: BTreeMap<u16, Rc<GitRepo>>,
     next_inode: HashMap<u16, AtomicU64>, // Each Repo has a set of inodes
     current_handle: AtomicU64,
     read_handles: RwLock<HashMap<u64, Mutex<ReadHandleContext>>>, // ino
@@ -310,7 +311,7 @@ impl GitFs {
     pub fn new(repos_dir: PathBuf, read_only: bool) -> anyhow::Result<Rc<Self>> {
         let fs = Self {
             repos_dir,
-            repos_list: HashMap::new(),
+            repos_list: BTreeMap::new(),
             read_only,
             read_handles: RwLock::new(HashMap::new()),
             write_handles: RwLock::new(HashMap::new()),
@@ -322,6 +323,33 @@ impl GitFs {
         fs.ensure_base_dirs_exist()
             .context("Failed to initialize base directories")?;
         Ok(Rc::new(fs).clone())
+    }
+
+    pub fn new_repo(&mut self, repo_name: &str) -> anyhow::Result<Rc<GitRepo>> {
+        let repo_path = self.repos_dir.join(repo_name);
+        if repo_path.exists() {
+            bail!("Repo name already exists!")
+        }
+        std::fs::create_dir(&repo_path).context("context")?;
+
+        let connection = self.init_meta_db(repo_name)?;
+
+        let repo_id = self.next_repo_id();
+
+        let repo = git2::Repository::init(repo_path)?;
+
+        let git_repo = GitRepo {
+            connection,
+            repo_dir: repo_name.to_owned(),
+            repo_id,
+            inner: repo,
+            head: None,
+        };
+
+        let repo_rc = Rc::new(git_repo);
+        self.repos_list.insert(repo_id, repo_rc.clone());
+
+        Ok(repo_rc)
     }
 
     pub fn open_repo(&self, repo_name: &str) -> anyhow::Result<GitRepo> {
@@ -350,7 +378,7 @@ impl GitFs {
             repo_dir: repo_name.to_string(),
             repo_id,
             inner: repo,
-            head,
+            head: Some(head),
         })
     }
 
@@ -411,6 +439,15 @@ impl GitFs {
 
     fn next_file_handle(&self) -> u64 {
         self.current_handle.fetch_add(1, Ordering::SeqCst)
+    }
+
+    fn next_repo_id(&self) -> u16 {
+        match self.repos_list.keys().next_back() {
+            Some(&i) => i
+                .checked_add(1)
+                .expect("Congrats. Repo ids have overflowed a u16."),
+            None => 1,
+        }
     }
 
     fn get_repo(&self, inode: u64) -> anyhow::Result<&GitRepo> {

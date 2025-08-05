@@ -12,14 +12,14 @@ pub struct GitRepo {
     pub repo_dir: String,
     pub repo_id: u16,
     pub inner: Repository,
-    pub head: Oid,
+    pub head: Option<Oid>,
+}
+
+pub struct Remote {
+    arg_remote: Option<String>,
 }
 
 impl GitRepo {
-    pub fn new() -> Self {
-        todo!()
-    }
-
     pub fn getattr<P: AsRef<Path>>(&self, path: P) -> anyhow::Result<ObjectAttr> {
         // Get the commit the head points to
         let commit = self.inner.head()?.peel_to_commit()?;
