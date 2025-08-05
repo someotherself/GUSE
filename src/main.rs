@@ -8,19 +8,22 @@ use tracing_subscriber::{EnvFilter, fmt};
 mod fs;
 mod mount;
 mod repo;
+mod tui;
 
 fn main() -> anyhow::Result<()> {
     let matches = handle_cli_args();
 
     let log_level = matches.get_count("verbose") as u8;
+    // let log_level = 1;
     init_logging(log_level);
-
+    // setup_tui()?;
     start_app(&matches)?;
     Ok(())
 }
 
 fn start_app(matches: &ArgMatches) -> anyhow::Result<()> {
-    run_mount(matches)?;
+    // run_mount(matches)?;
+    setup_tui(matches)?;
     Ok(())
 }
 
@@ -88,6 +91,22 @@ fn run_mount(matches: &ArgMatches) -> anyhow::Result<()> {
     let mount_point =
         mount::MountPoint::new(mountpoint, repos_dir, read_only, allow_root, allow_other);
     mount::mount_fuse(mount_point)?;
+    Ok(())
+}
+
+fn setup_tui(matches: &ArgMatches) -> anyhow::Result<()> {
+    let mountpoint = matches.get_one::<String>("mount-point").unwrap();
+    let mountpoint = PathBuf::from(mountpoint);
+    let repos_dir = matches.get_one::<String>("repos-dir").unwrap();
+    let repos_dir = PathBuf::from(repos_dir);
+    let read_only = matches.get_flag("read-only");
+    let allow_other = matches.get_flag("allow-other");
+    let allow_root = matches.get_flag("allow-root");
+    let mount_point =
+        mount::MountPoint::new(mountpoint, repos_dir, read_only, allow_root, allow_other);
+    tui::run_tui_app()?;
+    let _session = mount::mount_fuse(mount_point)?;
+
     Ok(())
 }
 

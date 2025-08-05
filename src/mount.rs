@@ -1,6 +1,8 @@
 #![allow(unused_imports, unused_variables)]
 
-use fuser::{MountOption, ReplyAttr, ReplyData, ReplyEntry, ReplyOpen, ReplyWrite};
+use fuser::{
+    BackgroundSession, MountOption, ReplyAttr, ReplyData, ReplyEntry, ReplyOpen, ReplyWrite,
+};
 use libc::{EIO, EISDIR, ENOENT};
 use tracing::{Level, Span, info};
 use tracing::{debug, error, instrument, trace, warn};
@@ -8,7 +10,7 @@ use tracing::{debug, error, instrument, trace, warn};
 use std::ffi::OsStr;
 use std::io::{BufRead, BufReader, ErrorKind};
 use std::iter::Skip;
-use std::rc::Rc;
+use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 use std::{num::NonZeroU32, path::PathBuf};
 
@@ -43,7 +45,7 @@ impl MountPoint {
     }
 }
 
-pub fn mount_fuse(opts: MountPoint) -> anyhow::Result<()> {
+pub fn mount_fuse(opts: MountPoint) -> anyhow::Result<BackgroundSession> {
     let MountPoint {
         mountpoint,
         repos_dir,
@@ -72,11 +74,10 @@ pub fn mount_fuse(opts: MountPoint) -> anyhow::Result<()> {
     }
 
     let fs = GitFsAdapter::new(repos_dir, opts.read_only)?;
-
-    match fuser::mount2(fs, mountpoint, &options) {
-        Ok(()) => {
+    match fuser::spawn_mount2(fs, mountpoint, &options) {
+        Ok(session) => {
             info!("Filesystem unmounted cleanly");
-            Ok(())
+            Ok(session)
         }
         Err(e) if e.kind() == ErrorKind::PermissionDenied => {
             error!("Permission denied: {}", e);
@@ -97,7 +98,7 @@ fn fuse_allow_other_enabled() -> std::io::Result<bool> {
 }
 
 struct GitFsAdapter {
-    inner: Rc<GitFs>,
+    inner: Arc<GitFs>,
 }
 
 impl GitFsAdapter {
@@ -106,7 +107,7 @@ impl GitFsAdapter {
         Ok(GitFsAdapter { inner: fs })
     }
 
-    pub fn getfs(&self) -> Rc<GitFs> {
+    pub fn getfs(&self) -> Arc<GitFs> {
         self.inner.clone()
     }
 }

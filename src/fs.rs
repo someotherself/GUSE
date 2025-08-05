@@ -3,8 +3,7 @@ use std::fs::{File, OpenOptions};
 use std::hash::Hash;
 use std::io::{BufReader, BufWriter, Write};
 use std::path::Path;
-use std::rc::Rc;
-use std::sync::{Mutex, RwLock};
+use std::sync::{Arc, Mutex, RwLock};
 use std::time::{Duration, UNIX_EPOCH};
 use std::{
     collections::{HashMap, VecDeque},
@@ -296,7 +295,7 @@ impl MetaDb {
 
 pub struct GitFs {
     repos_dir: PathBuf,
-    repos_list: BTreeMap<u16, Rc<GitRepo>>,
+    repos_list: BTreeMap<u16, Arc<Mutex<GitRepo>>>,
     next_inode: HashMap<u16, AtomicU64>, // Each Repo has a set of inodes
     current_handle: AtomicU64,
     read_handles: RwLock<HashMap<u64, Mutex<ReadHandleContext>>>, // ino
@@ -307,7 +306,7 @@ pub struct GitFs {
 }
 
 impl GitFs {
-    pub fn new(repos_dir: PathBuf, read_only: bool) -> anyhow::Result<Rc<Self>> {
+    pub fn new(repos_dir: PathBuf, read_only: bool) -> anyhow::Result<Arc<Self>> {
         let fs = Self {
             repos_dir,
             repos_list: BTreeMap::new(),
@@ -321,10 +320,10 @@ impl GitFs {
         };
         fs.ensure_base_dirs_exist()
             .context("Failed to initialize base directories")?;
-        Ok(Rc::new(fs))
+        Ok(Arc::new(fs))
     }
 
-    pub fn new_repo(&mut self, repo_name: &str) -> anyhow::Result<Rc<GitRepo>> {
+    pub fn new_repo(&mut self, repo_name: &str) -> anyhow::Result<Arc<Mutex<GitRepo>>> {
         let repo_path = self.repos_dir.join(repo_name);
         if repo_path.exists() {
             bail!("Repo name already exists!")
@@ -345,7 +344,7 @@ impl GitFs {
             head: None,
         };
 
-        let repo_rc = Rc::new(git_repo);
+        let repo_rc = Arc::new(Mutex::new(git_repo));
         self.repos_list.insert(repo_id, repo_rc.clone());
 
         Ok(repo_rc)
@@ -449,13 +448,13 @@ impl GitFs {
         }
     }
 
-    fn get_repo(&self, inode: u64) -> anyhow::Result<&GitRepo> {
+    fn get_repo(&self, inode: u64) -> anyhow::Result<Arc<Mutex<GitRepo>>> {
         let repo_id = (inode >> REPO_SHIFT) as u16;
         let repo = self
             .repos_list
             .get(&repo_id)
             .ok_or_else(|| anyhow!("No repo found for this ID"))?;
-        Ok(repo)
+        Ok(repo.clone())
     }
 
     fn pack_inode(repo_id: u16, sub_ino: u64) -> u64 {
@@ -488,11 +487,13 @@ impl GitFs {
 
     pub fn exists(&self, inode: u64) -> anyhow::Result<bool> {
         let repo = self.get_repo(inode)?;
+        let repo = repo.lock().unwrap();
         Ok(repo.connection.get_path_from_db(inode).is_ok())
     }
 
     pub fn is_dir(&self, inode: u64) -> anyhow::Result<bool> {
         let repo = self.get_repo(inode)?;
+        let repo = repo.lock().unwrap();
         let path = repo.connection.get_path_from_db(inode)?;
 
         let git_attr = repo.getattr(path)?;
@@ -501,6 +502,7 @@ impl GitFs {
 
     pub fn is_file(&self, inode: u64) -> anyhow::Result<bool> {
         let repo = self.get_repo(inode)?;
+        let repo = repo.lock().unwrap();
         let path = repo.connection.get_path_from_db(inode)?;
 
         let git_attr = repo.getattr(path)?;
@@ -509,6 +511,7 @@ impl GitFs {
 
     pub fn is_link(&self, inode: u64) -> anyhow::Result<bool> {
         let repo = self.get_repo(inode)?;
+        let repo = repo.lock().unwrap();
         let path = repo.connection.get_path_from_db(inode)?;
 
         let git_attr = repo.getattr(path)?;
@@ -542,7 +545,12 @@ impl GitFs {
 
     fn register_read(&self, ino: u64, fh: u64) -> anyhow::Result<()> {
         let attr = self.getattr(ino)?.into();
-        let path = self.get_repo(ino)?.connection.get_path_from_db(ino)?;
+        let path = self
+            .get_repo(ino)?
+            .lock()
+            .unwrap()
+            .connection
+            .get_path_from_db(ino)?;
         let reader = std::io::BufReader::new(OpenOptions::new().read(true).open(&path)?);
         let ctx = ReadHandleContext {
             ino,
@@ -564,7 +572,12 @@ impl GitFs {
 
     fn register_write(&self, ino: u64, fh: u64) -> anyhow::Result<()> {
         let attr = self.getattr(ino)?.into();
-        let path = self.get_repo(ino)?.connection.get_path_from_db(ino)?;
+        let path = self
+            .get_repo(ino)?
+            .lock()
+            .unwrap()
+            .connection
+            .get_path_from_db(ino)?;
         let writer =
             std::io::BufWriter::new(OpenOptions::new().read(true).write(true).open(&path)?);
         let ctx = WriteHandleContext {
@@ -649,6 +662,8 @@ impl GitFs {
             ctx.writer.as_mut().context("No writer")?.flush()?;
             let path = self
                 .get_repo(ctx.ino)?
+                .lock()
+                .unwrap()
                 .connection
                 .get_path_from_db(ctx.ino)?;
             File::open(path)?.sync_all()?;
@@ -740,6 +755,7 @@ impl GitFs {
         }
         // Get ObjectAttr from git2
         let repo = self.get_repo(inode)?;
+        let repo = repo.lock().unwrap();
         let db_conn = self.open_meta_db(&repo.repo_dir)?;
         let path = db_conn.get_path_from_db(inode)?;
 
@@ -762,6 +778,7 @@ impl GitFs {
 
         let parent_attr = self.getattr(parent)?;
         let repo = self.get_repo(parent)?;
+        let repo = repo.lock().unwrap();
         let git_attr = repo.find_by_name(parent_attr.oid, name)?;
         let conn = self.open_meta_db(&repo.repo_dir)?;
         let inode = conn.get_ino_from_db(parent, name)?;
