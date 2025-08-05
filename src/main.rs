@@ -14,9 +14,7 @@ fn main() -> anyhow::Result<()> {
     let matches = handle_cli_args();
 
     let log_level = matches.get_count("verbose") as u8;
-    // let log_level = 1;
     init_logging(log_level);
-    // setup_tui()?;
     start_app(&matches)?;
     Ok(())
 }

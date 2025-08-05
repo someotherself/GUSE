@@ -144,7 +144,6 @@ impl fuser::Filesystem for GitFsAdapter {
     // where
     //     Self: 'a;
 
-    #[instrument(skip(self), err(level = Level::WARN), ret(level = Level::INFO))]
     fn init(
         &mut self,
         _req: &fuser::Request<'_>,
@@ -332,9 +331,34 @@ impl fuser::Filesystem for GitFsAdapter {
         ino: u64,
         fh: u64,
         offset: i64,
-        reply: fuser::ReplyDirectory,
+        mut reply: fuser::ReplyDirectory,
     ) {
-        todo!()
+        if ino == ROOT_INO {
+            let mut entries = vec![
+                (ROOT_INO, fuser::FileType::Directory, ".".to_string()),
+                (ROOT_INO, fuser::FileType::Directory, "..".to_string()),
+            ];
+            for repo in self.getfs().repos_list.values() {
+                let repo_guard = repo.lock().unwrap();
+                let repo_ino = GitFs::repo_id_to_ino(repo_guard.repo_id);
+                entries.push((
+                    repo_ino,
+                    fuser::FileType::Directory,
+                    repo_guard.repo_dir.clone(),
+                ));
+            }
+
+            for (i, (entry_ino, kind, name)) in
+                entries.into_iter().enumerate().skip(offset as usize)
+            {
+                if reply.add(entry_ino, (i + 1) as i64, kind, name) {
+                    break;
+                }
+            }
+            reply.ok();
+        } else {
+            todo!()
+        }
     }
 
     fn readdirplus(

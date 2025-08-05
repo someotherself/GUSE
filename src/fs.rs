@@ -20,17 +20,8 @@ use tracing::instrument;
 use crate::repo::GitRepo;
 
 const META_STORE: &str = "fs_meta.db";
-const REPO_SHIFT: u8 = 48;
+pub const REPO_SHIFT: u8 = 48;
 pub const ROOT_INO: u64 = 1;
-
-// Disk structure
-// MOUNT_POINT/
-// repos_dir/repo_name1
-//------------├── git/
-//------------└── fs_meta.db
-// repos_dir/repo_name2
-//------------├── git/
-//------------└── fs_meta.db
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct FileAttr {
@@ -293,10 +284,33 @@ impl MetaDb {
     }
 }
 
+// Disk structure
+// MOUNT_POINT/
+// repos/repo_dir1/
+//---------├── .git/
+//---------└── fs_meta.db
+// repos/repo_dir2/
+//---------├── .git/
+//---------└── fs_meta.db
+//
+// Structure of INODES
+// Each repo has a repo_id--<16bits repo-id>
+// repo_id for repo 1       0000000000000001
+// ino for repo 1 root dir  0000000000000001000000000....0000
+// ino for repo_1 folder1:  0000000000000001000000000....0001
+// ino for repo_1 folder2:  0000000000000001000000000....0002
+
+// repo_id for repo 2       0000000000000002
+// ino for repo 2 root dir  0000000000000002000000000....0000
+// ino for repo_2 folder1:  0000000000000002000000000....0001
+
+// ino for repo folder  = (repo_id as u64) << 48 (see REPO_SHIFT)
+// repo_id from ino     = ino >> REPO_SHIFT as u16
+
 pub struct GitFs {
-    repos_dir: PathBuf,
-    repos_list: BTreeMap<u16, Arc<Mutex<GitRepo>>>,
-    next_inode: HashMap<u16, AtomicU64>, // Each Repo has a set of inodes
+    pub repos_dir: PathBuf,
+    pub repos_list: BTreeMap<u16, Arc<Mutex<GitRepo>>>, // <repo_id, repo>
+    next_inode: HashMap<u16, AtomicU64>,                // Each Repo has a set of inodes
     current_handle: AtomicU64,
     read_handles: RwLock<HashMap<u64, Mutex<ReadHandleContext>>>, // ino
     write_handles: RwLock<HashMap<u64, Mutex<WriteHandleContext>>>, // ino
@@ -459,6 +473,10 @@ impl GitFs {
 
     fn pack_inode(repo_id: u16, sub_ino: u64) -> u64 {
         ((repo_id as u64) << REPO_SHIFT) | (sub_ino & ((1 << REPO_SHIFT) - 1))
+    }
+
+    pub fn repo_id_to_ino(repo_id: u16) -> u64 {
+        (repo_id as u64) << REPO_SHIFT
     }
 
     fn ensure_base_dirs_exist(&self) -> anyhow::Result<()> {
