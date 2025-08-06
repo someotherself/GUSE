@@ -1,5 +1,6 @@
 #![allow(unused_imports, unused_variables)]
 
+use anyhow::bail;
 use fuser::{
     BackgroundSession, MountOption, ReplyAttr, ReplyData, ReplyEntry, ReplyOpen, ReplyWrite,
 };
@@ -10,12 +11,13 @@ use tracing::{debug, error, instrument, trace, warn};
 use std::ffi::OsStr;
 use std::io::{BufRead, BufReader, ErrorKind};
 use std::iter::Skip;
-use std::sync::Arc;
+use std::path::Path;
+use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, SystemTime};
 use std::{num::NonZeroU32, path::PathBuf};
 
-use crate::fs::{FileAttr, FileType, GitFs, ROOT_INO};
+use crate::fs::{FileAttr, FileType, GitFs, REPO_SHIFT, ROOT_INO};
 
 const TTL: Duration = Duration::from_secs(1);
 const FMODE_EXEC: i32 = 0x20;
@@ -46,7 +48,7 @@ impl MountPoint {
     }
 }
 
-pub fn mount_fuse(opts: MountPoint) -> anyhow::Result<BackgroundSession> {
+pub fn mount_fuse(opts: MountPoint) -> anyhow::Result<()> {
     let MountPoint {
         mountpoint,
         repos_dir,
@@ -76,10 +78,21 @@ pub fn mount_fuse(opts: MountPoint) -> anyhow::Result<BackgroundSession> {
 
     let fs = GitFsAdapter::new(repos_dir, opts.read_only)?;
 
-    match fuser::spawn_mount2(fs, mountpoint, &options) {
-        Ok(session) => {
+    // match fuser::spawn_mount2(fs, mountpoint, &options) {
+    //     Ok(session) => {
+    //         info!("Filesystem unmounted cleanly");
+    //         Ok(session)
+    //     }
+    //     Err(e) if e.kind() == ErrorKind::PermissionDenied => {
+    //         error!("Permission denied: {}", e);
+    //         std::process::exit(2);
+    //     }
+    //     Err(e) => Err(e.into()),
+    // }
+    match fuser::mount2(fs, mountpoint, &options) {
+        Ok(_) => {
             info!("Filesystem unmounted cleanly");
-            Ok(session)
+            Ok(())
         }
         Err(e) if e.kind() == ErrorKind::PermissionDenied => {
             error!("Permission denied: {}", e);
@@ -100,7 +113,7 @@ fn fuse_allow_other_enabled() -> std::io::Result<bool> {
 }
 
 struct GitFsAdapter {
-    inner: Arc<GitFs>,
+    inner: Arc<Mutex<GitFs>>,
 }
 
 impl GitFsAdapter {
@@ -109,7 +122,7 @@ impl GitFsAdapter {
         Ok(GitFsAdapter { inner: fs })
     }
 
-    pub fn getfs(&self) -> Arc<GitFs> {
+    pub fn getfs(&self) -> Arc<Mutex<GitFs>> {
         self.inner.clone()
     }
 }
@@ -158,7 +171,9 @@ impl fuser::Filesystem for GitFsAdapter {
     fn destroy(&mut self) {}
 
     fn lookup(&mut self, req: &fuser::Request<'_>, parent: u64, name: &OsStr, reply: ReplyEntry) {
-        let attr_result = self.getfs().getattr(parent);
+        let fs_arc = self.getfs();
+        let fs = fs_arc.lock().unwrap();
+        let attr_result = fs.getattr(parent);
         if attr_result.is_ok() {
             let parent_attrs = attr_result.unwrap();
             if !check_access(
@@ -182,7 +197,7 @@ impl fuser::Filesystem for GitFsAdapter {
             return;
         }
 
-        match self.getfs().find_by_name(parent, name.to_str().unwrap()) {
+        match fs.find_by_name(parent, name.to_str().unwrap()) {
             Ok(Some(attr)) => reply.entry(&TTL, &attr.into(), 0),
             Ok(None) => {
                 // The name is not found under this parent
@@ -196,7 +211,9 @@ impl fuser::Filesystem for GitFsAdapter {
     }
 
     fn getattr(&mut self, _req: &fuser::Request<'_>, ino: u64, fh: Option<u64>, reply: ReplyAttr) {
-        match self.getfs().exists(ino) {
+        let fs_arc = self.getfs();
+        let fs = fs_arc.lock().unwrap();
+        match fs.exists(ino) {
             Err(e) => {
                 tracing::error!("exists({}) failed: {}", ino, e);
                 reply.error(EIO);
@@ -208,7 +225,7 @@ impl fuser::Filesystem for GitFsAdapter {
             }
             Ok(true) => {}
         }
-        match self.getfs().getattr(ino) {
+        match fs.getattr(ino) {
             Err(err) => {
                 error!("getattr({}) failed: {:?}", ino, err);
                 reply.error(ENOENT);
@@ -231,17 +248,66 @@ impl fuser::Filesystem for GitFsAdapter {
         todo!()
     }
 
-    // TODO
+    // When fetching a repo takes name as:
+    // website.accoount.repo_name
+    // example:github.tokio.tokio-rs.git -> https://github.com/tokio-rs/tokio.git
     fn mkdir(
         &mut self,
-        _req: &fuser::Request<'_>,
+        req: &fuser::Request<'_>,
         parent: u64,
         name: &OsStr,
         mode: u32,
         umask: u32,
         reply: ReplyEntry,
     ) {
-        todo!()
+        let fs_arc = self.getfs();
+        let mut fs = fs_arc.lock().unwrap();
+        match fs.getattr(parent) {
+            Ok(attr) => {
+                if !check_access(
+                    attr.uid,
+                    attr.gid,
+                    attr.mode as u16,
+                    req.uid(),
+                    req.gid(),
+                    libc::W_OK,
+                ) {
+                    reply.error(libc::EACCES);
+                    return;
+                };
+            }
+            Err(e) => {
+                reply.error(libc::ENOENT);
+                return;
+            }
+        }
+
+        // if parent is ROOT_DIR
+        if parent == ROOT_INO {
+            let repo_name = match Path::new(name).file_name() {
+                Some(n) => n.to_str().unwrap(),
+                None => {
+                    // name wasn’t a valid filename component
+                    reply.error(libc::EINVAL);
+                    return;
+                }
+            };
+
+            let (url, repo_name) = crate::repo::parse_mkdir_url(name).unwrap();
+            // initialize repo
+            let repo = fs.new_repo(&repo_name).unwrap();
+
+            // fetch
+            let repo_guard = repo.lock().unwrap();
+            repo_guard.fetch_anon(&url).unwrap();
+            let attr = fs
+                .getattr((repo_guard.repo_id as u64) << REPO_SHIFT)
+                .unwrap();
+            let fuser_attr: fuser::FileAttr = attr.into();
+            reply.entry(&TTL, &fuser_attr, 0);
+        } else {
+            reply.error(ENOENT);
+        }
     }
 
     // Do not allow. Use git rm instead.
@@ -281,6 +347,8 @@ impl fuser::Filesystem for GitFsAdapter {
     }
 
     fn open(&mut self, req: &fuser::Request<'_>, ino: u64, flags: i32, reply: ReplyOpen) {
+        let fs_arc = self.getfs();
+        let fs = fs_arc.lock().unwrap();
         if ino == ROOT_INO {
             reply.error(EISDIR);
             return;
@@ -306,7 +374,6 @@ impl fuser::Filesystem for GitFsAdapter {
             }
         };
 
-        let fs = self.getfs();
         match fs.getattr(ino) {
             Ok(attr) => {
                 if !check_access(
@@ -335,12 +402,14 @@ impl fuser::Filesystem for GitFsAdapter {
         offset: i64,
         mut reply: fuser::ReplyDirectory,
     ) {
+        let fs_arc = self.getfs();
+        let fs = fs_arc.lock().unwrap();
         if ino == ROOT_INO {
             let mut entries = vec![
                 (ROOT_INO, fuser::FileType::Directory, ".".to_string()),
                 (ROOT_INO, fuser::FileType::Directory, "..".to_string()),
             ];
-            for repo in self.getfs().repos_list.values() {
+            for repo in fs.repos_list.values() {
                 let repo_guard = repo.lock().unwrap();
                 let repo_ino = GitFs::repo_id_to_ino(repo_guard.repo_id);
                 entries.push((
@@ -438,14 +507,15 @@ impl fuser::Filesystem for GitFsAdapter {
 
     // TODO
     fn opendir(&mut self, _req: &fuser::Request<'_>, ino: u64, flags: i32, reply: ReplyOpen) {
+        let fs_arc = self.getfs();
+        let fs = fs_arc.lock().unwrap();
         // TODO - MOCK implementation
         if flags & O_DIRECTORY == 0 {
             reply.error(ENOTDIR);
             return;
         }
 
-        let repo_inodes = self
-            .getfs()
+        let repo_inodes = fs
             .repos_list
             .values()
             .map(|v| GitFs::repo_id_to_ino(v.lock().unwrap().repo_id))

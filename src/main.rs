@@ -5,6 +5,7 @@ use std::{path::PathBuf, thread};
 use clap::{Arg, ArgAction, ArgMatches, command, crate_authors, crate_version};
 
 mod fs;
+mod logging;
 mod mount;
 mod repo;
 mod tui;
@@ -12,16 +13,16 @@ mod tui;
 fn main() -> anyhow::Result<()> {
     let matches = handle_cli_args();
 
-    // let log_level = matches.get_count("verbose") as u8;
-    // init_logging(buffer);
+    let log_level = matches.get_count("verbose") as u8;
+    logging::init_logging(log_level);
 
     start_app(&matches)?;
     Ok(())
 }
 
 fn start_app(matches: &ArgMatches) -> anyhow::Result<()> {
-    // run_mount(matches)?;
-    setup_tui(matches)?;
+    run_mount(matches)?;
+    // setup_tui(matches)?;
     Ok(())
 }
 
@@ -105,7 +106,7 @@ fn setup_tui(matches: &ArgMatches) -> anyhow::Result<()> {
     let handle = thread::spawn(move || {
         tui::run_tui_app().unwrap();
     });
-    let _session = mount::mount_fuse(mount_point).unwrap();
+    mount::mount_fuse(mount_point).unwrap();
 
     handle.join().unwrap();
     Ok(())

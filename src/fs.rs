@@ -320,7 +320,7 @@ pub struct GitFs {
 }
 
 impl GitFs {
-    pub fn new(repos_dir: PathBuf, read_only: bool) -> anyhow::Result<Arc<Self>> {
+    pub fn new(repos_dir: PathBuf, read_only: bool) -> anyhow::Result<Arc<Mutex<Self>>> {
         let fs = Self {
             repos_dir,
             repos_list: BTreeMap::new(),
@@ -334,7 +334,7 @@ impl GitFs {
         };
         fs.ensure_base_dirs_exist()
             .context("Failed to initialize base directories")?;
-        Ok(Arc::new(fs))
+        Ok(Arc::new(Mutex::new(fs)))
     }
 
     pub fn new_repo(&mut self, repo_name: &str) -> anyhow::Result<Arc<Mutex<GitRepo>>> {
@@ -749,8 +749,34 @@ impl GitFs {
     pub fn getattr(&self, inode: u64) -> anyhow::Result<FileAttr> {
         if inode == ROOT_INO {
             let now = SystemTime::now();
+            let perms = 0o777;
+            let st_mode = libc::S_IFDIR | perms;
             return Ok(FileAttr {
                 inode: ROOT_INO,
+                oid: Oid::zero(), // no real Git object
+                size: 0,
+                blocks: 0,
+                atime: now,
+                mtime: now,
+                ctime: now,
+                crtime: now,
+                kind: FileType::Directory,
+                perm: perms as u16,
+                mode: st_mode,
+                nlink: 2,
+                uid: unsafe { libc::getuid() } as u32,
+                gid: unsafe { libc::getgid() } as u32,
+                rdev: 0,
+                blksize: 4096,
+                flags: 0,
+            });
+        }
+        // If ino is for a repo folder
+        let repo_id = (inode >> REPO_SHIFT) as u16;
+        if self.repos_list.contains_key(&repo_id) {
+            let now = SystemTime::now();
+            return Ok(FileAttr {
+                inode,
                 oid: Oid::zero(), // no real Git object
                 size: 0,
                 blocks: 0,

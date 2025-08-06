@@ -1,7 +1,8 @@
 #![allow(unused_imports)]
 
-use anyhow::{Context, anyhow};
+use anyhow::{Context, anyhow, bail};
 use git2::{ObjectType, Oid, Repository, Tree};
+use std::ffi::OsStr;
 use tracing::info;
 
 use std::{io::Write, path::Path};
@@ -24,32 +25,79 @@ pub struct Remote {
 }
 
 impl GitRepo {
-    // pub fn fetch(&self, args: Remote) -> anyhow::Result<()> {
-    //     let remote = args.arg_remote.as_ref().map(|s| &s[..]).unwrap_or("origin");
-    //     info!("Fetching {} for repo", remote);
+    pub fn fetch_anon(&self, url: &str) -> anyhow::Result<()> {
+        let mut callbacks = git2::RemoteCallbacks::new();
+        let mut remote = self.inner.remote_anonymous(url)?;
 
-    //     let mut callbacks = git2::RemoteCallbacks::new();
-    //     let mut remote = self.inner.find_remote(remote).or_else(|_| self.inner.remote_anonymous(remote))?;
+        callbacks.sideband_progress(|data| {
+            print!("remote: {}", str::from_utf8(data).unwrap());
+            std::io::stdout().flush().unwrap();
+            true
+        });
 
-    //     callbacks.sideband_progress(|data| {
-    //         info!("remote: {}", str::from_utf8(data).unwrap());
-    //         std::io::stdout().flush().unwrap();
-    //         true
-    //     });
+        callbacks.update_tips(|refname, a, b| {
+            if a.is_zero() {
+                println!("[new]     {b:20} {refname}");
+            } else {
+                println!("[updated] {a:10}..{b:10} {refname}");
+            }
+            true
+        });
 
-    //     callbacks.update_tips(|refname, a, b| {
-    //         if a.is_zero() {
-    //             info!("[new]     {:20} {}", b, refname);
-    //         } else {
-    //             info!("[updated] {:10}..{:10} {}", a, b, refname);
-    //         }
-    //         true
-    //     });
+        callbacks.transfer_progress(|stats| {
+            if stats.received_objects() == stats.total_objects() {
+                print!(
+                    "Resolving deltas {}/{}\r",
+                    stats.indexed_deltas(),
+                    stats.total_deltas()
+                );
+            } else if stats.total_objects() > 0 {
+                print!(
+                    "Received {}/{} objects ({}) in {} bytes\r",
+                    stats.received_objects(),
+                    stats.total_objects(),
+                    stats.indexed_objects(),
+                    stats.received_bytes()
+                );
+            }
+            std::io::stdout().flush().unwrap();
+            true
+        });
 
-    //     // TODO
+        let mut fo = git2::FetchOptions::new();
+        fo.remote_callbacks(callbacks);
+        remote.download(&[] as &[&str], Some(&mut fo))?;
 
-    //     Ok(())
-    // }
+        {
+            let stats = remote.stats();
+            if stats.local_objects() > 0 {
+                println!(
+                    "\rReceived {}/{} objects in {} bytes (used {} local \
+                 objects)",
+                    stats.indexed_objects(),
+                    stats.total_objects(),
+                    stats.received_bytes(),
+                    stats.local_objects()
+                );
+            } else {
+                println!(
+                    "\rReceived {}/{} objects in {} bytes",
+                    stats.indexed_objects(),
+                    stats.total_objects(),
+                    stats.received_bytes()
+                );
+            }
+        }
+        remote.disconnect()?;
+        remote.update_tips(
+            None,
+            git2::RemoteUpdateFlags::UPDATE_FETCHHEAD,
+            git2::AutotagOption::Unspecified,
+            None,
+        )?;
+
+        Ok(())
+    }
 
     pub fn getattr<P: AsRef<Path>>(&self, path: P) -> anyhow::Result<ObjectAttr> {
         // Get the commit the head points to
@@ -181,6 +229,31 @@ impl GitRepo {
             commit_time,
         })
     }
+}
+
+pub fn parse_mkdir_url(name: &OsStr) -> anyhow::Result<(String, String)> {
+    let name = name.to_string_lossy();
+    // let git = name.strip_prefix(".git").ok_or_else(|| anyhow!("URL missing .git suffix"))?;
+    let mut comp = name.splitn(4, ".");
+    if comp.clone().count() != 4 {
+        bail!("Incorrect url format!");
+    }
+    let website = comp
+        .next()
+        .ok_or_else(|| anyhow!("Error getting website from url"))?;
+    let account = comp
+        .next()
+        .ok_or_else(|| anyhow!("Error getting account from url"))?;
+    let repo = comp
+        .next()
+        .ok_or_else(|| anyhow!("Error gettingrepo name from url"))?;
+    let git = comp
+        .next()
+        .ok_or_else(|| anyhow!("Error getting .git name from url"))?;
+
+    let url = format!("https://{website}.com/{account}/{repo}.{git}");
+
+    Ok((url, repo.into()))
 }
 
 impl PartialEq for GitRepo {
