@@ -3,7 +3,7 @@
 use fuser::{
     BackgroundSession, MountOption, ReplyAttr, ReplyData, ReplyEntry, ReplyOpen, ReplyWrite,
 };
-use libc::{EIO, EISDIR, ENOENT};
+use libc::{EIO, EISDIR, ENOENT, ENOTDIR, O_DIRECTORY};
 use tracing::{Level, Span, info};
 use tracing::{debug, error, instrument, trace, warn};
 
@@ -11,6 +11,7 @@ use std::ffi::OsStr;
 use std::io::{BufRead, BufReader, ErrorKind};
 use std::iter::Skip;
 use std::sync::Arc;
+use std::thread;
 use std::time::{Duration, SystemTime};
 use std::{num::NonZeroU32, path::PathBuf};
 
@@ -74,6 +75,7 @@ pub fn mount_fuse(opts: MountPoint) -> anyhow::Result<BackgroundSession> {
     }
 
     let fs = GitFsAdapter::new(repos_dir, opts.read_only)?;
+
     match fuser::spawn_mount2(fs, mountpoint, &options) {
         Ok(session) => {
             info!("Filesystem unmounted cleanly");
@@ -436,12 +438,30 @@ impl fuser::Filesystem for GitFsAdapter {
 
     // TODO
     fn opendir(&mut self, _req: &fuser::Request<'_>, ino: u64, flags: i32, reply: ReplyOpen) {
+        // TODO - MOCK implementation
+        if flags & O_DIRECTORY == 0 {
+            reply.error(ENOTDIR);
+            return;
+        }
+
+        let repo_inodes = self
+            .getfs()
+            .repos_list
+            .values()
+            .map(|v| GitFs::repo_id_to_ino(v.lock().unwrap().repo_id))
+            .collect::<Vec<_>>();
         if ino == ROOT_INO {
+            reply.opened(0, flags as u32);
+        } else if repo_inodes.contains(&ino) {
+            // It's one of the top‐level repo dirs
+            reply.opened(0, flags as u32);
+        } else {
+            // Not a known directory
             reply.error(ENOENT);
         }
     }
 
-    // Do not allow. Use git layer instead.
+    // TODO
     fn create(
         &mut self,
         _req: &fuser::Request<'_>,

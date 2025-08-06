@@ -1,9 +1,8 @@
 #![allow(dead_code)]
 
-use std::path::PathBuf;
+use std::{path::PathBuf, thread};
 
 use clap::{Arg, ArgAction, ArgMatches, command, crate_authors, crate_version};
-use tracing_subscriber::{EnvFilter, fmt};
 
 mod fs;
 mod mount;
@@ -13,8 +12,9 @@ mod tui;
 fn main() -> anyhow::Result<()> {
     let matches = handle_cli_args();
 
-    let log_level = matches.get_count("verbose") as u8;
-    init_logging(log_level);
+    // let log_level = matches.get_count("verbose") as u8;
+    // init_logging(buffer);
+
     start_app(&matches)?;
     Ok(())
 }
@@ -102,23 +102,11 @@ fn setup_tui(matches: &ArgMatches) -> anyhow::Result<()> {
     let allow_root = matches.get_flag("allow-root");
     let mount_point =
         mount::MountPoint::new(mountpoint, repos_dir, read_only, allow_root, allow_other);
-    tui::run_tui_app()?;
-    let _session = mount::mount_fuse(mount_point)?;
+    let handle = thread::spawn(move || {
+        tui::run_tui_app().unwrap();
+    });
+    let _session = mount::mount_fuse(mount_point).unwrap();
 
+    handle.join().unwrap();
     Ok(())
-}
-
-fn init_logging(verbosity: u8) {
-    let level = match verbosity {
-        0 => "info",
-        1 => "debug",
-        _ => "trace",
-    };
-
-    let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(level));
-
-    fmt::fmt()
-        .with_env_filter(filter)
-        .with_writer(std::io::stderr)
-        .init();
 }

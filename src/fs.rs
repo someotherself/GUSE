@@ -12,7 +12,7 @@ use std::{
     time::SystemTime,
 };
 
-use anyhow::{Context, anyhow, bail};
+use anyhow::{Context, Ok, anyhow, bail};
 use git2::{ObjectType, Oid, Repository};
 use rusqlite::{Connection, OptionalExtension, Transaction, params};
 use tracing::instrument;
@@ -504,6 +504,9 @@ impl GitFs {
     }
 
     pub fn exists(&self, inode: u64) -> anyhow::Result<bool> {
+        if inode == ROOT_INO {
+            return Ok(true);
+        }
         let repo = self.get_repo(inode)?;
         let repo = repo.lock().unwrap();
         Ok(repo.connection.get_path_from_db(inode).is_ok())
@@ -779,6 +782,10 @@ impl GitFs {
 
         let git_attr = repo.getattr(path)?;
         self.object_to_file_attr(inode, &git_attr)
+    }
+
+    pub fn read_dir(&self) -> anyhow::Result<()> {
+        todo!()
     }
 
     pub fn find_by_name(&self, parent: u64, name: &str) -> anyhow::Result<Option<FileAttr>> {
