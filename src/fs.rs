@@ -159,6 +159,18 @@ pub struct DirectoryEntry {
     pub filemode: u32,
 }
 
+impl DirectoryEntry {
+    pub fn new(inode: u64, oid: Oid, name: String, kind: FileType, filemode: u32) -> Self {
+        Self {
+            inode,
+            oid,
+            name,
+            kind,
+            filemode,
+        }
+    }
+}
+
 pub struct DirectoryEntryIterator(VecDeque<DirectoryEntry>);
 
 impl Iterator for DirectoryEntryIterator {
@@ -208,8 +220,8 @@ impl MetaDb {
         {
             let mut stmt = tx.prepare(
                 "INSERT INTO inode_map
-            (inode, repo_id, parent_inode, name, oid, filemode)
-            VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            (inode, parent_inode, name, oid, filemode)
+            VALUES (?1, ?2, ?3, ?4, ?5)",
             )?;
 
             for (parent_inode, name, fileattr) in nodes {
@@ -224,6 +236,24 @@ impl MetaDb {
         }
         tx.commit()?;
         Ok(())
+    }
+
+    fn get_parent_ino(&self, ino: u64) -> anyhow::Result<u64> {
+        let mut stmt = self
+            .conn
+            .prepare(
+                "SELECT parent_inode
+                   FROM inode_map
+                  WHERE inode = ?1",
+            )
+            .context("Preparing parent lookup statement")?;
+
+        // Execute it; fail if the row is missing
+        let parent_i64: i64 = stmt
+            .query_row(params![ino as i64], |row| row.get(0))
+            .context(format!("No entry found for inode {ino}"))?;
+
+        Ok(parent_i64 as u64)
     }
 
     pub fn get_ino_from_db(&self, parent: u64, name: &str) -> anyhow::Result<u64> {
@@ -305,7 +335,7 @@ impl MetaDb {
 // ino for repo_2 folder1:  0000000000000002000000000....0001
 
 // ino for repo folder  = (repo_id as u64) << 48 (see REPO_SHIFT)
-// repo_id from ino     = ino >> REPO_SHIFT as u16
+// repo_id from ino     = (ino >> REPO_SHIFT) as u16
 
 pub struct GitFs {
     pub repos_dir: PathBuf,
@@ -342,13 +372,24 @@ impl GitFs {
         if repo_path.exists() {
             bail!("Repo name already exists!")
         }
-        std::fs::create_dir(&repo_path).context("context")?;
-
-        let connection = self.init_meta_db(repo_name)?;
+        std::fs::create_dir(&repo_path).context("Could not create repo dir")?;
+        let mut connection = self.init_meta_db(repo_name)?;
 
         let repo_id = self.next_repo_id();
+        let repo_ino = (repo_id as u64) << REPO_SHIFT;
+        let live_ino = repo_ino + 1;
+
+        self.next_inode.insert(repo_id, AtomicU64::from(live_ino));
 
         let repo = git2::Repository::init(repo_path)?;
+
+        let live_name = "live".to_string();
+
+        let perms = 0o754;
+        let st_mode = libc::S_IFDIR | perms;
+        let live_attr = build_attr_dir(live_ino, st_mode);
+        connection.write_inodes_to_db(vec![(repo_ino, live_name, live_attr)])?;
+        info!("new_repo 5");
 
         let git_repo = GitRepo {
             connection,
@@ -461,6 +502,12 @@ impl GitFs {
         }
     }
 
+    pub fn get_parent_ino(&self, ino: u64) -> anyhow::Result<u64> {
+        let repo = self.get_repo(ino)?;
+        let conn = &repo.lock().unwrap().connection;
+        conn.get_parent_ino(ino)
+    }
+
     fn get_repo(&self, inode: u64) -> anyhow::Result<Arc<Mutex<GitRepo>>> {
         let repo_id = (inode >> REPO_SHIFT) as u16;
         let repo = self
@@ -476,6 +523,10 @@ impl GitFs {
 
     pub fn repo_id_to_ino(repo_id: u16) -> u64 {
         (repo_id as u64) << REPO_SHIFT
+    }
+
+    pub fn ino_to_repo_id(ino: u64) -> u16 {
+        (ino >> REPO_SHIFT) as u16
     }
 
     fn ensure_base_dirs_exist(&self) -> anyhow::Result<()> {
@@ -781,8 +832,55 @@ impl GitFs {
         todo!()
     }
 
-    pub fn read_dir(&self) -> anyhow::Result<()> {
-        todo!()
+    pub fn readdir(&self, parent: u64) -> anyhow::Result<Vec<DirectoryEntry>> {
+        if parent == ROOT_INO {
+            let mut entries: Vec<DirectoryEntry> = vec![];
+            for repo in self.repos_list.values() {
+                let repo_guard = repo.lock().unwrap();
+                let repo_ino = GitFs::repo_id_to_ino(repo_guard.repo_id);
+                let dir_entry = DirectoryEntry::new(
+                    repo_ino,
+                    Oid::zero(),
+                    repo_guard.repo_dir.clone(),
+                    FileType::Directory,
+                    libc::S_IFDIR,
+                );
+                entries.push(dir_entry);
+            }
+            return Ok(entries);
+        };
+
+        // If only least significant 48 digits are 0
+        // Parent is a repo dir
+        let mask: u64 = (1u64 << 48) - 1;
+        if parent & mask == 0 {
+            let repo_id = (parent >> REPO_SHIFT) as u16;
+            if self.repos_list.contains_key(&repo_id) {
+                let mut entries: Vec<DirectoryEntry> = vec![];
+                let repo = self
+                    .repos_list
+                    .get(&repo_id)
+                    .ok_or_else(|| anyhow!("Repo not found!"))?;
+                let live_ino = repo
+                    .lock()
+                    .unwrap()
+                    .connection
+                    .get_ino_from_db(parent, "live")?;
+                let live_entry = DirectoryEntry::new(
+                    live_ino,
+                    Oid::zero(),
+                    "live".to_string(),
+                    FileType::Directory,
+                    libc::S_IFDIR,
+                );
+                entries.push(live_entry);
+                Ok(entries)
+            } else {
+                bail!("Repo is not found!");
+            }
+        } else {
+            bail!("Not implemented!");
+        }
     }
 
     pub fn find_by_name(&self, parent: u64, name: &str) -> anyhow::Result<Option<FileAttr>> {

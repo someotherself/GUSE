@@ -4,6 +4,7 @@ use anyhow::bail;
 use fuser::{
     BackgroundSession, MountOption, ReplyAttr, ReplyData, ReplyEntry, ReplyOpen, ReplyWrite,
 };
+use git2::Oid;
 use libc::{EIO, EISDIR, ENOENT, ENOTDIR, O_DIRECTORY};
 use tracing::{Level, Span, info};
 use tracing::{debug, error, instrument, trace, warn};
@@ -17,9 +18,9 @@ use std::thread;
 use std::time::{Duration, SystemTime};
 use std::{num::NonZeroU32, path::PathBuf};
 
-use crate::fs::{FileAttr, FileType, GitFs, REPO_SHIFT, ROOT_INO};
+use crate::fs::{DirectoryEntry, FileAttr, FileType, GitFs, REPO_SHIFT, ROOT_INO};
 
-const TTL: Duration = Duration::from_secs(1);
+const TTL: Duration = Duration::from_secs(5);
 const FMODE_EXEC: i32 = 0x20;
 
 pub struct MountPoint {
@@ -187,10 +188,18 @@ impl fuser::Filesystem for GitFsAdapter {
                 reply.error(libc::EACCES);
                 return;
             }
-            // Handle ROOT_INODE and ".."
             if name == OsStr::new(".") {
                 reply.entry(&TTL, &parent_attrs.into(), 0);
                 return;
+            }
+            if name == OsStr::new("..") {
+                let parent_ino = if parent == ROOT_INO {
+                    ROOT_INO
+                } else {
+                    fs.get_parent_ino(parent).unwrap_or(ROOT_INO)
+                };
+                let parent_attr = fs.getattr(parent_ino).unwrap();
+                return reply.entry(&TTL, &parent_attr.into(), 0);
             }
         } else {
             reply.error(ENOENT);
@@ -301,7 +310,13 @@ impl fuser::Filesystem for GitFsAdapter {
             // TODO: Refactor
             let (url, repo_name) = crate::repo::parse_mkdir_url(name).unwrap();
             // initialize repo
-            let repo = fs.new_repo(&repo_name).unwrap();
+            let repo = match fs.new_repo(&repo_name) {
+                Ok(repo) => repo,
+                Err(e) => {
+                    error!(?e);
+                    return;
+                }
+            };
 
             // fetch
             let repo_guard = repo.lock().unwrap();
@@ -409,33 +424,71 @@ impl fuser::Filesystem for GitFsAdapter {
         mut reply: fuser::ReplyDirectory,
     ) {
         let fs_arc = self.getfs();
-        let fs = fs_arc.lock().unwrap();
-        if ino == ROOT_INO {
-            let mut entries = vec![
-                (ROOT_INO, fuser::FileType::Directory, ".".to_string()),
-                (ROOT_INO, fuser::FileType::Directory, "..".to_string()),
-            ];
-            for repo in fs.repos_list.values() {
-                let repo_guard = repo.lock().unwrap();
-                let repo_ino = GitFs::repo_id_to_ino(repo_guard.repo_id);
-                entries.push((
-                    repo_ino,
-                    fuser::FileType::Directory,
-                    repo_guard.repo_dir.clone(),
-                ));
-            }
-
-            for (i, (entry_ino, kind, name)) in
-                entries.into_iter().enumerate().skip(offset as usize)
-            {
-                if reply.add(entry_ino, (i + 1) as i64, kind, name) {
-                    break;
-                }
-            }
-            reply.ok();
-        } else {
-            todo!()
+        let fs: std::sync::MutexGuard<'_, GitFs> = fs_arc.lock().unwrap();
+        let mask: u64 = (1u64 << 48) - 1;
+        let parent_entries: Vec<DirectoryEntry> = vec![
+            DirectoryEntry {
+                inode: ROOT_INO,
+                oid: Oid::zero(),
+                kind: FileType::Directory,
+                name: ".".to_string(),
+                filemode: libc::S_IFDIR,
+            },
+            DirectoryEntry {
+                inode: ROOT_INO,
+                oid: Oid::zero(),
+                kind: FileType::Directory,
+                name: "..".to_string(),
+                filemode: libc::S_IFDIR,
+            },
+        ];
+        let mut entries: Vec<DirectoryEntry> = vec![];
+        for entry in parent_entries {
+            entries.push(entry);
         }
+        let repos_as_entries = fs.readdir(ino).unwrap();
+        for entry in repos_as_entries {
+            entries.push(entry);
+        }
+
+        for (i, entry) in entries.into_iter().enumerate().skip(offset as usize) {
+            if reply.add(entry.inode, (i + 1) as i64, entry.kind.into(), entry.name) {
+                break;
+            }
+        }
+        reply.ok();
+        // if ino == ROOT_INO {
+        //     let mut entries: Vec<DirectoryEntry> = vec![];
+        //     for entry in parent_entries {
+        //         entries.push(entry);
+        //     }
+        //     let repos_as_entries = fs.readdir(ino).unwrap();
+        //     for entry in repos_as_entries {
+        //         entries.push(entry);
+        //     }
+
+        //     for (i, entry) in entries.into_iter().enumerate().skip(offset as usize) {
+        //         if reply.add(entry.inode, (i + 1) as i64, entry.kind.into(), entry.name) {
+        //             break;
+        //         }
+        //     }
+        //     reply.ok();
+        // } else if ino & mask == 0 {
+        //     let mut entries: Vec<DirectoryEntry> = vec![];
+        //     for entry in parent_entries {
+        //         entries.push(entry);
+        //     }
+        //     let repo_entries = fs.readdir(ino).unwrap();
+        //     for entry in repo_entries {
+        //         entries.push(entry);
+        //     }
+        //     for (i, entry) in entries.into_iter().enumerate().skip(offset as usize) {
+        //         if reply.add(entry.inode, (i + 1) as i64, entry.kind.into(), entry.name) {
+        //             break;
+        //         }
+        //     }
+        //     reply.ok();
+        // }
     }
 
     fn readdirplus(
@@ -609,6 +662,16 @@ impl From<FileAttr> for fuser::FileAttr {
             rdev: from.rdev,
             flags: from.flags,
             blksize: from.blksize,
+        }
+    }
+}
+
+impl From<FileType> for fuser::FileType {
+    fn from(kind: FileType) -> Self {
+        match kind {
+            FileType::Directory => fuser::FileType::Directory,
+            FileType::RegularFile => fuser::FileType::RegularFile,
+            FileType::Symlink => fuser::FileType::Symlink,
         }
     }
 }
