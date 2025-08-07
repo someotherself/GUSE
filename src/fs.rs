@@ -12,7 +12,7 @@ use std::{
     time::SystemTime,
 };
 
-use anyhow::{Context, Ok, anyhow, bail};
+use anyhow::{Context, anyhow, bail};
 use git2::{ObjectType, Oid, Repository};
 use rusqlite::{Connection, OptionalExtension, Transaction, params};
 use tracing::instrument;
@@ -58,7 +58,7 @@ pub struct ObjectAttr {
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub enum FileType {
-    File,
+    RegularFile,
     Directory,
     Symlink,
 }
@@ -87,7 +87,7 @@ struct WriteHandleContext {
 impl FileType {
     pub fn from_filemode(mode: ObjectType) -> anyhow::Result<FileType> {
         match mode {
-            ObjectType::Blob => Ok(FileType::File),
+            ObjectType::Blob => Ok(FileType::RegularFile),
             ObjectType::Tree => Ok(FileType::Directory),
             ObjectType::Tag => Ok(FileType::Symlink),
             _ => bail!("Invalid file type {:?}", mode),
@@ -484,7 +484,7 @@ impl GitFs {
             let mut attr: FileAttr = CreateFileAttr {
                 kind: FileType::Directory,
                 perm: 0o755,
-                mode: 0o040000,
+                mode: libc::S_IFDIR,
                 uid: 0,
                 gid: 0,
                 rdev: 0,
@@ -527,7 +527,7 @@ impl GitFs {
         let path = repo.connection.get_path_from_db(inode)?;
 
         let git_attr = repo.getattr(path)?;
-        Ok(git_attr.kind == ObjectType::Blob && git_attr.filemode != 0o120000)
+        Ok(git_attr.kind == ObjectType::Blob && git_attr.filemode != libc::S_IFLNK)
     }
 
     pub fn is_link(&self, inode: u64) -> anyhow::Result<bool> {
@@ -536,7 +536,7 @@ impl GitFs {
         let path = repo.connection.get_path_from_db(inode)?;
 
         let git_attr = repo.getattr(path)?;
-        Ok(git_attr.kind == ObjectType::Blob && git_attr.filemode == 0o120000)
+        Ok(git_attr.kind == ObjectType::Blob && git_attr.filemode == libc::S_IFLNK)
     }
 
     pub fn open(&self, ino: u64, read: bool, write: bool) -> anyhow::Result<u64> {
@@ -711,11 +711,11 @@ impl GitFs {
         let time = UNIX_EPOCH + Duration::from_secs(commit_secs);
 
         let kind = match git_attr.filemode & 0o170000 {
-            0o040000 => FileType::Directory,
-            0o120000 => FileType::Symlink,
-            _ => FileType::File,
+            libc::S_IFDIR => FileType::Directory,
+            libc::S_IFLNK => FileType::Symlink,
+            _ => FileType::RegularFile,
         };
-        let perm = (git_attr.filemode & 0o777) as u16;
+        let perm = (git_attr.filemode & 0o774) as u16;
 
         let nlink = if kind == FileType::Directory { 2 } else { 1 };
 
@@ -747,54 +747,22 @@ impl GitFs {
     }
 
     pub fn getattr(&self, inode: u64) -> anyhow::Result<FileAttr> {
+        let perms = 0o754;
+        let st_mode = libc::S_IFDIR | perms;
+        // Behavious 1 - ROOT_DIR
         if inode == ROOT_INO {
-            let now = SystemTime::now();
-            let perms = 0o777;
-            let st_mode = libc::S_IFDIR | perms;
-            return Ok(FileAttr {
-                inode: ROOT_INO,
-                oid: Oid::zero(), // no real Git object
-                size: 0,
-                blocks: 0,
-                atime: now,
-                mtime: now,
-                ctime: now,
-                crtime: now,
-                kind: FileType::Directory,
-                perm: perms as u16,
-                mode: st_mode,
-                nlink: 2,
-                uid: unsafe { libc::getuid() } as u32,
-                gid: unsafe { libc::getgid() } as u32,
-                rdev: 0,
-                blksize: 4096,
-                flags: 0,
-            });
+            return Ok(build_attr_dir(ROOT_INO, st_mode));
         }
         // If ino is for a repo folder
+        // Behavious 2 - ino is for a repo_dir
         let repo_id = (inode >> REPO_SHIFT) as u16;
         if self.repos_list.contains_key(&repo_id) {
-            let now = SystemTime::now();
-            return Ok(FileAttr {
-                inode,
-                oid: Oid::zero(), // no real Git object
-                size: 0,
-                blocks: 0,
-                atime: now,
-                mtime: now,
-                ctime: now,
-                crtime: now,
-                kind: FileType::Directory,
-                perm: 0o644,
-                mode: 0o040000,
-                nlink: 2,
-                uid: unsafe { libc::getuid() } as u32,
-                gid: unsafe { libc::getgid() } as u32,
-                rdev: 0,
-                blksize: 4096,
-                flags: 0,
-            });
+            return Ok(build_attr_dir(ROOT_INO, st_mode));
         }
+
+        // Behavious 3 - ino is for a file or object inside a repo
+        // TODO: Change to work with real files
+        // Handle git objects separately
 
         // Check inode exists
         if !self.exists(inode)? {
@@ -836,6 +804,52 @@ impl GitFs {
         let file_attr = self.object_to_file_attr(inode, &git_attr)?;
 
         Ok(Some(file_attr))
+    }
+}
+
+fn build_attr_file(inode: u64, st_mode: u32) -> FileAttr {
+    let now = SystemTime::now();
+    FileAttr {
+        inode,
+        oid: Oid::zero(),
+        size: 0,
+        blocks: 0,
+        atime: now,
+        mtime: now,
+        ctime: now,
+        crtime: now,
+        kind: FileType::RegularFile,
+        perm: 0o644,
+        mode: st_mode,
+        nlink: 2,
+        uid: unsafe { libc::getuid() } as u32,
+        gid: unsafe { libc::getgid() } as u32,
+        rdev: 0,
+        blksize: 4096,
+        flags: 0,
+    }
+}
+
+fn build_attr_dir(inode: u64, st_mode: u32) -> FileAttr {
+    let now = SystemTime::now();
+    FileAttr {
+        inode,
+        oid: Oid::zero(),
+        size: 0,
+        blocks: 0,
+        atime: now,
+        mtime: now,
+        ctime: now,
+        crtime: now,
+        kind: FileType::Directory,
+        perm: 0o774,
+        mode: st_mode,
+        nlink: 2,
+        uid: unsafe { libc::getuid() } as u32,
+        gid: unsafe { libc::getgid() } as u32,
+        rdev: 0,
+        blksize: 4096,
+        flags: 0,
     }
 }
 

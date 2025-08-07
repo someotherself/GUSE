@@ -213,6 +213,7 @@ impl fuser::Filesystem for GitFsAdapter {
     fn getattr(&mut self, _req: &fuser::Request<'_>, ino: u64, fh: Option<u64>, reply: ReplyAttr) {
         let fs_arc = self.getfs();
         let fs = fs_arc.lock().unwrap();
+
         match fs.exists(ino) {
             Err(e) => {
                 tracing::error!("exists({}) failed: {}", ino, e);
@@ -225,6 +226,7 @@ impl fuser::Filesystem for GitFsAdapter {
             }
             Ok(true) => {}
         }
+
         match fs.getattr(ino) {
             Err(err) => {
                 error!("getattr({}) failed: {:?}", ino, err);
@@ -293,6 +295,7 @@ impl fuser::Filesystem for GitFsAdapter {
                 }
             };
 
+            // TODO: Refactor
             let (url, repo_name) = crate::repo::parse_mkdir_url(name).unwrap();
             // initialize repo
             let repo = fs.new_repo(&repo_name).unwrap();

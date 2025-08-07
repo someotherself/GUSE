@@ -149,7 +149,7 @@ impl GitRepo {
         Ok(ObjectAttr {
             oid: tree.id(),
             kind: ObjectType::Tree,
-            filemode: 0o040000,
+            filemode: libc::S_IFDIR,
             size: 0,
             commit_time,
         })
