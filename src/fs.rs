@@ -12,10 +12,10 @@ use std::{
     time::SystemTime,
 };
 
-use anyhow::{Context, anyhow, bail};
+use anyhow::{Context, Ok, anyhow, bail};
 use git2::{ObjectType, Oid, Repository};
 use rusqlite::{Connection, OptionalExtension, Transaction, params};
-use tracing::instrument;
+use tracing::{info, instrument};
 
 use crate::repo::GitRepo;
 
@@ -360,7 +360,6 @@ impl GitFs {
 
         let repo_rc = Arc::new(Mutex::new(git_repo));
         self.repos_list.insert(repo_id, repo_rc.clone());
-
         Ok(repo_rc)
     }
 
@@ -778,14 +777,29 @@ impl GitFs {
         self.object_to_file_attr(inode, &git_attr)
     }
 
+    pub fn get_commitattr(&self) -> anyhow::Result<FileAttr> {
+        todo!()
+    }
+
     pub fn read_dir(&self) -> anyhow::Result<()> {
         todo!()
     }
 
     pub fn find_by_name(&self, parent: u64, name: &str) -> anyhow::Result<Option<FileAttr>> {
-        // Do not look into parent. ROOT_DIR should not be accessible
+        // When parent is ROOT_DIR, search name in the repo names
         if parent == ROOT_INO {
-            return Ok(None);
+            let attr = self.repos_list.values().find_map(|arc| {
+                let repo = arc.try_lock().ok()?;
+                if repo.repo_dir == name {
+                    let perms = 0o754;
+                    let st_mode = libc::S_IFDIR | perms;
+                    let repo_ino = (repo.repo_id as u64) << REPO_SHIFT;
+                    Some(build_attr_dir(repo_ino, st_mode))
+                } else {
+                    None
+                }
+            });
+            return Ok(attr);
         }
         if !self.exists(parent)? {
             bail!("Inode not found!")

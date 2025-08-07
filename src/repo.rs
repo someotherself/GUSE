@@ -252,7 +252,6 @@ pub fn parse_mkdir_url(name: &OsStr) -> anyhow::Result<(String, String)> {
         .ok_or_else(|| anyhow!("Error getting .git name from url"))?;
 
     let url = format!("https://{website}.com/{account}/{repo}.{git}");
-
     Ok((url, repo.into()))
 }
 

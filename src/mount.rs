@@ -198,7 +198,10 @@ impl fuser::Filesystem for GitFsAdapter {
         }
 
         match fs.find_by_name(parent, name.to_str().unwrap()) {
-            Ok(Some(attr)) => reply.entry(&TTL, &attr.into(), 0),
+            Ok(Some(attr)) => {
+                let ino = attr.inode;
+                reply.entry(&TTL, &attr.into(), 0)
+            }
             Ok(None) => {
                 // The name is not found under this parent
                 reply.error(ENOENT);
@@ -210,7 +213,7 @@ impl fuser::Filesystem for GitFsAdapter {
         };
     }
 
-    fn getattr(&mut self, _req: &fuser::Request<'_>, ino: u64, fh: Option<u64>, reply: ReplyAttr) {
+    fn getattr(&mut self, _req: &fuser::Request<'_>, ino: u64, _fh: Option<u64>, reply: ReplyAttr) {
         let fs_arc = self.getfs();
         let fs = fs_arc.lock().unwrap();
 
