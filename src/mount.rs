@@ -18,7 +18,9 @@ use std::thread;
 use std::time::{Duration, SystemTime};
 use std::{num::NonZeroU32, path::PathBuf};
 
-use crate::fs::{DirectoryEntry, FileAttr, FileType, GitFs, REPO_SHIFT, ROOT_INO, repo};
+use crate::fs::{
+    CreateFileAttr, DirectoryEntry, FileAttr, FileType, GitFs, REPO_SHIFT, ROOT_INO, repo,
+};
 
 const TTL: Duration = Duration::from_secs(5);
 const FMODE_EXEC: i32 = 0x20;
@@ -157,10 +159,12 @@ impl fuser::Filesystem for GitFsAdapter {
                 reply.error(libc::EACCES);
                 return;
             }
+
             if name == OsStr::new(".") {
                 reply.entry(&TTL, &parent_attrs.into(), 0);
                 return;
             }
+
             if name == OsStr::new("..") {
                 let parent_ino = if parent == ROOT_INO {
                     ROOT_INO
@@ -265,38 +269,15 @@ impl fuser::Filesystem for GitFsAdapter {
             }
         }
 
-        // if parent is ROOT_DIR
-        if parent == ROOT_INO {
-            let repo_name = match Path::new(name).file_name() {
-                Some(n) => n.to_str().unwrap(),
-                None => {
-                    // name wasn’t a valid filename component
-                    reply.error(libc::EINVAL);
-                    return;
-                }
-            };
-
-            // TODO: Refactor
-            let (url, repo_name) = repo::parse_mkdir_url(name).unwrap();
-            // initialize repo
-            let repo = match fs.new_repo(&repo_name) {
-                Ok(repo) => repo,
-                Err(e) => {
-                    error!(?e);
-                    return;
-                }
-            };
-
-            // fetch
-            let repo_guard = repo.lock().unwrap();
-            repo_guard.fetch_anon(&url).unwrap();
-            let attr = fs
-                .getattr((repo_guard.repo_id as u64) << REPO_SHIFT)
-                .unwrap();
-            let fuser_attr: fuser::FileAttr = attr.into();
-            reply.entry(&TTL, &fuser_attr, 0);
-        } else {
-            reply.error(ENOENT);
+        let create_attr = dir_attr();
+        match fs.mkdir(parent, name, create_attr) {
+            Ok(attr) => {
+                reply.entry(&TTL, &attr.into(), 0)
+            }
+            Err(e) => {
+                error!(?e);
+                reply.error(ENOENT)
+            }
         }
     }
 
@@ -600,6 +581,30 @@ impl From<FileAttr> for fuser::FileAttr {
             flags: from.flags,
             blksize: from.blksize,
         }
+    }
+}
+
+const fn dir_attr() -> CreateFileAttr {
+    CreateFileAttr {
+        kind: FileType::Directory,
+        perm: 0o754,
+        uid: 0,
+        mode: libc::S_IFDIR,
+        gid: 0,
+        rdev: 0,
+        flags: 0,
+    }
+}
+
+const fn file_attr() -> CreateFileAttr {
+    CreateFileAttr {
+        kind: FileType::RegularFile,
+        perm: 0o644,
+        uid: 0,
+        mode: libc::S_IFREG,
+        gid: 0,
+        rdev: 0,
+        flags: 0,
     }
 }
 

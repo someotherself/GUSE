@@ -1,4 +1,5 @@
 use std::collections::{BTreeMap, HashSet};
+use std::ffi::OsStr;
 use std::fs::{File, OpenOptions};
 use std::hash::Hash;
 use std::io::{BufReader, BufWriter, Write};
@@ -429,7 +430,7 @@ impl GitFs {
         if !self.repos_dir.exists() {
             let mut attr: FileAttr = CreateFileAttr {
                 kind: FileType::Directory,
-                perm: 0o755,
+                perm: 0o754,
                 mode: libc::S_IFDIR,
                 uid: 0,
                 gid: 0,
@@ -756,6 +757,50 @@ impl GitFs {
 
     pub fn get_commitattr(&self) -> anyhow::Result<FileAttr> {
         todo!()
+    }
+
+    pub fn mkdir(
+        &mut self,
+        parent: u64,
+        name: &OsStr,
+        _attr: CreateFileAttr,
+    ) -> anyhow::Result<FileAttr> {
+        if self.read_only {
+            bail!("Filesystem is in read only!")
+        }
+        if !self.exists(parent)? {
+            bail!("Parent does not exist!")
+        }
+        if !self.is_dir(parent)? {
+            bail!("Parent must be a folder!")
+        }
+
+        let ctx = FsOperationContext::get_operation(self, parent);
+        match ctx? {
+            FsOperationContext::Root => {
+                let (url, repo_name) = repo::parse_mkdir_url(name).unwrap();
+                // initialize repo
+                let repo = self.new_repo(&repo_name)?;
+
+                // fetch
+                let repo_guard = repo.lock().unwrap();
+                repo_guard.fetch_anon(&url).unwrap();
+                let attr = self
+                    .getattr((repo_guard.repo_id as u64) << REPO_SHIFT)
+                    .unwrap();
+                Ok(attr)
+            }
+            FsOperationContext::RepoDir { ino: _ } => {
+                bail!("This directory is read only. Please create folders in the live directory.")
+            }
+            FsOperationContext::InsideLiveDir { ino: _ } => {
+                // Create normal folder
+                todo!()
+            }
+            FsOperationContext::InsideGitDir { ino: _ } => {
+                bail!("This directory is read only!")
+            }
+        }
     }
 
     pub fn readdir(&self, parent: u64) -> anyhow::Result<Vec<DirectoryEntry>> {
