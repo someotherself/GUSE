@@ -12,7 +12,7 @@ use std::{
     time::SystemTime,
 };
 
-use anyhow::{Context, Ok, anyhow, bail};
+use anyhow::{Context, anyhow, bail};
 use git2::{ObjectType, Oid, Repository};
 use rusqlite::{Connection, OptionalExtension, params};
 use tracing::info;
@@ -180,6 +180,30 @@ pub struct DirectoryEntryPlus {
     pub entry: DirectoryEntry,
     // Plus the file attributes
     pub attr: FileAttr,
+}
+
+enum FsOperationContext {
+    Root,
+    RepoDir { ino: u64 },
+    LiveDir { ino: u64 },
+    GitDir { ino: u64 },
+}
+
+impl FsOperationContext {
+    fn get_operation(fs: &GitFs, ino: u64) -> anyhow::Result<Self> {
+        let mask: u64 = (1u64 << 48) - 1;
+
+        if ino == ROOT_INO {
+            Ok(FsOperationContext::Root)
+        } else if ino & mask == 0 {
+            // If the least significant 48 bits are 0
+            Ok(FsOperationContext::RepoDir { ino })
+        } else if fs.is_in_live(ino)? {
+            Ok(FsOperationContext::LiveDir { ino })
+        } else {
+            Ok(FsOperationContext::GitDir { ino })
+        }
+    }
 }
 
 // Disk structure
@@ -419,6 +443,25 @@ impl GitFs {
                 .with_context(|| format!("Failed to create repos dir {repos_dir:?}"))?;
         }
         Ok(())
+    }
+
+    pub fn is_in_live(&self, ino: u64) -> anyhow::Result<bool> {
+        let repo_id = GitFs::ino_to_repo_id(ino);
+        let repo_ino = (repo_id as u64) << REPO_SHIFT;
+
+        let live_ino = repo_ino + 1;
+        let mut target_ino = ino;
+
+        loop {
+            let parent = match self.get_parent_ino(target_ino) {
+                Ok(p) => p,
+                Err(_) => return Ok(false),
+            };
+            if parent == live_ino {
+                return Ok(true);
+            }
+            target_ino = parent;
+        }
     }
 
     pub fn exists(&self, inode: u64) -> anyhow::Result<bool> {
@@ -748,6 +791,44 @@ impl GitFs {
             }
         } else {
             bail!("Not implemented!");
+        }
+    }
+
+    // Prototype
+    pub fn find_by_name_1(&self, parent: u64, name: &str) -> anyhow::Result<Option<FileAttr>> {
+        if !self.exists(parent)? {
+            bail!("Inode not found!")
+        }
+
+        if !self.is_dir(parent)? {
+            bail!("Inode not found!")
+        }
+
+        let ctx = FsOperationContext::get_operation(self, parent);
+        match ctx? {
+            FsOperationContext::Root => {
+                let attr = self.repos_list.values().find_map(|arc| {
+                    let repo = arc.try_lock().ok()?;
+                    if repo.repo_dir == name {
+                        let perms = 0o754;
+                        let st_mode = libc::S_IFDIR | perms;
+                        let repo_ino = (repo.repo_id as u64) << REPO_SHIFT;
+                        Some(build_attr_dir(repo_ino, st_mode))
+                    } else {
+                        None
+                    }
+                });
+                Ok(attr)
+            }
+            FsOperationContext::RepoDir { ino: _ } => {
+                todo!()
+            }
+            FsOperationContext::LiveDir { ino: _ } => {
+                todo!()
+            }
+            FsOperationContext::GitDir { ino: _ } => {
+                todo!()
+            }
         }
     }
 

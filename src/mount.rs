@@ -18,7 +18,7 @@ use std::thread;
 use std::time::{Duration, SystemTime};
 use std::{num::NonZeroU32, path::PathBuf};
 
-use crate::fs::{repo, DirectoryEntry, FileAttr, FileType, GitFs, REPO_SHIFT, ROOT_INO};
+use crate::fs::{DirectoryEntry, FileAttr, FileType, GitFs, REPO_SHIFT, ROOT_INO, repo};
 
 const TTL: Duration = Duration::from_secs(5);
 const FMODE_EXEC: i32 = 0x20;
