@@ -7,7 +7,7 @@ use tracing::info;
 
 use std::{io::Write, path::Path};
 
-use crate::fs::{DirectoryEntry, DirectoryEntryPlus, FileType, GitFs, MetaDb, ObjectAttr};
+use crate::fs::{DirectoryEntry, DirectoryEntryPlus, FileType, GitFs, ObjectAttr, meta_db::MetaDb};
 
 pub struct GitRepo {
     // Caching the database connection for reads.
