@@ -183,10 +183,14 @@ pub struct DirectoryEntryPlus {
 }
 
 enum FsOperationContext {
+    // Is the root directory
     Root,
+    // Is one of the directories holding a repo
     RepoDir { ino: u64 },
-    LiveDir { ino: u64 },
-    GitDir { ino: u64 },
+    // Dir or File inside the live dir
+    InsideLiveDir { ino: u64 },
+    // Dir or File inside a repo dir
+    InsideGitDir { ino: u64 },
 }
 
 impl FsOperationContext {
@@ -199,9 +203,9 @@ impl FsOperationContext {
             // If the least significant 48 bits are 0
             Ok(FsOperationContext::RepoDir { ino })
         } else if fs.is_in_live(ino)? {
-            Ok(FsOperationContext::LiveDir { ino })
+            Ok(FsOperationContext::InsideLiveDir { ino })
         } else {
-            Ok(FsOperationContext::GitDir { ino })
+            Ok(FsOperationContext::InsideGitDir { ino })
         }
     }
 }
@@ -510,19 +514,33 @@ impl GitFs {
         if self.is_dir(ino)? {
             bail!("Target must be a file!")
         }
-
-        let mut handle: Option<u64> = None;
-        if read {
-            handle = Some(self.next_file_handle());
-            self.register_read(ino, handle.unwrap())?;
-        }
-        if write {
-            if handle.is_none() {
-                handle = Some(self.next_file_handle());
+        let ctx = FsOperationContext::get_operation(self, ino);
+        match ctx? {
+            FsOperationContext::Root => {
+                bail!("Target must be a file!")
             }
-            self.register_write(ino, handle.unwrap())?;
+            FsOperationContext::RepoDir { ino: _ } => {
+                bail!("Target must be a file!")
+            }
+            FsOperationContext::InsideLiveDir { ino: _ } => {
+                let mut handle: Option<u64> = None;
+                if read {
+                    handle = Some(self.next_file_handle());
+                    self.register_read(ino, handle.unwrap())?;
+                }
+                if write {
+                    if handle.is_none() {
+                        handle = Some(self.next_file_handle());
+                    }
+                    self.register_write(ino, handle.unwrap())?;
+                }
+                Ok(handle.unwrap())
+            }
+            FsOperationContext::InsideGitDir { ino: _ } => {
+                info!("GitDir for open is not implemented");
+                todo!()
+            }
         }
-        Ok(handle.unwrap())
     }
 
     fn register_read(&self, ino: u64, fh: u64) -> anyhow::Result<()> {
@@ -581,6 +599,7 @@ impl GitFs {
     }
 
     pub fn release(&self, fh: u64) -> anyhow::Result<()> {
+        // TODO: Double check
         if fh == 0 {
             return Ok(());
         }
@@ -629,6 +648,7 @@ impl GitFs {
     }
 
     pub fn flush(&self, fh: u64) -> anyhow::Result<()> {
+        // TODO: Double check
         if self.read_only {
             bail!("Filesystem is in read-only mode")
         }
@@ -708,35 +728,30 @@ impl GitFs {
     }
 
     pub fn getattr(&self, inode: u64) -> anyhow::Result<FileAttr> {
-        let perms = 0o754;
-        let st_mode = libc::S_IFDIR | perms;
-        // Behavious 1 - ROOT_DIR
-        if inode == ROOT_INO {
-            return Ok(build_attr_dir(ROOT_INO, st_mode));
-        }
-        // If ino is for a repo folder
-        // Behavious 2 - ino is for a repo_dir
-        let repo_id = (inode >> REPO_SHIFT) as u16;
-        if self.repos_list.contains_key(&repo_id) {
-            return Ok(build_attr_dir(ROOT_INO, st_mode));
-        }
-
-        // Behavious 3 - ino is for a file or object inside a repo
-        // TODO: Change to work with real files
-        // Handle git objects separately
-
-        // Check inode exists
         if !self.exists(inode)? {
             bail!("Inode not found!")
         }
-        // Get ObjectAttr from git2
-        let repo = self.get_repo(inode)?;
-        let repo = repo.lock().unwrap();
-        let db_conn = self.open_meta_db(&repo.repo_dir)?;
-        let path = db_conn.get_path_from_db(inode)?;
 
-        let git_attr = repo.getattr(path)?;
-        self.object_to_file_attr(inode, &git_attr)
+        let perms = 0o754;
+        let st_mode = libc::S_IFDIR | perms;
+        let ctx = FsOperationContext::get_operation(self, inode);
+        match ctx? {
+            FsOperationContext::Root => Ok(build_attr_dir(ROOT_INO, st_mode)),
+            FsOperationContext::RepoDir { ino } => Ok(build_attr_dir(ino, st_mode)),
+            FsOperationContext::InsideLiveDir { ino: _ } => {
+                todo!()
+            }
+            FsOperationContext::InsideGitDir { ino } => {
+                // TODO: Double check this
+                let repo = self.get_repo(ino)?;
+                let repo = repo.lock().unwrap();
+                let db_conn = self.open_meta_db(&repo.repo_dir)?;
+                let path = db_conn.get_path_from_db(ino)?;
+
+                let git_attr = repo.getattr(path)?;
+                self.object_to_file_attr(ino, &git_attr)
+            }
+        }
     }
 
     pub fn get_commitattr(&self) -> anyhow::Result<FileAttr> {
@@ -744,58 +759,60 @@ impl GitFs {
     }
 
     pub fn readdir(&self, parent: u64) -> anyhow::Result<Vec<DirectoryEntry>> {
-        if parent == ROOT_INO {
-            let mut entries: Vec<DirectoryEntry> = vec![];
-            for repo in self.repos_list.values() {
-                let repo_guard = repo.lock().unwrap();
-                let repo_ino = GitFs::repo_id_to_ino(repo_guard.repo_id);
-                let dir_entry = DirectoryEntry::new(
-                    repo_ino,
-                    Oid::zero(),
-                    repo_guard.repo_dir.clone(),
-                    FileType::Directory,
-                    libc::S_IFDIR,
-                );
-                entries.push(dir_entry);
-            }
-            return Ok(entries);
-        };
-
-        // If only least significant 48 digits are 0
-        // Parent is a repo dir
-        let mask: u64 = (1u64 << 48) - 1;
-        if parent & mask == 0 {
-            let repo_id = (parent >> REPO_SHIFT) as u16;
-            if self.repos_list.contains_key(&repo_id) {
+        let ctx = FsOperationContext::get_operation(self, parent);
+        match ctx? {
+            FsOperationContext::Root => {
                 let mut entries: Vec<DirectoryEntry> = vec![];
-                let repo = self
-                    .repos_list
-                    .get(&repo_id)
-                    .ok_or_else(|| anyhow!("Repo not found!"))?;
-                let live_ino = repo
-                    .lock()
-                    .unwrap()
-                    .connection
-                    .get_ino_from_db(parent, "live")?;
-                let live_entry = DirectoryEntry::new(
-                    live_ino,
-                    Oid::zero(),
-                    "live".to_string(),
-                    FileType::Directory,
-                    libc::S_IFDIR,
-                );
-                entries.push(live_entry);
+                for repo in self.repos_list.values() {
+                    let repo_guard = repo.lock().unwrap();
+                    let repo_ino = GitFs::repo_id_to_ino(repo_guard.repo_id);
+                    let dir_entry = DirectoryEntry::new(
+                        repo_ino,
+                        Oid::zero(),
+                        repo_guard.repo_dir.clone(),
+                        FileType::Directory,
+                        libc::S_IFDIR,
+                    );
+                    entries.push(dir_entry);
+                }
                 Ok(entries)
-            } else {
-                bail!("Repo is not found!");
             }
-        } else {
-            bail!("Not implemented!");
+            FsOperationContext::RepoDir { ino: _ } => {
+                let repo_id = (parent >> REPO_SHIFT) as u16;
+                if self.repos_list.contains_key(&repo_id) {
+                    let mut entries: Vec<DirectoryEntry> = vec![];
+                    let repo = self
+                        .repos_list
+                        .get(&repo_id)
+                        .ok_or_else(|| anyhow!("Repo not found!"))?;
+                    let live_ino = repo
+                        .lock()
+                        .unwrap()
+                        .connection
+                        .get_ino_from_db(parent, "live")?;
+                    let live_entry = DirectoryEntry::new(
+                        live_ino,
+                        Oid::zero(),
+                        "live".to_string(),
+                        FileType::Directory,
+                        libc::S_IFDIR,
+                    );
+                    entries.push(live_entry);
+                    Ok(entries)
+                } else {
+                    bail!("Repo is not found!");
+                }
+            }
+            FsOperationContext::InsideLiveDir { ino: _ } => {
+                todo!()
+            }
+            FsOperationContext::InsideGitDir { ino: _ } => {
+                todo!()
+            }
         }
     }
 
-    // Prototype
-    pub fn find_by_name_1(&self, parent: u64, name: &str) -> anyhow::Result<Option<FileAttr>> {
+    pub fn find_by_name(&self, parent: u64, name: &str) -> anyhow::Result<Option<FileAttr>> {
         if !self.exists(parent)? {
             bail!("Inode not found!")
         }
@@ -803,7 +820,6 @@ impl GitFs {
         if !self.is_dir(parent)? {
             bail!("Inode not found!")
         }
-
         let ctx = FsOperationContext::get_operation(self, parent);
         match ctx? {
             FsOperationContext::Root => {
@@ -820,51 +836,25 @@ impl GitFs {
                 });
                 Ok(attr)
             }
-            FsOperationContext::RepoDir { ino: _ } => {
+            FsOperationContext::RepoDir { ino } => {
+                let parent_attr = self.getattr(ino)?;
+                let repo = self.get_repo(ino)?;
+                let repo = repo.lock().unwrap();
+                let git_attr = repo.find_by_name(parent_attr.oid, name)?;
+                let conn = self.open_meta_db(&repo.repo_dir)?;
+                let inode = conn.get_ino_from_db(ino, name)?;
+                let file_attr = self.object_to_file_attr(inode, &git_attr)?;
+                Ok(Some(file_attr))
+            }
+            FsOperationContext::InsideLiveDir { ino: _ } => {
+                info!("Live dir for find_by_name is not implemented");
                 todo!()
             }
-            FsOperationContext::LiveDir { ino: _ } => {
+            FsOperationContext::InsideGitDir { ino: _ } => {
+                info!("GitDir for find_by_name is not implemented");
                 todo!()
             }
-            FsOperationContext::GitDir { ino: _ } => {
-                todo!()
-            }
         }
-    }
-
-    pub fn find_by_name(&self, parent: u64, name: &str) -> anyhow::Result<Option<FileAttr>> {
-        // When parent is ROOT_DIR, search name in the repo names
-        if parent == ROOT_INO {
-            let attr = self.repos_list.values().find_map(|arc| {
-                let repo = arc.try_lock().ok()?;
-                if repo.repo_dir == name {
-                    let perms = 0o754;
-                    let st_mode = libc::S_IFDIR | perms;
-                    let repo_ino = (repo.repo_id as u64) << REPO_SHIFT;
-                    Some(build_attr_dir(repo_ino, st_mode))
-                } else {
-                    None
-                }
-            });
-            return Ok(attr);
-        }
-        if !self.exists(parent)? {
-            bail!("Inode not found!")
-        }
-
-        if !self.is_dir(parent)? {
-            bail!("Inode not found!")
-        }
-
-        let parent_attr = self.getattr(parent)?;
-        let repo = self.get_repo(parent)?;
-        let repo = repo.lock().unwrap();
-        let git_attr = repo.find_by_name(parent_attr.oid, name)?;
-        let conn = self.open_meta_db(&repo.repo_dir)?;
-        let inode = conn.get_ino_from_db(parent, name)?;
-        let file_attr = self.object_to_file_attr(inode, &git_attr)?;
-
-        Ok(Some(file_attr))
     }
 }
 
@@ -913,18 +903,3 @@ fn build_attr_dir(inode: u64, st_mode: u32) -> FileAttr {
         flags: 0,
     }
 }
-
-// lookup               -> git ls-tree
-// getattr              -> git cat-file -p <object>
-// readdir              -> git ls-tree <tree>
-// readdirplus          -> git ls-tree + git catfile -p <object>
-// open                 -> no-op
-// read                 -> git cat-file --batch / git cat-file -p <blob>
-// create               -> Not allowed in fuse. git hash-object --stdin -w + git update-index --add <path>
-// write                -> buffer in memory then on flush: git hash-object --stdin -w
-// flush / release      -> git update-index --add <path>
-// unlink               -> Not allowed in fuse. git update-index --remove <path>
-// mkdir                -> Not allowed in fuse. update in mem tree, commit w/: git write-tree
-// rmdir                -> Not allowed in fuse. update in mem tree, commit w/: git write-tree
-// rename               -> Not allowed in fuse. git mv <old> <new> or idx update + working tree rename
-// statfs               -> fuse3::statfs::Statfs or derive from git repo
