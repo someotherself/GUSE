@@ -18,7 +18,7 @@ use std::thread;
 use std::time::{Duration, SystemTime};
 use std::{num::NonZeroU32, path::PathBuf};
 
-use crate::fs::{DirectoryEntry, FileAttr, FileType, GitFs, REPO_SHIFT, ROOT_INO};
+use crate::fs::{repo, DirectoryEntry, FileAttr, FileType, GitFs, REPO_SHIFT, ROOT_INO};
 
 const TTL: Duration = Duration::from_secs(5);
 const FMODE_EXEC: i32 = 0x20;
@@ -277,7 +277,7 @@ impl fuser::Filesystem for GitFsAdapter {
             };
 
             // TODO: Refactor
-            let (url, repo_name) = crate::repo::parse_mkdir_url(name).unwrap();
+            let (url, repo_name) = repo::parse_mkdir_url(name).unwrap();
             // initialize repo
             let repo = match fs.new_repo(&repo_name) {
                 Ok(repo) => repo,

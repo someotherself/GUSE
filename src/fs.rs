@@ -18,9 +18,10 @@ use rusqlite::{Connection, OptionalExtension, params};
 use tracing::info;
 
 use crate::fs::meta_db::MetaDb;
-use crate::repo::GitRepo;
+use crate::fs::repo::GitRepo;
 
 pub mod meta_db;
+pub mod repo;
 
 const META_STORE: &str = "fs_meta.db";
 pub const REPO_SHIFT: u8 = 48;

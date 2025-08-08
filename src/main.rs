@@ -7,7 +7,6 @@ use clap::{Arg, ArgAction, ArgMatches, command, crate_authors, crate_version};
 mod fs;
 mod logging;
 mod mount;
-mod repo;
 mod tui;
 
 fn main() -> anyhow::Result<()> {
