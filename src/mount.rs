@@ -128,38 +128,7 @@ impl GitFsAdapter {
     }
 }
 
-// pub struct DirectoryEntryIterator;
-
-// impl Iterator for DirectoryEntryIterator {
-//     type Item = Result<f>;
-
-//     fn next(&mut self) -> Option<Self::Item> {
-//         todo!()
-//     }
-// }
-
-// pub struct DirectoryEntryIteratorPlus;
-
-// impl Iterator for DirectoryEntryIteratorPlus {
-//     type Item = Result<DirectoryEntryPlus>;
-
-//     fn next(&mut self) -> Option<Self::Item> {
-//         todo!()
-//     }
-// }
-
 impl fuser::Filesystem for GitFsAdapter {
-    // impl fuse::raw::Filesystem for GitFsAdapter {
-    // type DirEntryPlusStream<'a>
-    //     = Iter<Skip<DirectoryEntryIteratorPlus>>
-    // where
-    //     Self: 'a;
-
-    // type DirEntryStream<'a>
-    //     = Iter<Skip<DirectoryEntryIterator>>
-    // where
-    //     Self: 'a;
-
     fn init(
         &mut self,
         _req: &fuser::Request<'_>,
@@ -457,38 +426,6 @@ impl fuser::Filesystem for GitFsAdapter {
             }
         }
         reply.ok();
-        // if ino == ROOT_INO {
-        //     let mut entries: Vec<DirectoryEntry> = vec![];
-        //     for entry in parent_entries {
-        //         entries.push(entry);
-        //     }
-        //     let repos_as_entries = fs.readdir(ino).unwrap();
-        //     for entry in repos_as_entries {
-        //         entries.push(entry);
-        //     }
-
-        //     for (i, entry) in entries.into_iter().enumerate().skip(offset as usize) {
-        //         if reply.add(entry.inode, (i + 1) as i64, entry.kind.into(), entry.name) {
-        //             break;
-        //         }
-        //     }
-        //     reply.ok();
-        // } else if ino & mask == 0 {
-        //     let mut entries: Vec<DirectoryEntry> = vec![];
-        //     for entry in parent_entries {
-        //         entries.push(entry);
-        //     }
-        //     let repo_entries = fs.readdir(ino).unwrap();
-        //     for entry in repo_entries {
-        //         entries.push(entry);
-        //     }
-        //     for (i, entry) in entries.into_iter().enumerate().skip(offset as usize) {
-        //         if reply.add(entry.inode, (i + 1) as i64, entry.kind.into(), entry.name) {
-        //             break;
-        //         }
-        //     }
-        //     reply.ok();
-        // }
     }
 
     fn readdirplus(
