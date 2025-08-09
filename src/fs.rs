@@ -25,6 +25,9 @@ use crate::fs::repo::GitRepo;
 pub mod meta_db;
 pub mod repo;
 
+#[cfg(test)]
+mod test;
+
 const META_STORE: &str = "fs_meta.db";
 pub const REPO_SHIFT: u8 = 48;
 pub const ROOT_INO: u64 = 1;

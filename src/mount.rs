@@ -5,7 +5,7 @@ use fuser::{
     BackgroundSession, MountOption, ReplyAttr, ReplyData, ReplyEntry, ReplyOpen, ReplyWrite,
 };
 use git2::Oid;
-use libc::{EIO, EISDIR, ENOENT, ENOTDIR, O_DIRECTORY};
+use libc::{EACCES, EIO, EISDIR, ENOENT, ENOTDIR, O_DIRECTORY};
 use tracing::{Level, Span, info};
 use tracing::{debug, error, instrument, trace, warn};
 
@@ -502,19 +502,47 @@ impl fuser::Filesystem for GitFsAdapter {
         todo!()
     }
 
-    fn opendir(&mut self, _req: &fuser::Request<'_>, ino: u64, flags: i32, reply: ReplyOpen) {
+    fn opendir(&mut self, req: &fuser::Request<'_>, ino: u64, flags: i32, reply: ReplyOpen) {
         let fs_arc = self.getfs();
         let fs = fs_arc.lock().unwrap();
+        let (access_mask, _read, _write) = match flags & libc::O_ACCMODE {
+            libc::O_RDONLY => {
+                // Behavior is undefined, but most filesystems return EACCES
+                if flags & libc::O_TRUNC != 0 {
+                    return reply.error(EACCES);
+                }
+                (libc::R_OK, true, false)
+            }
+            libc::O_WRONLY => (libc::W_OK, false, true),
+            libc::O_RDWR => (libc::R_OK | libc::W_OK, true, true),
+            // Exactly one access mode flag must be specified
+            _ => return reply.error(libc::EINVAL),
+        };
+
         if flags & O_DIRECTORY == 0 {
             reply.error(ENOTDIR);
             return;
         }
 
-        if let Err(err) = fs.getattr(ino) {
-            error!("getattr({}) failed: {:?}", ino, err);
-            return reply.error(ENOENT);
+        let attr = match fs.getattr(ino) {
+            Ok(attr) => attr,
+            Err(e) => {
+                error!("getattr({}) failed: {:?}", ino, e);
+                return reply.error(ENOENT);
+            }
+        };
+        if check_access(
+            attr.uid,
+            attr.gid,
+            attr.perm,
+            req.uid(),
+            req.gid(),
+            access_mask,
+        ) {
+            reply.opened(0, 0)
+        } else {
+            reply.error(EACCES)
         }
-        reply.opened(0, 0);
     }
 
     // TODO
