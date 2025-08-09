@@ -17,10 +17,7 @@ impl MetaDb {
     //   oid          TEXT      NOT NULL,       -> the Git OID
     //   filemode     INTEGER   NOT NULL        -> the raw Git filemode
     // nodes: Vec<(parent inode, parent name, FileAttr)>
-    pub fn write_inodes_to_db(
-        &mut self,
-        nodes: Vec<(u64, String, FileAttr)>,
-    ) -> anyhow::Result<()> {
+    pub fn write_inodes_to_db(&mut self, nodes: Vec<(u64, &str, FileAttr)>) -> anyhow::Result<()> {
         let tx: Transaction<'_> = self.conn.transaction()?;
         {
             let mut stmt = tx.prepare(
@@ -116,5 +113,17 @@ impl MetaDb {
 
         let path: PathBuf = components.iter().collect();
         Ok(path)
+    }
+
+    pub fn exists_by_name(&self, parent: u64, name: &str) -> anyhow::Result<bool> {
+        let exists: i64 = self.conn.query_row(
+            "SELECT EXISTS(
+             SELECT 1 FROM inode_map
+              WHERE parent_inode = ?1 AND name = ?2
+         )",
+            params![parent as i64, name],
+            |row| row.get(0),
+        )?;
+        Ok(exists != 0)
     }
 }

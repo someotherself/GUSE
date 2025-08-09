@@ -13,6 +13,7 @@ use std::ffi::OsStr;
 use std::io::{BufRead, BufReader, ErrorKind};
 use std::iter::Skip;
 use std::path::Path;
+use std::rc::Rc;
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, SystemTime};
@@ -116,7 +117,7 @@ fn fuse_allow_other_enabled() -> std::io::Result<bool> {
 }
 
 struct GitFsAdapter {
-    inner: Arc<Mutex<GitFs>>,
+    inner: Rc<Mutex<GitFs>>,
 }
 
 impl GitFsAdapter {
@@ -125,7 +126,7 @@ impl GitFsAdapter {
         Ok(GitFsAdapter { inner: fs })
     }
 
-    pub fn getfs(&self) -> Arc<Mutex<GitFs>> {
+    pub fn getfs(&self) -> Rc<Mutex<GitFs>> {
         self.inner.clone()
     }
 }
@@ -235,9 +236,6 @@ impl fuser::Filesystem for GitFsAdapter {
         todo!()
     }
 
-    // When fetching a repo takes name as:
-    // website.accoount.repo_name
-    // example:github.tokio.tokio-rs.git -> https://github.com/tokio-rs/tokio.git
     fn mkdir(
         &mut self,
         req: &fuser::Request<'_>,
@@ -271,9 +269,7 @@ impl fuser::Filesystem for GitFsAdapter {
 
         let create_attr = dir_attr();
         match fs.mkdir(parent, name, create_attr) {
-            Ok(attr) => {
-                reply.entry(&TTL, &attr.into(), 0)
-            }
+            Ok(attr) => reply.entry(&TTL, &attr.into(), 0),
             Err(e) => {
                 error!(?e);
                 reply.error(ENOENT)
@@ -281,7 +277,7 @@ impl fuser::Filesystem for GitFsAdapter {
         }
     }
 
-    // Do not allow. Use git rm instead.
+    // TODO
     fn unlink(
         &mut self,
         _req: &fuser::Request<'_>,
@@ -292,7 +288,7 @@ impl fuser::Filesystem for GitFsAdapter {
         reply.error(libc::EROFS);
     }
 
-    // Do not allow. Use git rm instead.
+    // TODO
     fn rmdir(
         &mut self,
         _req: &fuser::Request<'_>,
@@ -303,7 +299,7 @@ impl fuser::Filesystem for GitFsAdapter {
         reply.error(libc::EROFS);
     }
 
-    // Do not allow. Use git mv instead.
+    // TODO
     fn rename(
         &mut self,
         _req: &fuser::Request<'_>,
@@ -409,6 +405,7 @@ impl fuser::Filesystem for GitFsAdapter {
         reply.ok();
     }
 
+    // TODO
     fn readdirplus(
         &mut self,
         _req: &fuser::Request<'_>,
@@ -482,30 +479,19 @@ impl fuser::Filesystem for GitFsAdapter {
         todo!()
     }
 
-    // TODO
     fn opendir(&mut self, _req: &fuser::Request<'_>, ino: u64, flags: i32, reply: ReplyOpen) {
         let fs_arc = self.getfs();
         let fs = fs_arc.lock().unwrap();
-        // TODO - MOCK implementation
         if flags & O_DIRECTORY == 0 {
             reply.error(ENOTDIR);
             return;
         }
 
-        let repo_inodes = fs
-            .repos_list
-            .values()
-            .map(|v| GitFs::repo_id_to_ino(v.lock().unwrap().repo_id))
-            .collect::<Vec<_>>();
-        if ino == ROOT_INO {
-            reply.opened(0, flags as u32);
-        } else if repo_inodes.contains(&ino) {
-            // It's one of the top‐level repo dirs
-            reply.opened(0, flags as u32);
-        } else {
-            // Not a known directory
-            reply.error(ENOENT);
+        if let Err(err) = fs.getattr(ino) {
+            error!("getattr({}) failed: {:?}", ino, err);
+            return reply.error(ENOENT);
         }
+        reply.opened(0, flags as u32);
     }
 
     // TODO

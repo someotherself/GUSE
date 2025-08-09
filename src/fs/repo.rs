@@ -2,7 +2,10 @@
 
 use anyhow::{Context, anyhow, bail};
 use git2::{ObjectType, Oid, Repository, Tree};
-use std::ffi::OsStr;
+use std::{
+    ffi::OsStr,
+    sync::{Arc, RwLock},
+};
 use tracing::info;
 
 use std::{io::Write, path::Path};
@@ -12,7 +15,7 @@ use crate::fs::{DirectoryEntry, DirectoryEntryPlus, FileType, GitFs, ObjectAttr,
 pub struct GitRepo {
     // Caching the database connection for reads.
     // Must be refreshed after every write.
-    pub connection: MetaDb,
+    pub connection: Arc<RwLock<MetaDb>>,
     pub repo_dir: String,
     pub repo_id: u16,
     pub inner: Repository,
@@ -231,8 +234,7 @@ impl GitRepo {
     }
 }
 
-pub fn parse_mkdir_url(name: &OsStr) -> anyhow::Result<(String, String)> {
-    let name = name.to_string_lossy();
+pub fn parse_mkdir_url(name: &str) -> anyhow::Result<(String, String)> {
     // let git = name.strip_prefix(".git").ok_or_else(|| anyhow!("URL missing .git suffix"))?;
     let mut comp = name.splitn(4, ".");
     if comp.clone().count() != 4 {
