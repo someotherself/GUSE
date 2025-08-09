@@ -179,7 +179,6 @@ impl fuser::Filesystem for GitFsAdapter {
             reply.error(ENOENT);
             return;
         }
-
         match fs.find_by_name(parent, name.to_str().unwrap()) {
             Ok(Some(attr)) => {
                 let ino = attr.inode;
@@ -189,7 +188,7 @@ impl fuser::Filesystem for GitFsAdapter {
                 // The name is not found under this parent
                 reply.error(ENOENT);
             }
-            _ => {
+            Err(e) => {
                 // Other internal error
                 reply.error(EIO);
             }
@@ -406,6 +405,30 @@ impl fuser::Filesystem for GitFsAdapter {
     }
 
     // TODO
+    fn fsyncdir(
+        &mut self,
+        _req: &fuser::Request<'_>,
+        ino: u64,
+        fh: u64,
+        datasync: bool,
+        reply: fuser::ReplyEmpty,
+    ) {
+        todo!()
+    }
+
+    // TODO
+    fn fsync(
+        &mut self,
+        _req: &fuser::Request<'_>,
+        ino: u64,
+        fh: u64,
+        datasync: bool,
+        reply: fuser::ReplyEmpty,
+    ) {
+        todo!()
+    }
+
+    // TODO
     fn readdirplus(
         &mut self,
         _req: &fuser::Request<'_>,
@@ -491,7 +514,7 @@ impl fuser::Filesystem for GitFsAdapter {
             error!("getattr({}) failed: {:?}", ino, err);
             return reply.error(ENOENT);
         }
-        reply.opened(0, flags as u32);
+        reply.opened(0, 0);
     }
 
     // TODO
@@ -570,10 +593,10 @@ impl From<FileAttr> for fuser::FileAttr {
     }
 }
 
-const fn dir_attr() -> CreateFileAttr {
+pub const fn dir_attr() -> CreateFileAttr {
     CreateFileAttr {
         kind: FileType::Directory,
-        perm: 0o754,
+        perm: 0o774,
         uid: 0,
         mode: libc::S_IFDIR,
         gid: 0,
@@ -582,7 +605,7 @@ const fn dir_attr() -> CreateFileAttr {
     }
 }
 
-const fn file_attr() -> CreateFileAttr {
+pub const fn file_attr() -> CreateFileAttr {
     CreateFileAttr {
         kind: FileType::RegularFile,
         perm: 0o644,
