@@ -235,10 +235,10 @@ impl GitRepo {
 }
 
 /// If the name supplier follows the format:
-///      --> github.tokio-rs.tokio.git
-/// It will parse it and return the fetch url
+///      --> github.tokio-rs.tokio.git <br>
+/// It will parse it and return the fetch url. <br>
 /// Otherwise, it will return None
-/// This will signal that we create a normal folder
+/// This will signal that we create a normal folder <br>
 pub fn parse_mkdir_url(name: &str) -> anyhow::Result<Option<(String, String)>> {
     if !name.starts_with("github.") && !name.ends_with(".git") {
         return Ok(None);
