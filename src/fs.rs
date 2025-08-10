@@ -606,12 +606,15 @@ impl GitFs {
             FsOperationContext::Root => Ok(build_attr_dir(ROOT_INO, st_mode)),
             FsOperationContext::RepoDir { ino } => Ok(build_attr_dir(ino, st_mode)),
             FsOperationContext::InsideLiveDir { ino } => {
+                dbg!("get attr with {ino} inside livedir");
                 let path = self.build_full_path(ino)?;
+                dbg!(&path);
                 let mut attr: FileAttr = self.attr_from_dir(path)?;
                 attr.inode = ino;
                 Ok(attr)
             }
             FsOperationContext::InsideGitDir { ino } => {
+                dbg!("get attr with {ino} inside gitdir");
                 // TODO: Double check this
                 let repo = self.get_repo(ino)?;
                 let db_conn = self.open_meta_db(&repo.repo_dir)?;
@@ -888,6 +891,9 @@ impl GitFs {
 
     fn is_in_live(&self, ino: u64) -> anyhow::Result<bool> {
         let live_ino = self.get_live_ino(ino);
+        if live_ino == ino {
+            return Ok(true)
+        }
         let mut target_ino = ino;
 
         loop {
@@ -1039,7 +1045,13 @@ impl GitFs {
         if ino == repo_ino {
             return Ok(path);
         }
-        Ok(path.join(self.get_path_from_db(ino)?))
+        let db_path = self.get_path_from_db(ino)?;
+        let path = if db_path == PathBuf::from("live") {
+            path
+        } else {
+            path.join(self.get_path_from_db(ino)?)
+        };
+        Ok(path)
     }
 
     fn get_path_from_db(&self, inode: u64) -> anyhow::Result<PathBuf> {
