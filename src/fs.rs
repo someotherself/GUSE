@@ -596,9 +596,9 @@ impl GitFs {
     }
 
     pub fn getattr(&self, inode: u64) -> anyhow::Result<FileAttr> {
-        // if !self.exists(inode)? {
-        //     bail!("Inode not found!")
-        // }
+        if !self.exists(inode)? {
+            bail!("Inode not found!")
+        }
         let perms = 0o774;
         let st_mode = libc::S_IFDIR | perms;
         let ctx = FsOperationContext::get_operation(self, inode, false);
@@ -606,15 +606,12 @@ impl GitFs {
             FsOperationContext::Root => Ok(build_attr_dir(ROOT_INO, st_mode)),
             FsOperationContext::RepoDir { ino } => Ok(build_attr_dir(ino, st_mode)),
             FsOperationContext::InsideLiveDir { ino } => {
-                dbg!("get attr with {ino} inside livedir");
                 let path = self.build_full_path(ino)?;
-                dbg!(&path);
                 let mut attr: FileAttr = self.attr_from_dir(path)?;
                 attr.inode = ino;
                 Ok(attr)
             }
             FsOperationContext::InsideGitDir { ino } => {
-                dbg!("get attr with {ino} inside gitdir");
                 // TODO: Double check this
                 let repo = self.get_repo(ino)?;
                 let db_conn = self.open_meta_db(&repo.repo_dir)?;
@@ -649,14 +646,22 @@ impl GitFs {
         let ctx = FsOperationContext::get_operation(self, parent, true);
         match ctx? {
             FsOperationContext::Root => {
-                let (url, repo_name) = repo::parse_mkdir_url(name)?;
-                // initialize repo
-                let repo = self.new_repo(&repo_name)?;
+                match repo::parse_mkdir_url(name)? {
+                    Some((url, repo_name)) => {
+                        let repo = self.new_repo(&repo_name)?;
 
-                // fetch
-                repo.fetch_anon(&url)?;
-                let attr = self.getattr((repo.repo_id as u64) << REPO_SHIFT)?;
-                Ok(attr)
+                        // fetch
+                        repo.fetch_anon(&url)?;
+                        let attr = self.getattr((repo.repo_id as u64) << REPO_SHIFT)?;
+                        Ok(attr)
+                    }
+                    None => {
+                        let repo = self.new_repo(name)?;
+                        let attr = self.getattr((repo.repo_id as u64) << REPO_SHIFT)?;
+
+                        Ok(attr)
+                    }
+                }
             }
             FsOperationContext::RepoDir { ino: _ } => {
                 bail!("This directory is read only.")
@@ -781,6 +786,7 @@ impl GitFs {
                 Ok(attr)
             }
             FsOperationContext::RepoDir { ino } => {
+                dbg!("find by name inside repo dir {ino}");
                 let repo_id = GitFs::ino_to_repo_id(ino);
                 match self.repos_list.get(&repo_id) {
                     Some(_) => {}
@@ -798,15 +804,17 @@ impl GitFs {
                 Ok(Some(attr))
             }
             FsOperationContext::InsideLiveDir { ino } => {
+                dbg!("find by name inside live dir");
                 let repo_id = GitFs::ino_to_repo_id(ino);
                 match self.repos_list.get(&repo_id) {
                     Some(_) => {}
                     None => return Ok(None),
                 };
-                let repo_ino = self.get_ino_from_db(ino, name)?;
+                let _repo_ino = self.get_ino_from_db(ino, name)?;
                 let path = self.build_full_path(ino)?.join(name);
-                let mut attr = self.attr_from_dir(path)?;
-                attr.inode = repo_ino;
+                let attr = self.attr_from_dir(path)?;
+                // TODO: Get ino from db
+                // attr.inode = ino;
 
                 Ok(Some(attr))
             }
@@ -892,7 +900,7 @@ impl GitFs {
     fn is_in_live(&self, ino: u64) -> anyhow::Result<bool> {
         let live_ino = self.get_live_ino(ino);
         if live_ino == ino {
-            return Ok(true)
+            return Ok(true);
         }
         let mut target_ino = ino;
 
@@ -1046,12 +1054,11 @@ impl GitFs {
             return Ok(path);
         }
         let db_path = self.get_path_from_db(ino)?;
-        let path = if db_path == PathBuf::from("live") {
-            path
+        if db_path == PathBuf::from("live") {
+            Ok(path)
         } else {
-            path.join(self.get_path_from_db(ino)?)
-        };
-        Ok(path)
+            Ok(path.join(self.get_path_from_db(ino)?))
+        }
     }
 
     fn get_path_from_db(&self, inode: u64) -> anyhow::Result<PathBuf> {

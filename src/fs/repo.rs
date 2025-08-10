@@ -234,8 +234,15 @@ impl GitRepo {
     }
 }
 
-pub fn parse_mkdir_url(name: &str) -> anyhow::Result<(String, String)> {
-    // let git = name.strip_prefix(".git").ok_or_else(|| anyhow!("URL missing .git suffix"))?;
+/// If the name supplier follows the format:
+///      --> github.tokio-rs.tokio.git
+/// It will parse it and return the fetch url
+/// Otherwise, it will return None
+/// This will signal that we create a normal folder
+pub fn parse_mkdir_url(name: &str) -> anyhow::Result<Option<(String, String)>> {
+    if !name.starts_with("github.") && !name.ends_with(".git") {
+        return Ok(None);
+    }
     let mut comp = name.splitn(4, ".");
     if comp.clone().count() != 4 {
         bail!("Incorrect url format!");
@@ -254,7 +261,7 @@ pub fn parse_mkdir_url(name: &str) -> anyhow::Result<(String, String)> {
         .ok_or_else(|| anyhow!("Error getting .git name from url"))?;
 
     let url = format!("https://{website}.com/{account}/{repo}.{git}");
-    Ok((url, repo.into()))
+    Ok(Some((url, repo.into())))
 }
 
 impl PartialEq for GitRepo {

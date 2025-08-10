@@ -27,16 +27,26 @@ fn test_initialization() {
             fs.mkdir(1, name, create_attr).unwrap();
 
             let root_attr = fs.getattr(ROOT_INO).unwrap();
-            dbg!(root_attr.inode);
+            assert_eq!(root_attr.inode, ROOT_INO);
             dbg!(root_attr.kind);
 
             let repo_attr = fs.getattr(REPO_DIR_INO).unwrap();
-            dbg!(repo_attr.inode);
+            assert_eq!(repo_attr.inode, REPO_DIR_INO);
             dbg!(repo_attr.kind);
 
             let live_attr = fs.getattr(LIVE_DIR_INO).unwrap();
-            dbg!(live_attr.inode);
+            assert_eq!(live_attr.inode, LIVE_DIR_INO);
             dbg!(live_attr.kind);
+
+            let mio_attr = fs.find_by_name(ROOT_INO, "mio").unwrap();
+            assert!(mio_attr.is_some());
+            let mio_attr = mio_attr.unwrap();
+            assert_eq!(mio_attr.inode, REPO_DIR_INO);
+
+            let live_attr = fs.find_by_name(REPO_DIR_INO, "live").unwrap();
+            assert!(live_attr.is_some());
+            let live_attr = live_attr.unwrap();
+            assert_eq!(live_attr.inode, LIVE_DIR_INO);
         },
     );
 }
