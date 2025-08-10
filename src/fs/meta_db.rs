@@ -85,7 +85,6 @@ impl MetaDb {
                FROM inode_map
               WHERE inode = ?1",
         )?;
-
         let mut components = Vec::new();
         let mut curr = inode as i64;
 

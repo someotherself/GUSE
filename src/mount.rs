@@ -13,7 +13,6 @@ use std::ffi::OsStr;
 use std::io::{BufRead, BufReader, ErrorKind};
 use std::iter::Skip;
 use std::path::Path;
-use std::rc::Rc;
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, SystemTime};
@@ -117,7 +116,7 @@ fn fuse_allow_other_enabled() -> std::io::Result<bool> {
 }
 
 struct GitFsAdapter {
-    inner: Rc<Mutex<GitFs>>,
+    inner: Arc<Mutex<GitFs>>,
 }
 
 impl GitFsAdapter {
@@ -126,7 +125,7 @@ impl GitFsAdapter {
         Ok(GitFsAdapter { inner: fs })
     }
 
-    pub fn getfs(&self) -> Rc<Mutex<GitFs>> {
+    pub fn getfs(&self) -> Arc<Mutex<GitFs>> {
         self.inner.clone()
     }
 }

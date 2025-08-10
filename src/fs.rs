@@ -5,7 +5,6 @@ use std::hash::Hash;
 use std::io::{BufReader, BufWriter, Write};
 use std::os::unix::fs::{MetadataExt, PermissionsExt};
 use std::path::Path;
-use std::rc::Rc;
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::{Duration, UNIX_EPOCH};
 use std::{
@@ -199,7 +198,7 @@ enum FsOperationContext {
 }
 
 impl FsOperationContext {
-    fn get_operation(fs: &GitFs, ino: u64) -> anyhow::Result<Self> {
+    fn get_operation(fs: &GitFs, ino: u64, _is_parent: bool) -> anyhow::Result<Self> {
         let mask: u64 = (1u64 << 48) - 1;
         let repo_dir = GitFs::ino_to_repo_id(ino);
         if ino == ROOT_INO {
@@ -247,8 +246,8 @@ impl FsOperationContext {
 
 pub struct GitFs {
     pub repos_dir: PathBuf,
-    pub repos_list: BTreeMap<u16, Rc<GitRepo>>, // <repo_id, repo>
-    next_inode: HashMap<u16, AtomicU64>,        // Each Repo has a set of inodes
+    pub repos_list: BTreeMap<u16, Arc<GitRepo>>, // <repo_id, repo>
+    next_inode: HashMap<u16, AtomicU64>,         // Each Repo has a set of inodes
     current_handle: AtomicU64,
     read_handles: RwLock<HashMap<u64, Mutex<ReadHandleContext>>>, // ino
     write_handles: RwLock<HashMap<u64, Mutex<WriteHandleContext>>>, // ino
@@ -259,7 +258,7 @@ pub struct GitFs {
 
 // gitfs_fuse_functions
 impl GitFs {
-    pub fn new(repos_dir: PathBuf, read_only: bool) -> anyhow::Result<Rc<Mutex<Self>>> {
+    pub fn new(repos_dir: PathBuf, read_only: bool) -> anyhow::Result<Arc<Mutex<Self>>> {
         let fs = Self {
             repos_dir,
             repos_list: BTreeMap::new(),
@@ -273,10 +272,10 @@ impl GitFs {
         };
         fs.ensure_base_dirs_exist()
             .context("Failed to initialize base directories")?;
-        Ok(Rc::from(Mutex::new(fs)))
+        Ok(Arc::from(Mutex::new(fs)))
     }
 
-    pub fn new_repo(&mut self, repo_name: &str) -> anyhow::Result<Rc<GitRepo>> {
+    pub fn new_repo(&mut self, repo_name: &str) -> anyhow::Result<Arc<GitRepo>> {
         let repo_path = self.repos_dir.join(repo_name);
         if repo_path.exists() {
             bail!("Repo name already exists!")
@@ -309,7 +308,7 @@ impl GitFs {
             head: None,
         };
 
-        let repo_rc = Rc::from(git_repo);
+        let repo_rc = Arc::from(git_repo);
         self.repos_list.insert(repo_id, repo_rc.clone());
         Ok(repo_rc)
     }
@@ -399,7 +398,7 @@ impl GitFs {
         if self.is_dir(ino)? {
             bail!("Target must be a file!")
         }
-        let ctx = FsOperationContext::get_operation(self, ino);
+        let ctx = FsOperationContext::get_operation(self, ino, false);
         match ctx? {
             FsOperationContext::Root => {
                 bail!("Target must be a file!")
@@ -602,7 +601,7 @@ impl GitFs {
         // }
         let perms = 0o774;
         let st_mode = libc::S_IFDIR | perms;
-        let ctx = FsOperationContext::get_operation(self, inode);
+        let ctx = FsOperationContext::get_operation(self, inode, false);
         match ctx? {
             FsOperationContext::Root => Ok(build_attr_dir(ROOT_INO, st_mode)),
             FsOperationContext::RepoDir { ino } => Ok(build_attr_dir(ino, st_mode)),
@@ -644,7 +643,7 @@ impl GitFs {
         }
         let name = name.to_str().unwrap();
 
-        let ctx = FsOperationContext::get_operation(self, parent);
+        let ctx = FsOperationContext::get_operation(self, parent, true);
         match ctx? {
             FsOperationContext::Root => {
                 let (url, repo_name) = repo::parse_mkdir_url(name)?;
@@ -684,7 +683,7 @@ impl GitFs {
     }
 
     pub fn readdir(&self, parent: u64) -> anyhow::Result<Vec<DirectoryEntry>> {
-        let ctx = FsOperationContext::get_operation(self, parent);
+        let ctx = FsOperationContext::get_operation(self, parent, true);
         match ctx? {
             FsOperationContext::Root => {
                 let mut entries: Vec<DirectoryEntry> = vec![];
@@ -701,11 +700,11 @@ impl GitFs {
                 }
                 Ok(entries)
             }
-            FsOperationContext::RepoDir { ino: _ } => {
-                let repo_id = (parent >> REPO_SHIFT) as u16;
+            FsOperationContext::RepoDir { ino } => {
+                let repo_id = (ino >> REPO_SHIFT) as u16;
                 if self.repos_list.contains_key(&repo_id) {
                     let mut entries: Vec<DirectoryEntry> = vec![];
-                    let live_ino = self.get_ino_from_db(parent, "live")?;
+                    let live_ino = self.get_ino_from_db(ino, "live")?;
                     let live_entry = DirectoryEntry::new(
                         live_ino,
                         Oid::zero(),
@@ -720,10 +719,14 @@ impl GitFs {
                 }
             }
             FsOperationContext::InsideLiveDir { ino } => {
-                // ignore these:
                 let ignore_list = [OsString::from(".git"), OsString::from("fs_meta.db")];
-                // get path from in
-                let path = self.get_path_from_db(ino)?;
+                let db_path = self.get_path_from_db(ino)?;
+                let path = self.repos_dir.join(&self.get_repo(ino)?.repo_dir);
+                let path = if db_path == PathBuf::from("live") {
+                    path
+                } else {
+                    path.join(db_path)
+                };
                 let mut entries: Vec<DirectoryEntry> = vec![];
                 for node in path.read_dir()? {
                     let node = node?;
@@ -758,7 +761,7 @@ impl GitFs {
         if !self.is_dir(parent)? {
             bail!("Parent must be a dir!")
         }
-        let ctx = FsOperationContext::get_operation(self, parent);
+        let ctx = FsOperationContext::get_operation(self, parent, true);
         match ctx? {
             FsOperationContext::Root => {
                 // Handle a look-up for url -> github.tokio-rs.tokio.git
@@ -775,18 +778,43 @@ impl GitFs {
                 Ok(attr)
             }
             FsOperationContext::RepoDir { ino } => {
-                let parent_attr = self.getattr(ino)?;
-                let repo = self.get_repo(ino)?;
-                let git_attr = repo.find_by_name(parent_attr.oid, name)?;
-                let conn = self.open_meta_db(&repo.repo_dir)?;
-                let inode = conn.get_ino_from_db(ino, name)?;
-                let file_attr = self.object_to_file_attr(inode, &git_attr)?;
-                Ok(Some(file_attr))
+                let repo_id = GitFs::ino_to_repo_id(ino);
+                match self.repos_list.get(&repo_id) {
+                    Some(_) => {}
+                    None => return Ok(None),
+                };
+                let repo_ino = self.get_ino_from_db(ino, name)?;
+                let path = if name == "live" {
+                    self.build_full_path(ino)?
+                } else {
+                    self.build_full_path(ino)?.join(name)
+                };
+                let mut attr = self.attr_from_dir(path)?;
+                attr.inode = repo_ino;
+
+                Ok(Some(attr))
             }
-            FsOperationContext::InsideLiveDir { ino: _ } => {
-                bail!("Not implemented")
+            FsOperationContext::InsideLiveDir { ino } => {
+                let repo_id = GitFs::ino_to_repo_id(ino);
+                match self.repos_list.get(&repo_id) {
+                    Some(_) => {}
+                    None => return Ok(None),
+                };
+                let repo_ino = self.get_ino_from_db(ino, name)?;
+                let path = self.build_full_path(ino)?.join(name);
+                let mut attr = self.attr_from_dir(path)?;
+                attr.inode = repo_ino;
+
+                Ok(Some(attr))
             }
             FsOperationContext::InsideGitDir { ino: _ } => {
+                // let parent_attr = self.getattr(ino)?;
+                // let repo = self.get_repo(ino)?;
+                // let git_attr = repo.find_by_name(parent_attr.oid, name)?;
+                // let conn = self.open_meta_db(&repo.repo_dir)?;
+                // let inode = conn.get_ino_from_db(ino, name)?;
+                // let file_attr = self.object_to_file_attr(inode, &git_attr)?;
+                // Ok(Some(file_attr))
                 bail!("Not implemented")
             }
         }
@@ -849,7 +877,7 @@ impl GitFs {
         Ok(PathBuf::from(&self.repos_dir).join(db_path).join(name))
     }
 
-    fn get_repo(&self, inode: u64) -> anyhow::Result<Rc<GitRepo>> {
+    fn get_repo(&self, inode: u64) -> anyhow::Result<Arc<GitRepo>> {
         let repo_id = (inode >> REPO_SHIFT) as u16;
         let repo = self
             .repos_list
@@ -952,19 +980,30 @@ impl GitFs {
         conn.exists_by_name(parent, name)
     }
 
-    pub fn exists(&self, inode: u64) -> anyhow::Result<bool> {
-        if inode == ROOT_INO {
+    pub fn exists(&self, ino: u64) -> anyhow::Result<bool> {
+        if ino == ROOT_INO {
             return Ok(true);
         }
-        Ok(self.get_path_from_db(inode).is_ok())
+        let repo_id = GitFs::ino_to_repo_id(ino);
+        if self.repos_list.contains_key(&repo_id) {
+            return Ok(true);
+        }
+        if ino == (repo_id as u64) + 1 {
+            return Ok(true);
+        }
+        Ok(self.get_path_from_db(ino).is_ok())
     }
 
-    fn is_dir(&self, inode: u64) -> anyhow::Result<bool> {
-        if inode == ROOT_INO {
+    fn is_dir(&self, ino: u64) -> anyhow::Result<bool> {
+        if ino == ROOT_INO {
             return Ok(true);
         }
-        let repo = self.get_repo(inode)?;
-        let path = self.get_path_from_db(inode)?;
+        let repo_id = GitFs::ino_to_repo_id(ino);
+        if self.repos_list.contains_key(&repo_id) {
+            return Ok(true);
+        }
+        let repo = self.get_repo(ino)?;
+        let path = self.get_path_from_db(ino)?;
 
         let git_attr = repo.getattr(path)?;
         Ok(git_attr.kind == ObjectType::Tree)
@@ -992,10 +1031,15 @@ impl GitFs {
         conn.get_ino_from_db(parent, name)
     }
 
-    fn build_full_path(&self, inode: u64) -> anyhow::Result<PathBuf> {
-        let repo_name = &self.get_repo(inode)?.repo_dir;
+    fn build_full_path(&self, ino: u64) -> anyhow::Result<PathBuf> {
+        let repo = self.get_repo(ino)?;
+        let repo_ino = GitFs::repo_id_to_ino(repo.repo_id);
+        let repo_name = &self.get_repo(ino)?.repo_dir;
         let path = PathBuf::from(&self.repos_dir).join(repo_name);
-        Ok(path.join(self.get_path_from_db(inode)?))
+        if ino == repo_ino {
+            return Ok(path);
+        }
+        Ok(path.join(self.get_path_from_db(ino)?))
     }
 
     fn get_path_from_db(&self, inode: u64) -> anyhow::Result<PathBuf> {
