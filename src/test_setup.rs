@@ -45,7 +45,7 @@ fn setup(setup: TestSetup) -> SetupResult {
 
 pub fn run_test<T>(init: TestSetup, t: T)
 where
-    T: FnOnce(Option<SetupResult>),
+    T: Fn(Option<SetupResult>),
 {
     let setup = SETUP_RESULT.replace(Some(setup(init)));
     t(setup);

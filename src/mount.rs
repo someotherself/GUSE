@@ -404,6 +404,18 @@ impl fuser::Filesystem for GitFsAdapter {
     }
 
     // TODO
+    fn readdirplus(
+        &mut self,
+        _req: &fuser::Request<'_>,
+        ino: u64,
+        fh: u64,
+        offset: i64,
+        reply: fuser::ReplyDirectoryPlus,
+    ) {
+        todo!()
+    }
+
+    // TODO
     fn fsyncdir(
         &mut self,
         _req: &fuser::Request<'_>,
@@ -423,18 +435,6 @@ impl fuser::Filesystem for GitFsAdapter {
         fh: u64,
         datasync: bool,
         reply: fuser::ReplyEmpty,
-    ) {
-        todo!()
-    }
-
-    // TODO
-    fn readdirplus(
-        &mut self,
-        _req: &fuser::Request<'_>,
-        ino: u64,
-        fh: u64,
-        offset: i64,
-        reply: fuser::ReplyDirectoryPlus,
     ) {
         todo!()
     }
@@ -514,7 +514,6 @@ impl fuser::Filesystem for GitFsAdapter {
             }
             libc::O_WRONLY => (libc::W_OK, false, true),
             libc::O_RDWR => (libc::R_OK | libc::W_OK, true, true),
-            // Exactly one access mode flag must be specified
             _ => return reply.error(libc::EINVAL),
         };
 

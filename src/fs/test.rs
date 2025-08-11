@@ -6,21 +6,20 @@ use crate::{
     test_setup::{TestSetup, get_fs, run_test},
 };
 
-const ROOT_INO: u64 = 1;
+use crate::fs::ROOT_INO;
 const REPO_DIR_INO: u64 = (1 as u64) << REPO_SHIFT;
 const LIVE_DIR_INO: u64 = ((1 as u64) << REPO_SHIFT) + 1;
 
 #[test]
-fn test_initialization() {
+fn test_mkdir_fetch() {
     run_test(
         TestSetup {
-            key: "test_initialization",
+            key: "test_mkdir_fetch",
             read_only: false,
         },
         |_| {
             let fs = get_fs().unwrap();
             let mut fs = fs.lock().unwrap();
-            dbg!(&fs.repos_dir);
 
             let create_attr = dir_attr();
             let name = OsStr::new("github.tokio-rs.mio.git");
@@ -43,10 +42,65 @@ fn test_initialization() {
             let mio_attr = mio_attr.unwrap();
             assert_eq!(mio_attr.inode, REPO_DIR_INO);
 
+            // FIND BY NAME
             let live_attr = fs.find_by_name(REPO_DIR_INO, "live").unwrap();
             assert!(live_attr.is_some());
             let live_attr = live_attr.unwrap();
             assert_eq!(live_attr.inode, LIVE_DIR_INO);
+
+            // READ DIR
+            let read_dir = fs.readdir(ROOT_INO).unwrap();
+            assert_eq!(read_dir.len(), 1);
+
+            assert_eq!(read_dir[0].name, "mio");
+
+            let read_dir = fs.readdir(REPO_DIR_INO).unwrap();
+            assert_eq!(read_dir.len(), 1);
+
+            assert_eq!(read_dir[0].name, "live");
+        },
+    );
+}
+
+#[test]
+fn test_mkdir_normal() {
+    run_test(
+        TestSetup {
+            key: "test_mkdir_normal",
+            read_only: false,
+        },
+        |_| {
+            let fs = get_fs().unwrap();
+            let mut fs = fs.lock().unwrap();
+
+            let create_attr = dir_attr();
+            let name = OsStr::new("new_folder");
+            fs.mkdir(ROOT_INO, name, create_attr).unwrap();
+
+            let root_attr = fs.getattr(ROOT_INO).unwrap();
+            assert_eq!(root_attr.inode, ROOT_INO);
+            dbg!(root_attr.kind);
+
+            let repo_attr = fs.getattr(REPO_DIR_INO).unwrap();
+            assert_eq!(repo_attr.inode, REPO_DIR_INO);
+            dbg!(repo_attr.kind);
+
+            // FIND BY NAME
+            let live_attr = fs.find_by_name(REPO_DIR_INO, "live").unwrap();
+            assert!(live_attr.is_some());
+            let live_attr = live_attr.unwrap();
+            assert_eq!(live_attr.inode, LIVE_DIR_INO);
+
+            // READ DIR
+            let read_dir = fs.readdir(ROOT_INO).unwrap();
+            assert_eq!(read_dir.len(), 1);
+
+            assert_eq!(read_dir[0].name, "new_folder");
+
+            let read_dir = fs.readdir(REPO_DIR_INO).unwrap();
+            assert_eq!(read_dir.len(), 1);
+
+            assert_eq!(read_dir[0].name, "live");
         },
     );
 }

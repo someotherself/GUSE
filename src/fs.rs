@@ -406,7 +406,7 @@ impl GitFs {
             FsOperationContext::RepoDir { ino: _ } => {
                 bail!("Target must be a file!")
             }
-            FsOperationContext::InsideLiveDir { ino: _ } => {
+            FsOperationContext::InsideLiveDir { ino } => {
                 let mut handle: Option<u64> = None;
                 if read {
                     handle = Some(self.next_file_handle());
@@ -786,7 +786,6 @@ impl GitFs {
                 Ok(attr)
             }
             FsOperationContext::RepoDir { ino } => {
-                dbg!("find by name inside repo dir {ino}");
                 let repo_id = GitFs::ino_to_repo_id(ino);
                 match self.repos_list.get(&repo_id) {
                     Some(_) => {}
@@ -804,7 +803,6 @@ impl GitFs {
                 Ok(Some(attr))
             }
             FsOperationContext::InsideLiveDir { ino } => {
-                dbg!("find by name inside live dir");
                 let repo_id = GitFs::ino_to_repo_id(ino);
                 match self.repos_list.get(&repo_id) {
                     Some(_) => {}
