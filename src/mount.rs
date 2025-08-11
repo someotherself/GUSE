@@ -19,7 +19,8 @@ use std::time::{Duration, SystemTime};
 use std::{num::NonZeroU32, path::PathBuf};
 
 use crate::fs::{
-    CreateFileAttr, DirectoryEntry, FileAttr, FileType, GitFs, REPO_SHIFT, ROOT_INO, repo,
+    CreateFileAttr, DirectoryEntry, DirectoryEntryPlus, FileAttr, FileType, GitFs, REPO_SHIFT,
+    ROOT_INO, repo,
 };
 
 const TTL: Duration = Duration::from_secs(5);
@@ -410,9 +411,53 @@ impl fuser::Filesystem for GitFsAdapter {
         ino: u64,
         fh: u64,
         offset: i64,
-        reply: fuser::ReplyDirectoryPlus,
+        mut reply: fuser::ReplyDirectoryPlus,
     ) {
-        todo!()
+        let fs_arc = self.getfs();
+        let fs: std::sync::MutexGuard<'_, GitFs> = fs_arc.lock().unwrap();
+        let mask: u64 = (1u64 << 48) - 1;
+        let parent_entries: Vec<DirectoryEntry> = vec![
+            DirectoryEntry {
+                inode: ROOT_INO,
+                oid: Oid::zero(),
+                kind: FileType::Directory,
+                name: ".".to_string(),
+                filemode: libc::S_IFDIR,
+            },
+            DirectoryEntry {
+                inode: ROOT_INO,
+                oid: Oid::zero(),
+                kind: FileType::Directory,
+                name: "..".to_string(),
+                filemode: libc::S_IFDIR,
+            },
+        ];
+        let mut entries: Vec<DirectoryEntryPlus> = vec![];
+        for entry in parent_entries {
+            let entry_plus = DirectoryEntryPlus {
+                entry,
+                attr: dir_attr().into(),
+            };
+            entries.push(entry_plus);
+        }
+        let repos_as_entries = fs.readdirplus(ino).unwrap();
+        for entry in repos_as_entries {
+            entries.push(entry);
+        }
+
+        for (i, entry) in entries.into_iter().enumerate().skip(offset as usize) {
+            if reply.add(
+                entry.entry.inode,
+                (i + 1) as i64,
+                entry.entry.name,
+                &TTL,
+                &entry.attr.into(),
+                0,
+            ) {
+                break;
+            }
+        }
+        reply.ok();
     }
 
     // TODO

@@ -718,6 +718,7 @@ impl GitFs {
                         FileType::Directory,
                         libc::S_IFDIR,
                     );
+                    // TODO: Add entries of snapshots
                     entries.push(live_entry);
                     Ok(entries)
                 } else {
@@ -748,8 +749,18 @@ impl GitFs {
                     } else {
                         (FileType::Symlink, libc::S_IFLNK)
                     };
-                    let entry =
-                        DirectoryEntry::new(ino, Oid::zero(), node_name_str.into(), kind, filemode);
+                    let attr = self.find_by_name(ino, &node_name_str)?;
+                    let attr = match attr {
+                        Some(attr) => attr,
+                        None => continue,
+                    };
+                    let entry = DirectoryEntry::new(
+                        attr.inode,
+                        Oid::zero(),
+                        node_name_str.into(),
+                        kind,
+                        filemode,
+                    );
                     entries.push(entry);
                 }
                 Ok(entries)
@@ -760,6 +771,96 @@ impl GitFs {
         }
     }
 
+    pub fn readdirplus(&self, parent: u64) -> anyhow::Result<Vec<DirectoryEntryPlus>> {
+        let ctx = FsOperationContext::get_operation(self, parent, true);
+        match ctx? {
+            FsOperationContext::Root => {
+                let mut entries: Vec<DirectoryEntryPlus> = vec![];
+                for repo in self.repos_list.values() {
+                    let repo_ino = GitFs::repo_id_to_ino(repo.repo_id);
+                    let attr = self.getattr(repo_ino)?;
+                    let dir_entry = DirectoryEntry::new(
+                        repo_ino,
+                        Oid::zero(),
+                        repo.repo_dir.clone(),
+                        FileType::Directory,
+                        libc::S_IFDIR,
+                    );
+                    entries.push(DirectoryEntryPlus {
+                        entry: dir_entry,
+                        attr,
+                    });
+                }
+                Ok(entries)
+            }
+            FsOperationContext::RepoDir { ino } => {
+                let repo_id = (ino >> REPO_SHIFT) as u16;
+                if self.repos_list.contains_key(&repo_id) {
+                    let mut entries: Vec<DirectoryEntryPlus> = vec![];
+                    let live_ino = self.get_ino_from_db(ino, "live")?;
+                    let live_entry = DirectoryEntry::new(
+                        live_ino,
+                        Oid::zero(),
+                        "live".to_string(),
+                        FileType::Directory,
+                        libc::S_IFDIR,
+                    );
+                    // TODO: Add entries of snapshots
+                    let live_attr = self.getattr(live_ino)?;
+                    entries.push(DirectoryEntryPlus {
+                        entry: live_entry,
+                        attr: live_attr,
+                    });
+                    Ok(entries)
+                } else {
+                    bail!("Repo is not found!");
+                }
+            }
+            FsOperationContext::InsideLiveDir { ino } => {
+                let ignore_list = [OsString::from(".git"), OsString::from("fs_meta.db")];
+                let db_path = self.get_path_from_db(ino)?;
+                let path = self.repos_dir.join(&self.get_repo(ino)?.repo_dir);
+                let path = if db_path == PathBuf::from("live") {
+                    path
+                } else {
+                    path.join(db_path)
+                };
+                let mut entries: Vec<DirectoryEntryPlus> = vec![];
+                for node in path.read_dir()? {
+                    let node = node?;
+                    let node_name = node.file_name();
+                    let node_name_str = node_name.to_string_lossy();
+                    if ignore_list.contains(&node_name) {
+                        continue;
+                    }
+                    let (kind, filemode) = if node.file_type()?.is_dir() {
+                        (FileType::Directory, libc::S_IFDIR)
+                    } else if node.file_type()?.is_file() {
+                        (FileType::RegularFile, libc::S_IFREG)
+                    } else {
+                        (FileType::Symlink, libc::S_IFLNK)
+                    };
+                    let attr = self.find_by_name(ino, &node_name_str)?;
+                    let attr = match attr {
+                        Some(attr) => attr,
+                        None => continue,
+                    };
+                    let entry = DirectoryEntry::new(
+                        attr.inode,
+                        Oid::zero(),
+                        node_name_str.into(),
+                        kind,
+                        filemode,
+                    );
+                    entries.push(DirectoryEntryPlus { entry, attr });
+                }
+                Ok(entries)
+            }
+            FsOperationContext::InsideGitDir { ino: _ } => {
+                todo!()
+            }
+        }
+    }
     pub fn find_by_name(&self, parent: u64, name: &str) -> anyhow::Result<Option<FileAttr>> {
         if !self.exists(parent)? {
             bail!("Parent does not exist!")
