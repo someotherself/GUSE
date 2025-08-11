@@ -396,7 +396,12 @@ impl fuser::Filesystem for GitFsAdapter {
             entries.push(entry);
         }
 
-        for (i, entry) in entries.into_iter().enumerate().skip(offset as usize) {
+        for (i, entry) in entries
+            .into_iter()
+            .take(20)
+            .enumerate()
+            .skip(offset as usize)
+        {
             if reply.add(entry.inode, (i + 1) as i64, entry.kind.into(), entry.name) {
                 break;
             }

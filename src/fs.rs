@@ -55,8 +55,9 @@ pub struct FileAttr {
     pub flags: u32,
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 pub struct ObjectAttr {
+    pub name: String,
     pub oid: Oid,
     pub kind: git2::ObjectType,
     pub filemode: u32,
@@ -556,9 +557,10 @@ impl GitFs {
         let commit_secs = git_attr.commit_time.seconds() as u64;
         let time = UNIX_EPOCH + Duration::from_secs(commit_secs);
 
-        let kind = match git_attr.filemode & 0o170000 {
-            libc::S_IFDIR => FileType::Directory,
-            libc::S_IFLNK => FileType::Symlink,
+        let kind = match git_attr.kind {
+            ObjectType::Blob if git_attr.filemode == 0o120000 => FileType::Symlink,
+            ObjectType::Tree => FileType::Directory,
+            ObjectType::Commit => FileType::Directory,
             _ => FileType::RegularFile,
         };
         let perm = (git_attr.filemode & 0o774) as u16;
@@ -608,14 +610,15 @@ impl GitFs {
                 attr.inode = ino;
                 Ok(attr)
             }
-            FsOperationContext::InsideGitDir { ino } => {
+            FsOperationContext::InsideGitDir { ino: _ } => {
                 // TODO: Double check this
-                let repo = self.get_repo(ino)?;
-                let db_conn = self.open_meta_db(&repo.repo_dir)?;
-                let path = db_conn.get_path_from_db(ino)?;
+                // let repo = self.get_repo(ino)?;
+                // let db_conn = self.open_meta_db(&repo.repo_dir)?;
+                // let path = db_conn.get_path_from_db(ino)?;
 
-                let git_attr = repo.getattr(path)?;
-                self.object_to_file_attr(ino, &git_attr)
+                // let git_attr = repo.getattr(path)?;
+                // self.object_to_file_attr(ino, &git_attr)
+                todo!()
             }
         }
     }
@@ -718,8 +721,22 @@ impl GitFs {
                         FileType::Directory,
                         libc::S_IFDIR,
                     );
-                    // TODO: Add entries of snapshots
                     entries.push(live_entry);
+                    // TODO: Add entries of snapshots
+
+                    let object_entries = self.get_repo(ino)?.read_log()?;
+                    for commit in object_entries {
+                        let entry_ino = self.next_inode(ino)?;
+                        let attr = self.object_to_file_attr(entry_ino, &commit)?;
+                        let entry = DirectoryEntry::new(
+                            entry_ino,
+                            attr.oid,
+                            commit.name,
+                            attr.kind,
+                            attr.mode,
+                        );
+                        entries.push(entry);
+                    }
                     Ok(entries)
                 } else {
                     bail!("Repo is not found!");
@@ -767,6 +784,15 @@ impl GitFs {
             }
             FsOperationContext::InsideGitDir { ino: _ } => {
                 bail!("readdir inside GitDir not implemented");
+                // let object_entries = self.get_repo(ino)?.readdir_commit()?;
+
+                // for git_attr in object_entries {
+                //     let ino = self.next_inode(ino)?;
+                //     let attr = self.object_to_file_attr(ino, &git_attr)?;
+                //     let entry =
+                //         DirectoryEntry::new(ino, attr.oid, git_attr.name, attr.kind, attr.mode);
+                //     entries.push(entry);
+                // }
             }
         }
     }

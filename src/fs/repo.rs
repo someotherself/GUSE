@@ -1,7 +1,10 @@
 #![allow(unused_imports)]
 
 use anyhow::{Context, anyhow, bail};
-use git2::{ObjectType, Oid, Repository, Tree};
+use git2::{
+    Commit, Direction, FetchOptions, ObjectType, Oid, Reference, RemoteCallbacks, Repository, Sort,
+    Tree,
+};
 use std::{
     ffi::OsStr,
     sync::{Arc, RwLock},
@@ -29,75 +32,92 @@ pub struct Remote {
 
 impl GitRepo {
     pub fn fetch_anon(&self, url: &str) -> anyhow::Result<()> {
-        let mut callbacks = git2::RemoteCallbacks::new();
-        let mut remote = self.inner.remote_anonymous(url)?;
-
-        callbacks.sideband_progress(|data| {
-            print!("remote: {}", str::from_utf8(data).unwrap());
-            std::io::stdout().flush().unwrap();
+        let repo = &self.inner;
+        // Set up the anonymous remote and callbacks
+        let mut remote = repo.remote_anonymous(url)?;
+        let mut cbs = RemoteCallbacks::new();
+        cbs.sideband_progress(|d| {
+            print!("remote: {}", std::str::from_utf8(d).unwrap_or(""));
             true
         });
-
-        callbacks.update_tips(|refname, a, b| {
-            if a.is_zero() {
-                println!("[new]     {b:20} {refname}");
-            } else {
-                println!("[updated] {a:10}..{b:10} {refname}");
-            }
+        cbs.update_tips(|name, a, b| {
+            println!("update {a:.10}..{b:.10} {name}");
             true
         });
-
-        callbacks.transfer_progress(|stats| {
-            if stats.received_objects() == stats.total_objects() {
+        cbs.transfer_progress(|s| {
+            if s.total_objects() > 0 {
                 print!(
-                    "Resolving deltas {}/{}\r",
-                    stats.indexed_deltas(),
-                    stats.total_deltas()
-                );
-            } else if stats.total_objects() > 0 {
-                print!(
-                    "Received {}/{} objects ({}) in {} bytes\r",
-                    stats.received_objects(),
-                    stats.total_objects(),
-                    stats.indexed_objects(),
-                    stats.received_bytes()
+                    "\rReceived {}/{} (idx {}) {} bytes",
+                    s.received_objects(),
+                    s.total_objects(),
+                    s.indexed_objects(),
+                    s.received_bytes()
                 );
             }
-            std::io::stdout().flush().unwrap();
+            std::io::Write::flush(&mut std::io::stdout()).ok();
             true
         });
+        let mut fo = FetchOptions::new();
+        fo.remote_callbacks(cbs);
 
-        let mut fo = git2::FetchOptions::new();
-        fo.remote_callbacks(callbacks);
-        remote.download(&[] as &[&str], Some(&mut fo))?;
+        // Discover the remote's default branch (e.g., "refs/heads/main")
+        remote.connect(Direction::Fetch)?;
+        let default_branch = remote.default_branch().ok(); // Optional but nice
+        remote.disconnect()?;
 
-        {
-            let stats = remote.stats();
-            if stats.local_objects() > 0 {
-                println!(
-                    "\rReceived {}/{} objects in {} bytes (used {} local \
-                 objects)",
-                    stats.indexed_objects(),
-                    stats.total_objects(),
-                    stats.received_bytes(),
-                    stats.local_objects()
-                );
-            } else {
-                println!(
-                    "\rReceived {}/{} objects in {} bytes",
-                    stats.indexed_objects(),
-                    stats.total_objects(),
-                    stats.received_bytes()
-                );
+        // Build refspecs to create remote-tracking refs under refs/remotes/anon/*
+        // Force-update (+) so repeated runs work.
+        let mut refspecs = vec![
+            "+refs/heads/*:refs/remotes/anon/*".to_string(),
+            "+refs/tags/*:refs/tags/*".to_string(),
+        ];
+        if let Some(ref buf) = default_branch {
+            if let Ok(src) = std::str::from_utf8(buf.as_ref()) {
+                // Also fetch the remote's HEAD explicitly into refs/remotes/anon/HEAD
+                refspecs.push(format!(
+                    "+{}:refs/remotes/anon/{}",
+                    src,
+                    src.rsplit('/').next().unwrap()
+                ));
+                refspecs.push("+HEAD:refs/remotes/anon/HEAD".to_string());
+            }
+        } else {
+            // Still add a HEAD mapping; some servers expose it
+            refspecs.push("+HEAD:refs/remotes/anon/HEAD".to_string());
+        }
+        let refs_as_str: Vec<&str> = refspecs.iter().map(|s| s.as_str()).collect();
+
+        // High-level fetch does download + update_tips for provided refspecs
+        remote
+            .fetch(&refs_as_str, Some(&mut fo), None)
+            .context("anonymous fetch failed")?;
+
+        // Ensure HEAD exists and is usable (no unpacking; just refs)
+        // Prefer the discovered default branch under refs/remotes/anon/*
+        if repo.head().is_err() {
+            if let Some(ref buf) = default_branch {
+                if let Ok(src) = std::str::from_utf8(buf.as_ref()) {
+                    let short = src.rsplit('/').next().unwrap();
+                    let target = format!("refs/remotes/anon/{short}");
+                    // If that ref exists, point HEAD to it; else fall back to anon/HEAD
+                    if repo.refname_to_id(&target).is_ok() {
+                        repo.set_head(&target)?;
+                    } else if let Ok(r) = repo.find_reference("refs/remotes/anon/HEAD") {
+                        if let Some(sym) = r.symbolic_target() {
+                            repo.set_head(sym)?;
+                        } else if let Some(oid) = r.target() {
+                            repo.set_head_detached(oid)?;
+                        }
+                    }
+                }
+            } else if let Ok(r) = repo.find_reference("refs/remotes/anon/HEAD") {
+                if let Some(sym) = r.symbolic_target() {
+                    repo.set_head(sym)?;
+                } else if let Some(oid) = r.target() {
+                    repo.set_head_detached(oid)?;
+                }
             }
         }
-        remote.disconnect()?;
-        remote.update_tips(
-            None,
-            git2::RemoteUpdateFlags::UPDATE_FETCHHEAD,
-            git2::AutotagOption::Unspecified,
-            None,
-        )?;
 
         Ok(())
     }
@@ -114,6 +134,8 @@ impl GitRepo {
             .next_back()
             .ok_or_else(|| anyhow!("empty path"))?;
 
+        let mut last_name = None;
+
         for comp in path.as_ref().components() {
             let name = comp.as_os_str().to_str().unwrap();
             let is_last_comp = comp == last_comp;
@@ -125,10 +147,16 @@ impl GitRepo {
                 .ok_or_else(|| anyhow!("component {:?} not found in tree", name))?;
 
             if entry.kind() == Some(ObjectType::Tree) {
-                // Descend into that sub-tree for further components
-                tree = self.inner.find_tree(entry.id())?;
+                if is_last_comp {
+                    // Final component is a directory
+                    last_name = Some(name.to_string());
+                    tree = self.inner.find_tree(entry.id())?;
+                } else {
+                    // Descend into the sub-tree for next components
+                    tree = self.inner.find_tree(entry.id())?;
+                }
             } else {
-                // If it's the last componentn
+                // If it's the last component
                 if is_last_comp {
                     // and a blob. return the ObjectAttr
                     if entry.kind().unwrap() == git2::ObjectType::Blob {
@@ -136,6 +164,7 @@ impl GitRepo {
                         let size = blob.size() as u64;
                         // blob with mode 0o120000 will be a symlink
                         return Ok(ObjectAttr {
+                            name: entry.name().unwrap().into(),
                             oid: entry.id(),
                             kind: entry.kind().unwrap(),
                             filemode: entry.filemode() as u32,
@@ -150,6 +179,7 @@ impl GitRepo {
             }
         }
         Ok(ObjectAttr {
+            name: last_name.unwrap(),
             oid: tree.id(),
             kind: ObjectType::Tree,
             filemode: libc::S_IFDIR,
@@ -225,12 +255,74 @@ impl GitRepo {
         let commit = self.inner.head()?.peel_to_commit()?;
         let commit_time = commit.time();
         Ok(ObjectAttr {
+            name: name.into(),
             oid: entry.id(),
             kind: entry.kind().unwrap(),
             filemode: entry.filemode() as u32,
             size: size as u64,
             commit_time,
         })
+    }
+
+    pub fn read_log(&self) -> anyhow::Result<Vec<ObjectAttr>> {
+        let limit = 20;
+        let head = self.inner.head()?;
+        let head_commit = head.peel_to_commit()?;
+
+        let mut walk = self.inner.revwalk()?;
+        walk.set_sorting(Sort::TOPOLOGICAL | Sort::TIME)?;
+        walk.push(head_commit.id())?;
+
+        let mut out = Vec::with_capacity(limit.min(256));
+        for (i, oid_res) in walk.enumerate() {
+            if out.len() >= limit {
+                break;
+            }
+            let oid = oid_res?;
+            let commit = self.inner.find_commit(oid)?;
+            let commit_name = format!("snap{}_{:.7}", i + 1, commit.id());
+            out.push(ObjectAttr {
+                // Use the commit summary as a human-friendly "name"
+                name: commit_name,
+                oid,
+                kind: ObjectType::Commit,
+                filemode: 0u32,
+                size: 0u64,
+                commit_time: commit.time(),
+            });
+        }
+        Ok(out)
+    }
+
+    pub fn readdir_commit(&self) -> anyhow::Result<Vec<ObjectAttr>> {
+        let mut entries: Vec<ObjectAttr> = vec![];
+        let commit = self.head_commit()?;
+        let root_tree = commit.tree()?;
+        for entry in root_tree.iter() {
+            let oid = entry.id();
+            let kind = entry.kind().unwrap();
+            let filemode = entry.filemode() as u32;
+            let name = entry.name().unwrap().to_string();
+            let commit_time = commit.time();
+            entries.push(ObjectAttr {
+                name,
+                oid,
+                kind,
+                filemode,
+                size: 0,
+                commit_time,
+            });
+        }
+        Ok(entries)
+    }
+
+    fn head_commit(&self) -> anyhow::Result<Commit> {
+        let repo = &self.inner;
+        Ok(repo.head()?.peel_to_commit()?)
+    }
+
+    fn head_tree(&self) -> anyhow::Result<Tree> {
+        Ok(self.head_commit()?.tree()?)
     }
 }
 
