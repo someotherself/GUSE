@@ -101,6 +101,15 @@ fn test_mkdir_normal() {
             assert_eq!(read_dir.len(), 1);
 
             assert_eq!(read_dir[0].name, "live");
+
+            let create_attr = dir_attr();
+            let dir_name1 = OsStr::new("dir_in_live_1");
+            let dir1_attr = fs.mkdir(LIVE_DIR_INO, dir_name1, create_attr);
+            // assert!(dir1_attr.is_ok());
+
+            let dir1_attr = dir1_attr.unwrap();
+            let dir1_ino = LIVE_DIR_INO + 1;
+            assert_eq!(dir1_attr.inode, dir1_ino);
         },
     );
 }

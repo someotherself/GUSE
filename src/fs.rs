@@ -286,9 +286,10 @@ impl GitFs {
 
         let repo_id = self.next_repo_id();
         let repo_ino = (repo_id as u64) << REPO_SHIFT;
-        let live_ino = repo_ino + 1;
+        self.next_inode
+            .insert(repo_id, AtomicU64::from(repo_ino + 1));
 
-        self.next_inode.insert(repo_id, AtomicU64::from(live_ino));
+        let live_ino = self.next_inode(repo_ino)?;
 
         let repo = git2::Repository::init(repo_path)?;
 
@@ -377,10 +378,6 @@ impl GitFs {
                     name         TEXT    NOT NULL,
                     oid          TEXT    NOT NULL,
                     filemode     INTEGER NOT NULL
-                );
-                CREATE TABLE IF NOT EXISTS meta (
-                    key   TEXT    PRIMARY KEY,
-                    value INTEGER NOT NULL
                 );
             "#,
         )?;
@@ -629,7 +626,7 @@ impl GitFs {
     pub fn mkdir(
         &mut self,
         parent: u64,
-        name: &OsStr,
+        os_name: &OsStr,
         create_attr: CreateFileAttr,
     ) -> anyhow::Result<FileAttr> {
         if self.read_only {
@@ -641,7 +638,7 @@ impl GitFs {
         if !self.is_dir(parent)? {
             bail!("Parent must be a folder!")
         }
-        let name = name.to_str().unwrap();
+        let name = os_name.to_str().unwrap();
 
         let ctx = FsOperationContext::get_operation(self, parent, true);
         match ctx? {
@@ -674,10 +671,11 @@ impl GitFs {
                 let dir_path = self.build_path(ino, name)?;
                 std::fs::create_dir(dir_path)?;
 
-                let ino = self.next_inode(ino)?;
+                let new_ino = self.next_inode(ino)?;
 
                 let mut attr: FileAttr = create_attr.into();
-                attr.inode = ino;
+
+                attr.inode = new_ino;
 
                 let nodes = vec![(ino, name, attr)];
                 self.write_inodes_to_db(ino, nodes)?;
@@ -810,9 +808,9 @@ impl GitFs {
                 };
                 let _repo_ino = self.get_ino_from_db(ino, name)?;
                 let path = self.build_full_path(ino)?.join(name);
-                let attr = self.attr_from_dir(path)?;
-                // TODO: Get ino from db
-                // attr.inode = ino;
+                let mut attr = self.attr_from_dir(path)?;
+                let ino = self.get_ino_from_db(ino, name)?;
+                attr.inode = ino;
 
                 Ok(Some(attr))
             }
