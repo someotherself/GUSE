@@ -43,13 +43,14 @@ fn setup(setup: TestSetup) -> SetupResult {
     }
 }
 
-pub fn run_test<T>(init: TestSetup, t: T)
+pub fn run_test<T>(init: TestSetup, t: T) -> anyhow::Result<()>
 where
-    T: Fn(Option<SetupResult>),
+    T: Fn(Option<SetupResult>) -> anyhow::Result<()>,
 {
     let setup = SETUP_RESULT.replace(Some(setup(init)));
-    t(setup);
+    t(setup)?;
     std::fs::remove_dir_all(TESTS_DATA_DIR.as_path()).unwrap();
+    Ok(())
 }
 
 pub fn get_fs() -> Option<Arc<Mutex<GitFs>>> {

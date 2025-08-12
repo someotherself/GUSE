@@ -1,6 +1,7 @@
 use std::path::PathBuf;
 
 use anyhow::{Context, anyhow};
+use git2::Oid;
 use rusqlite::{Connection, OptionalExtension, Transaction, params};
 
 use crate::fs::{FileAttr, ROOT_INO};
@@ -17,7 +18,10 @@ impl MetaDb {
     //   oid          TEXT      NOT NULL,       -> the Git OID
     //   filemode     INTEGER   NOT NULL        -> the raw Git filemode
     // nodes: Vec<(parent inode, parent name, FileAttr)>
-    pub fn write_inodes_to_db(&mut self, nodes: Vec<(u64, &str, FileAttr)>) -> anyhow::Result<()> {
+    pub fn write_inodes_to_db(
+        &mut self,
+        nodes: Vec<(u64, String, FileAttr)>,
+    ) -> anyhow::Result<()> {
         let tx: Transaction<'_> = self.conn.transaction()?;
         {
             let mut stmt = tx.prepare(
@@ -72,11 +76,26 @@ impl MetaDb {
             Ok(ino as u64)
         } else {
             Err(anyhow!(
-                "inode not found for parent={} name={}",
+                "No record found for parent={} name={}",
                 parent,
                 name
             ))
         }
+    }
+
+    pub fn get_oid_from_db(&self, ino: u64) -> anyhow::Result<Oid> {
+        let mut stmt = self.conn.prepare(
+            "SELECT oid
+           FROM inode_map
+          WHERE inode = ?1",
+        )?;
+
+        let oid_str: Option<String> = stmt
+            .query_row(rusqlite::params![ino as i64], |row| row.get(0))
+            .optional()?;
+
+        let oid_str = oid_str.ok_or_else(|| anyhow!("No record found for inode={}", ino))?;
+        Ok(git2::Oid::from_str(&oid_str)?)
     }
 
     pub fn get_path_from_db(&self, inode: u64) -> anyhow::Result<PathBuf> {
@@ -97,6 +116,10 @@ impl MetaDb {
 
             match row {
                 Some((parent, name)) => {
+                    if name == "live".to_owned() {
+                        curr = parent;
+                        continue;
+                    }
                     components.push(name);
                     curr = parent;
                 }
@@ -110,8 +133,7 @@ impl MetaDb {
 
         components.reverse();
 
-        let path: PathBuf = components.iter().collect();
-        Ok(path)
+        Ok(components.iter().collect::<PathBuf>())
     }
 
     pub fn exists_by_name(&self, parent: u64, name: &str) -> anyhow::Result<bool> {

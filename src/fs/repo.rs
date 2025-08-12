@@ -3,10 +3,11 @@
 use anyhow::{Context, anyhow, bail};
 use git2::{
     Commit, Direction, FetchOptions, ObjectType, Oid, Reference, RemoteCallbacks, Repository, Sort,
-    Tree,
+    Time, Tree, TreeWalkMode, TreeWalkResult,
 };
 use std::{
     ffi::OsStr,
+    path::PathBuf,
     sync::{Arc, RwLock},
 };
 use tracing::info;
@@ -60,20 +61,16 @@ impl GitRepo {
         let mut fo = FetchOptions::new();
         fo.remote_callbacks(cbs);
 
-        // Discover the remote's default branch (e.g., "refs/heads/main")
         remote.connect(Direction::Fetch)?;
         let default_branch = remote.default_branch().ok(); // Optional but nice
         remote.disconnect()?;
 
-        // Build refspecs to create remote-tracking refs under refs/remotes/anon/*
-        // Force-update (+) so repeated runs work.
         let mut refspecs = vec![
             "+refs/heads/*:refs/remotes/anon/*".to_string(),
             "+refs/tags/*:refs/tags/*".to_string(),
         ];
         if let Some(ref buf) = default_branch {
             if let Ok(src) = std::str::from_utf8(buf.as_ref()) {
-                // Also fetch the remote's HEAD explicitly into refs/remotes/anon/HEAD
                 refspecs.push(format!(
                     "+{}:refs/remotes/anon/{}",
                     src,
@@ -82,18 +79,14 @@ impl GitRepo {
                 refspecs.push("+HEAD:refs/remotes/anon/HEAD".to_string());
             }
         } else {
-            // Still add a HEAD mapping; some servers expose it
             refspecs.push("+HEAD:refs/remotes/anon/HEAD".to_string());
         }
         let refs_as_str: Vec<&str> = refspecs.iter().map(|s| s.as_str()).collect();
 
-        // High-level fetch does download + update_tips for provided refspecs
         remote
             .fetch(&refs_as_str, Some(&mut fo), None)
             .context("anonymous fetch failed")?;
 
-        // Ensure HEAD exists and is usable (no unpacking; just refs)
-        // Prefer the discovered default branch under refs/remotes/anon/*
         if repo.head().is_err() {
             if let Some(ref buf) = default_branch {
                 if let Ok(src) = std::str::from_utf8(buf.as_ref()) {
@@ -126,7 +119,6 @@ impl GitRepo {
         // Get the commit the head points to
         let commit = self.inner.head()?.peel_to_commit()?;
         let commit_time = commit.time();
-        // Get the root tree
         let mut tree = commit.tree()?;
         let last_comp = path
             .as_ref()
@@ -189,50 +181,48 @@ impl GitRepo {
     }
 
     // Read_dir
-    pub fn list_tree(
-        &self,
-        fs: &GitFs,
-        tree_oid: Oid,
-        tree_inode: u64,
-    ) -> anyhow::Result<Vec<DirectoryEntry>> {
-        let tree: Tree = self.inner.find_tree(tree_oid)?;
-        let mut entries = Vec::with_capacity(tree.len());
+    pub fn list_tree(&self, commit: Oid, tree_oid: Option<Oid>) -> anyhow::Result<Vec<ObjectAttr>> {
+        let commit = self.inner.find_commit(commit)?;
+        let mut entries = vec![];
+        let tree = match tree_oid {
+            Some(tree_oid) => self.inner.find_tree(tree_oid)?,
+            None => commit.tree()?,
+        };
         for entry in tree.iter() {
             let name = entry.name().unwrap_or("").to_string();
-            let conn = fs.open_meta_db(&self.repo_dir)?;
-            let inode = conn.get_ino_from_db(tree_inode, &name)?;
-            entries.push(DirectoryEntry {
+            entries.push(ObjectAttr {
                 name,
-                inode,
                 oid: entry.id(),
+                kind: entry.kind().unwrap(),
                 filemode: entry.filemode() as u32,
-                kind: FileType::from_filemode(entry.kind().unwrap())?,
+                size: 0,
+                commit_time: Time::new(0, 0),
             });
         }
         Ok(entries)
     }
 
     // read_dir plus
-    pub fn list_tree_plus(
-        &self,
-        fs: &GitFs,
-        tree_oid: Oid,
-        tree_inode: u64,
-    ) -> anyhow::Result<Vec<DirectoryEntryPlus>> {
-        let list_tree = self.list_tree(fs, tree_oid, tree_inode)?;
-        let mut list_tree_plus: Vec<DirectoryEntryPlus> = Vec::new();
-        for entry in list_tree {
-            let attr = fs.find_by_name(tree_inode, &entry.name)?.ok_or_else(|| {
-                anyhow!(
-                    "no entry named {:?} in tree inode {}",
-                    entry.name,
-                    tree_inode
-                )
-            })?;
-            list_tree_plus.push(DirectoryEntryPlus { entry, attr });
-        }
-        Ok(list_tree_plus)
-    }
+    // pub fn list_tree_plus(
+    //     &self,
+    //     fs: &GitFs,
+    //     tree_oid: Oid,
+    //     tree_inode: u64,
+    // ) -> anyhow::Result<Vec<DirectoryEntryPlus>> {
+    //     let list_tree = self.list_tree(fs, tree_oid, tree_inode)?;
+    //     let mut list_tree_plus: Vec<DirectoryEntryPlus> = Vec::new();
+    //     for entry in list_tree {
+    //         let attr = fs.find_by_name(tree_inode, &entry.name)?.ok_or_else(|| {
+    //             anyhow!(
+    //                 "no entry named {:?} in tree inode {}",
+    //                 entry.name,
+    //                 tree_inode
+    //             )
+    //         })?;
+    //         list_tree_plus.push(DirectoryEntryPlus { entry, attr });
+    //     }
+    //     Ok(list_tree_plus)
+    // }
 
     pub fn find_by_name(&self, tree_oid: Oid, name: &str) -> anyhow::Result<ObjectAttr> {
         let tree = self
@@ -264,6 +254,121 @@ impl GitRepo {
         })
     }
 
+    pub fn find_by_path<P: AsRef<Path>>(&self, path: P, oid: Oid) -> anyhow::Result<ObjectAttr> {
+        // HEAD → commit → root tree
+        let commit = self.inner.head()?.peel_to_commit()?;
+        let commit_time = commit.time();
+        let mut tree = commit.tree()?;
+
+        let d = path.as_ref();
+        let rel: Option<PathBuf> =
+            if d.as_os_str().is_empty() || d == Path::new(".") || d == Path::new("/") {
+                None
+            } else {
+                Some(d.strip_prefix("/").unwrap_or(d).to_path_buf())
+            };
+
+        if let Some(ref relp) = rel {
+            let e = tree
+                .get_path(relp)
+                .map_err(|_| anyhow!("directory {:?} not found in HEAD", relp))?;
+            if e.kind() != Some(ObjectType::Tree) {
+                return Err(anyhow!("'{}' is not a directory (tree)", relp.display()));
+            }
+            tree = self.inner.find_tree(e.id())?;
+        }
+
+        for entry in tree.iter() {
+            if entry.id() == oid {
+                let kind = entry.kind().ok_or_else(|| anyhow!("unknown entry kind"))?;
+                let size = if kind == ObjectType::Blob {
+                    self.inner.find_blob(entry.id())?.size() as u64
+                } else {
+                    0
+                };
+                let filemode = entry.filemode() as u32;
+
+                // Build full repo-relative path for name
+                let name = if let Some(ref relp) = rel {
+                    let mut full = relp.clone();
+                    full.push(entry.name().unwrap_or("<non-utf8>"));
+                    full.to_string_lossy().into_owned()
+                } else {
+                    entry.name().unwrap_or("<non-utf8>").to_string()
+                };
+
+                return Ok(ObjectAttr {
+                    name,
+                    oid: entry.id(),
+                    kind,
+                    filemode,
+                    size,
+                    commit_time,
+                });
+            }
+        }
+
+        Err(anyhow!(
+            "oid {} not found directly under {}",
+            oid,
+            rel.as_deref()
+                .map(|p| p.to_string_lossy().into_owned())
+                .unwrap_or_else(|| "<root>".into())
+        ))
+    }
+
+    pub fn find_in_commit(&self, commit: &str, oid: Oid) -> anyhow::Result<ObjectAttr> {
+        let commit_id = self
+            .commit_from_snap(commit)
+            .ok_or_else(|| anyhow!("Invalid folder name"))?;
+        let commit_obj = self.inner.find_commit_by_prefix(&commit_id)?;
+        let commit_time = commit_obj.time();
+        let tree = commit_obj.tree()?;
+
+        // If they asked for the root tree itself
+        if tree.id() == oid {
+            return Ok(ObjectAttr {
+                name: ".".into(),
+                oid,
+                kind: ObjectType::Tree,
+                filemode: 0o040000,
+                size: 0,
+                commit_time,
+            });
+        }
+
+        // Search recursively for a matching entry id
+        let mut found: Option<ObjectAttr> = None;
+        tree.walk(TreeWalkMode::PreOrder, |root, entry| {
+            if entry.id() == oid {
+                let kind = entry.kind().unwrap_or(ObjectType::Any);
+                let size = if kind == ObjectType::Blob {
+                    self.inner
+                        .find_blob(entry.id())
+                        .map(|b| b.size() as u64)
+                        .unwrap_or(0)
+                } else {
+                    0
+                };
+
+                let name = format!("{}{}", root, entry.name().unwrap_or("<non-utf8>"));
+
+                found = Some(ObjectAttr {
+                    name,
+                    oid,
+                    kind,
+                    filemode: entry.filemode() as u32, // 040000/100644/100755/120000/160000
+                    size,
+                    commit_time,
+                });
+                return TreeWalkResult::Abort;
+            }
+            TreeWalkResult::Ok
+        })?;
+
+        found.ok_or_else(|| anyhow!("oid {} not found in commit {}", oid, commit_obj.id()))
+    }
+
     pub fn read_log(&self) -> anyhow::Result<Vec<ObjectAttr>> {
         let limit = 20;
         let head = self.inner.head()?;
@@ -282,7 +387,6 @@ impl GitRepo {
             let commit = self.inner.find_commit(oid)?;
             let commit_name = format!("snap{}_{:.7}", i + 1, commit.id());
             out.push(ObjectAttr {
-                // Use the commit summary as a human-friendly "name"
                 name: commit_name,
                 oid,
                 kind: ObjectType::Commit,
@@ -314,6 +418,40 @@ impl GitRepo {
             });
         }
         Ok(entries)
+    }
+
+    pub fn attr_from_snap(&self, name: &str) -> anyhow::Result<ObjectAttr> {
+        let commit = self.find_commit_from_snap(name)?;
+        let name = name.to_string();
+        let oid = commit.id();
+        let kind = ObjectType::Commit;
+        let filemode = libc::S_IFDIR;
+        let size = 0;
+        let commit_time = commit.time();
+
+        Ok(ObjectAttr {
+            name,
+            oid,
+            kind,
+            filemode,
+            size,
+            commit_time,
+        })
+    }
+
+    pub fn find_commit_from_snap(&self, name: &str) -> anyhow::Result<Commit> {
+        let commit_id = match self.commit_from_snap(name) {
+            Some(id) => id,
+            None => bail!("Commit object {} not found", name),
+        };
+        let repo = &self.inner;
+        let commit = repo.find_commit_by_prefix(&commit_id)?;
+        Ok(commit)
+    }
+
+    fn commit_from_snap(&self, name: &str) -> Option<String> {
+        let commit_id = name.splitn(2, "_").last()?;
+        Some(commit_id.to_owned())
     }
 
     fn head_commit(&self) -> anyhow::Result<Commit> {

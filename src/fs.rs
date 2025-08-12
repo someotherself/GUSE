@@ -4,7 +4,7 @@ use std::fs::{File, OpenOptions};
 use std::hash::Hash;
 use std::io::{BufReader, BufWriter, Write};
 use std::os::unix::fs::{MetadataExt, PermissionsExt};
-use std::path::Path;
+use std::path::{Component, Path};
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::{Duration, UNIX_EPOCH};
 use std::{
@@ -15,11 +15,13 @@ use std::{
 };
 
 use anyhow::{Context, anyhow, bail};
-use git2::{ObjectType, Oid, Repository};
+use git2::{Commit, ObjectType, Oid, Repository};
 use rusqlite::{Connection, OptionalExtension, params};
+use tracing::info;
 
 use crate::fs::meta_db::MetaDb;
 use crate::fs::repo::GitRepo;
+use crate::mount;
 
 pub mod meta_db;
 pub mod repo;
@@ -98,7 +100,7 @@ impl FileType {
         match mode {
             ObjectType::Blob => Ok(FileType::RegularFile),
             ObjectType::Tree => Ok(FileType::Directory),
-            ObjectType::Tag => Ok(FileType::Symlink),
+            ObjectType::Commit => Ok(FileType::Directory),
             _ => bail!("Invalid file type {:?}", mode),
         }
     }
@@ -291,6 +293,10 @@ impl GitFs {
         self.next_inode
             .insert(repo_id, AtomicU64::from(repo_ino + 1));
 
+        let mut repo_attr: FileAttr = mount::dir_attr().into();
+        repo_attr.inode = repo_ino;
+        let mut nodes: Vec<(u64, String, FileAttr)> = vec![(ROOT_INO, repo_name.into(), repo_attr)];
+
         let live_ino = self.next_inode(repo_ino)?;
 
         let repo = git2::Repository::init(repo_path)?;
@@ -300,7 +306,10 @@ impl GitFs {
         let perms = 0o774;
         let st_mode = libc::S_IFDIR | perms;
         let live_attr = build_attr_dir(live_ino, st_mode);
-        connection.write_inodes_to_db(vec![(repo_ino, &live_name, live_attr)])?;
+
+        nodes.push((repo_ino, live_name, live_attr));
+        connection.write_inodes_to_db(nodes)?;
+
         let connection = Arc::from(RwLock::from(connection));
 
         let git_repo = GitRepo {
@@ -611,15 +620,22 @@ impl GitFs {
                 attr.inode = ino;
                 Ok(attr)
             }
-            FsOperationContext::InsideGitDir { ino: _ } => {
-                // TODO: Double check this
-                // let repo = self.get_repo(ino)?;
-                // let db_conn = self.open_meta_db(&repo.repo_dir)?;
-                // let path = db_conn.get_path_from_db(ino)?;
+            FsOperationContext::InsideGitDir { ino } => {
+                let repo = self.get_repo(ino)?;
+                let (commit_id, snap_name) = self.find_commit_in_gitdir(ino)?;
+                let oid = repo.connection.read().unwrap().get_oid_from_db(ino)?;
+                if oid == commit_id {
+                    // We are lookinga the commit itself
+                    let commit_attr = repo.attr_from_snap(&snap_name)?;
+                    let attr = self.object_to_file_attr(ino, &commit_attr)?;
+                    Ok(attr)
+                } else {
+                    let git_attr = repo.find_in_commit(&snap_name, oid)?;
+                    let mut attr = self.object_to_file_attr(ino, &git_attr)?;
+                    attr.inode = ino;
 
-                // let git_attr = repo.getattr(path)?;
-                // self.object_to_file_attr(ino, &git_attr)
-                todo!()
+                    Ok(attr)
+                }
             }
         }
     }
@@ -681,7 +697,7 @@ impl GitFs {
 
                 attr.inode = new_ino;
 
-                let nodes = vec![(ino, name, attr)];
+                let nodes = vec![(ino, name.into(), attr)];
                 self.write_inodes_to_db(ino, nodes)?;
 
                 Ok(attr)
@@ -696,6 +712,7 @@ impl GitFs {
         let ctx = FsOperationContext::get_operation(self, parent, true);
         match ctx? {
             FsOperationContext::Root => {
+                info!("1");
                 let mut entries: Vec<DirectoryEntry> = vec![];
                 for repo in self.repos_list.values() {
                     let repo_ino = GitFs::repo_id_to_ino(repo.repo_id);
@@ -708,6 +725,7 @@ impl GitFs {
                     );
                     entries.push(dir_entry);
                 }
+                info!("1");
                 Ok(entries)
             }
             FsOperationContext::RepoDir { ino } => {
@@ -723,21 +741,23 @@ impl GitFs {
                         libc::S_IFDIR,
                     );
                     entries.push(live_entry);
-                    // TODO: Add entries of snapshots
 
                     let object_entries = self.get_repo(ino)?.read_log()?;
+                    let mut nodes: Vec<(u64, String, FileAttr)> = vec![];
                     for commit in object_entries {
                         let entry_ino = self.next_inode(ino)?;
                         let attr = self.object_to_file_attr(entry_ino, &commit)?;
                         let entry = DirectoryEntry::new(
                             entry_ino,
                             attr.oid,
-                            commit.name,
+                            commit.name.clone(),
                             attr.kind,
                             attr.mode,
                         );
+                        nodes.push((ino, commit.name, attr));
                         entries.push(entry);
                     }
+                    self.write_inodes_to_db(ino, nodes)?;
                     Ok(entries)
                 } else {
                     bail!("Repo is not found!");
@@ -745,17 +765,22 @@ impl GitFs {
             }
             FsOperationContext::InsideLiveDir { ino } => {
                 let ignore_list = [OsString::from(".git"), OsString::from("fs_meta.db")];
-                let db_path = self.get_path_from_db(ino)?;
-                let path = self.repos_dir.join(&self.get_repo(ino)?.repo_dir);
-                let path = if db_path == PathBuf::from("live") {
-                    path
-                } else {
-                    path.join(db_path)
-                };
+                // let db_path = self.get_path_from_db(ino)?;
+                let path = self.build_full_path(ino)?;
+                dbg!(&path);
+                // let path = &self.repos_dir;
+                // dbg!(&path);
+                // let path = if db_path.file_name().unwrap() == PathBuf::from("live") {
+                //     path
+                // } else {
+                //     &path.join(db_path)
+                // };
                 let mut entries: Vec<DirectoryEntry> = vec![];
+                dbg!(&path);
                 for node in path.read_dir()? {
                     let node = node?;
                     let node_name = node.file_name();
+                    dbg!(&node_name.display());
                     let node_name_str = node_name.to_string_lossy();
                     if ignore_list.contains(&node_name) {
                         continue;
@@ -783,17 +808,31 @@ impl GitFs {
                 }
                 Ok(entries)
             }
-            FsOperationContext::InsideGitDir { ino: _ } => {
-                bail!("readdir inside GitDir not implemented");
-                // let object_entries = self.get_repo(ino)?.readdir_commit()?;
+            FsOperationContext::InsideGitDir { ino } => {
+                let repo = self.get_repo(ino)?;
+                let parent_attr = self.getattr(ino)?;
+                let git_objects = repo.list_tree(parent_attr.oid, None)?;
 
-                // for git_attr in object_entries {
-                //     let ino = self.next_inode(ino)?;
-                //     let attr = self.object_to_file_attr(ino, &git_attr)?;
-                //     let entry =
-                //         DirectoryEntry::new(ino, attr.oid, git_attr.name, attr.kind, attr.mode);
-                //     entries.push(entry);
-                // }
+                let mut nodes: Vec<(u64, String, FileAttr)> = vec![];
+
+                let mut entries: Vec<DirectoryEntry> = vec![];
+                for entry in git_objects {
+                    let mut attr = self.object_to_file_attr(ino, &entry)?;
+                    let entry_ino = self.next_inode(ino)?;
+                    attr.inode = entry_ino;
+                    let dir_entry = DirectoryEntry::new(
+                        entry_ino,
+                        entry.oid,
+                        entry.name.clone(),
+                        attr.kind,
+                        entry.filemode,
+                    );
+
+                    nodes.push((ino, entry.name, attr));
+                    entries.push(dir_entry);
+                }
+                self.write_inodes_to_db(ino, nodes)?;
+                Ok(entries)
             }
         }
     }
@@ -884,10 +923,27 @@ impl GitFs {
                 Ok(entries)
             }
             FsOperationContext::InsideGitDir { ino: _ } => {
+                // let repo  = self.get_repo(ino)?;
+                // let parent_attr = self.getattr(ino)?;
+                // let git_objects = repo.list_tree(self, parent_attr.oid)?;
+                // let mut entries: Vec<DirectoryEntryPlus> = vec![];
+                // for entry in git_objects {
+                //     let entry_name= entry.name.clone();
+                //     let dir_entry: DirectoryEntry = entry.into();
+                //     let attr = self.find_by_name(ino, &entry_name)?;
+                //     let attr = match attr {
+                //         Some(attr) => attr,
+                //         None => continue,
+                //     };
+                //     let dir_entry_plus = DirectoryEntryPlus { attr, entry: dir_entry};
+                //     entries.push(dir_entry_plus);
+                // }
+                // Ok(entries)
                 todo!()
             }
         }
-    }
+    } 
+
     pub fn find_by_name(&self, parent: u64, name: &str) -> anyhow::Result<Option<FileAttr>> {
         if !self.exists(parent)? {
             bail!("Parent does not exist!")
@@ -912,45 +968,60 @@ impl GitFs {
                 Ok(attr)
             }
             FsOperationContext::RepoDir { ino } => {
+                // DOUBLE CHECK. Move code from GitDir.
                 let repo_id = GitFs::ino_to_repo_id(ino);
-                match self.repos_list.get(&repo_id) {
-                    Some(_) => {}
+                let repo = match self.repos_list.get(&repo_id) {
+                    Some(repo) => repo,
                     None => return Ok(None),
                 };
-                let repo_ino = self.get_ino_from_db(ino, name)?;
-                let path = if name == "live" {
-                    self.build_full_path(ino)?
+                let attr = if name == "live" {
+                    let live_ino = self.get_ino_from_db(ino, "live")?;
+                    let path = self.repos_dir.join(&repo.repo_dir);
+                    let mut attr = self.attr_from_dir(path)?;
+                    attr.inode = live_ino;
+                    attr
                 } else {
-                    self.build_full_path(ino)?.join(name)
+                    match repo.attr_from_snap(name) {
+                        Ok(git_attr) => {
+                            let ino = repo.connection.read().unwrap().get_ino_from_db(ino, name)?;
+                            let mut attr = self.object_to_file_attr(ino, &git_attr)?;
+                            attr.inode = ino;
+                            attr
+                        }
+                        Err(_) => return Ok(None),
+                    }
                 };
-                let mut attr = self.attr_from_dir(path)?;
-                attr.inode = repo_ino;
-
                 Ok(Some(attr))
             }
             FsOperationContext::InsideLiveDir { ino } => {
+                // TODO Handle case if target it live itself
                 let repo_id = GitFs::ino_to_repo_id(ino);
                 match self.repos_list.get(&repo_id) {
                     Some(_) => {}
                     None => return Ok(None),
                 };
-                let _repo_ino = self.get_ino_from_db(ino, name)?;
                 let path = self.build_full_path(ino)?.join(name);
+                dbg!(&path);
                 let mut attr = self.attr_from_dir(path)?;
-                let ino = self.get_ino_from_db(ino, name)?;
-                attr.inode = ino;
+                let child_ino = self.get_ino_from_db(ino, name)?;
+                attr.inode = child_ino;
 
                 Ok(Some(attr))
             }
-            FsOperationContext::InsideGitDir { ino: _ } => {
-                // let parent_attr = self.getattr(ino)?;
-                // let repo = self.get_repo(ino)?;
-                // let git_attr = repo.find_by_name(parent_attr.oid, name)?;
-                // let conn = self.open_meta_db(&repo.repo_dir)?;
-                // let inode = conn.get_ino_from_db(ino, name)?;
-                // let file_attr = self.object_to_file_attr(inode, &git_attr)?;
-                // Ok(Some(file_attr))
-                bail!("Not implemented")
+            FsOperationContext::InsideGitDir { ino } => {
+                let repo = self.get_repo(ino)?;
+                let (_commit_id, _) = self.find_commit_in_gitdir(ino)?;
+                let _oid = match repo.connection.read().unwrap().get_oid_from_db(ino) {
+                    Ok(oid) => oid,
+                    Err(_) => return Ok(None),
+                };
+                // let tree_oid = repo.inner.find_commit(commit_id)?.id();
+                // let object_attr = repo.find_by_name(tree_oid, name)?;
+                // let child_ino = self.get_ino_from_db(ino, name)?;
+                // let mut attr = self.object_to_file_attr(ino, &object_attr)?;
+                // attr.inode = child_ino;
+                // return Ok(Some(attr))
+                todo!()
             }
         }
     }
@@ -1172,16 +1243,16 @@ impl GitFs {
     fn build_full_path(&self, ino: u64) -> anyhow::Result<PathBuf> {
         let repo = self.get_repo(ino)?;
         let repo_ino = GitFs::repo_id_to_ino(repo.repo_id);
-        let repo_name = &self.get_repo(ino)?.repo_dir;
-        let path = PathBuf::from(&self.repos_dir).join(repo_name);
+        let path = PathBuf::from(&self.repos_dir);
         if ino == repo_ino {
             return Ok(path);
         }
-        let db_path = self.get_path_from_db(ino)?;
-        if db_path == PathBuf::from("live") {
+        let db_path = &self.get_path_from_db(ino)?;
+        let filename = db_path.file_name().unwrap();
+        if filename == OsStr::new("live") {
             Ok(path)
         } else {
-            Ok(path.join(self.get_path_from_db(ino)?))
+            Ok(path.join(db_path))
         }
     }
 
@@ -1194,11 +1265,35 @@ impl GitFs {
     fn write_inodes_to_db(
         &self,
         parent: u64,
-        nodes: Vec<(u64, &str, FileAttr)>,
+        nodes: Vec<(u64, String, FileAttr)>,
     ) -> anyhow::Result<()> {
         let conn = &self.get_repo(parent)?.connection;
         let mut conn = conn.write().unwrap();
         conn.write_inodes_to_db(nodes)
+    }
+
+    fn find_commit_in_gitdir(&self, ino: u64) -> anyhow::Result<(Oid, String)> {
+        let repo = self.get_repo(ino)?;
+        // Will return something: "repo_name/snapX_XXXXX/path/to/file"
+        let path = self.get_path_from_db(ino)?;
+        let snap_name = path
+            .components()
+            .find_map(|c| match c {
+                Component::Normal(s) if s.to_string_lossy().starts_with("snap") => {
+                    Some(s.to_os_string())
+                }
+                _ => None,
+            })
+            .ok_or_else(|| anyhow!("Invalid path"))?
+            .into_string()
+            .unwrap();
+
+        let commit_id = repo
+            .find_commit_from_snap(&snap_name)
+            .ok()
+            .context(format!("Invalid folder name {}", snap_name))?
+            .id();
+        Ok((commit_id, snap_name))
     }
 }
 
