@@ -235,16 +235,17 @@ impl FsOperationContext {
 // Each repo has a repo_id--<16bits repo-id>
 // repo_id for repo 1       0000000000000001
 // ino for repo 1 root dir  0000000000000001000000000....0000
-// ino for repo_1 folder1:  0000000000000001000000000....0001
-// ino for repo_1 folder2:  0000000000000001000000000....0002
+// ino for repo_1 live dir: 0000000000000001000000000....0001
+// ino for repo_1 folder1:  0000000000000001000000000....0002
+// ino for repo_1 folder2:  0000000000000001000000000....0003
 
 // repo_id for repo 2       0000000000000002
 // ino for repo 2 root dir  0000000000000002000000000....0000
-// ino for repo_2 folder1:  0000000000000002000000000....0001
+// ino for repo_2 live dir: 0000000000000002000000000....0001
+// ino for repo_2 folder1:  0000000000000002000000000....0002
 
 // ino for repo folder  = (repo_id as u64) << 48 (see REPO_SHIFT)
 // repo_id from ino     = (ino >> REPO_SHIFT) as u16
-
 pub struct GitFs {
     pub repos_dir: PathBuf,
     pub repos_list: BTreeMap<u16, Arc<GitRepo>>, // <repo_id, repo>
