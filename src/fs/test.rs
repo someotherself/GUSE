@@ -87,24 +87,38 @@ fn test_mkdir_fetch() -> anyhow::Result<()> {
             // no files in live
 
             // READ DIR - GIT_DIR
-            let _attr = fs.getattr(commit_attr.inode)?;
-            let read_dir_commit = fs.readdir(commit_attr.inode)?;
-            for commit in read_dir_commit {
-                if commit.kind == FileType::Directory {
-                    let read_dir_walk_1 = fs.readdir(commit.inode)?;
-                    let _attr = fs.getattr(commit.inode)?;
-                    let _attr = fs
-                        .find_by_name(commit_attr.inode, &commit.name)?
-                        .with_context(|| anyhow!(""))?;
-                    for commit in read_dir_walk_1 {
-                        if commit.kind == FileType::Directory {
-                            let read_dir_walk_2 = fs.readdir(commit.inode)?;
-                            let _attr = fs.getattr(commit.inode)?;
-                            for commit in read_dir_walk_2 {
-                                if commit.kind == FileType::Directory {
-                                    let _read_dir_walk_3 = fs.readdir(commit.inode)?;
-                                    let _attr = fs.getattr(commit.inode)?;
-                                }
+            let commit_dir_ino = commit_attr.inode;
+
+            // level 1: entries under the commit dir
+            for e1 in fs.readdir(commit_dir_ino)? {
+                // verify: e1 is a direct child of commit_dir_ino
+                let a1 = fs
+                    .find_by_name(commit_dir_ino, &e1.name)?
+                    .with_context(|| {
+                        format!("missing '{}' under commit dir {}", e1.name, commit_dir_ino)
+                    })?;
+                assert_eq!(a1.inode, e1.inode);
+
+                if e1.kind == FileType::Directory {
+                    let d1_ino = e1.inode;
+
+                    // level 2: entries under that dir (e.g., "examples/*")
+                    for e2 in fs.readdir(d1_ino)? {
+                        // parent is d1_ino here
+                        let a2 = fs
+                            .find_by_name(d1_ino, &e2.name)?
+                            .with_context(|| format!("missing '{}' under {}", e2.name, d1_ino))?;
+                        assert_eq!(a2.inode, e2.inode);
+
+                        if e2.kind == FileType::Directory {
+                            let d2_ino = e2.inode;
+
+                            // level 3
+                            for e3 in fs.readdir(d2_ino)? {
+                                let a3 = fs.find_by_name(d2_ino, &e3.name)?.with_context(|| {
+                                    format!("missing '{}' under {}", e3.name, d2_ino)
+                                })?;
+                                assert_eq!(a3.inode, e3.inode);
                             }
                         }
                     }

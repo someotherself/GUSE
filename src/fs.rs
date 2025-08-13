@@ -802,9 +802,10 @@ impl GitFs {
             FsOperationContext::InsideGitDir { ino } => {
                 let repo = self.get_repo(ino)?;
                 let (commit_oid, _) = self.find_commit_in_gitdir(ino)?;
+                let oid = repo.connection.read().unwrap().get_oid_from_db(ino)?;
 
                 // If parent ino is gitdir
-                let parent_tree_oid = if ino == self.get_repo_ino(ino)? {
+                let parent_tree_oid = if oid == commit_oid {
                     // parent tree_oid is the commit.tree_oid()
                     let commit = repo.inner.find_commit(commit_oid)?;
                     commit.tree_id()
@@ -1022,13 +1023,16 @@ impl GitFs {
             }
             FsOperationContext::InsideGitDir { ino } => {
                 let repo = self.get_repo(ino)?;
-                let (commit_id, _) = self.find_commit_in_gitdir(ino)?;
-                let _oid = match repo.connection.read().unwrap().get_oid_from_db(ino) {
-                    Ok(oid) => oid,
-                    Err(_) => return Ok(None),
+                let (commit_oid, _) = self.find_commit_in_gitdir(ino)?;
+                let oid = repo.connection.read().unwrap().get_oid_from_db(ino)?;
+                let parent_tree_oid = if oid == commit_oid {
+                    let commit = repo.inner.find_commit(commit_oid)?;
+                    commit.tree_id()
+                } else {
+                    // else, get parent oid from db
+                    repo.connection.read().unwrap().get_oid_from_db(ino)?
                 };
-                let tree_oid = repo.inner.find_commit(commit_id)?.tree_id();
-                let object_attr = repo.find_by_name(tree_oid, name)?;
+                let object_attr = repo.find_by_name(parent_tree_oid, name)?;
                 let child_ino = self.get_ino_from_db(ino, name)?;
                 let mut attr = self.object_to_file_attr(child_ino, &object_attr)?;
                 attr.inode = child_ino;
