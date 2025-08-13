@@ -633,9 +633,7 @@ impl GitFs {
                     Ok(attr)
                 } else {
                     let git_attr = repo.find_in_commit(&snap_name, oid)?;
-                    dbg!(&git_attr.name);
                     let mut attr = self.object_to_file_attr(ino, &git_attr)?;
-                    dbg!(&attr.kind);
                     attr.inode = ino;
 
                     Ok(attr)
@@ -810,9 +808,13 @@ impl GitFs {
             }
             FsOperationContext::InsideGitDir { ino } => {
                 let repo = self.get_repo(ino)?;
-                let parent_attr = self.getattr(ino)?;
-                let git_objects = repo.list_tree(parent_attr.oid, None)?;
-
+                let parent_oid = repo.connection.read().unwrap().get_oid_from_db(ino)?;
+                let (commit_oid, _) = self.find_commit_in_gitdir(ino)?;
+                let git_objects = if parent_oid == commit_oid {
+                    repo.list_tree(parent_oid, None)?
+                } else {
+                    repo.list_tree(commit_oid, Some(parent_oid))?
+                };
                 let mut nodes: Vec<(u64, String, FileAttr)> = vec![];
 
                 let mut entries: Vec<DirectoryEntry> = vec![];

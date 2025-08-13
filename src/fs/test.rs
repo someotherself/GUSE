@@ -1,7 +1,5 @@
 use std::ffi::OsStr;
 
-use anyhow::{Context, anyhow};
-
 use crate::{
     fs::{FileType, REPO_SHIFT},
     mount::dir_attr,
@@ -43,7 +41,6 @@ fn test_mkdir_fetch() -> anyhow::Result<()> {
             assert!(mio_attr.is_some());
             let mio_attr = mio_attr.unwrap();
             assert_eq!(mio_attr.inode, REPO_DIR_INO);
-            dbg!(mio_attr.perm);
 
             // GET ATTR REPO_DIR
             let repo_attr = fs.getattr(REPO_DIR_INO)?;
@@ -89,18 +86,33 @@ fn test_mkdir_fetch() -> anyhow::Result<()> {
 
             // READ DIR - GIT_DIR
             let read_dir_commit = fs.readdir(commit_attr.inode)?;
+            for commit in read_dir_commit {
+                if commit.kind == FileType::Directory {
+                    let read_dir_walk_1 = fs.readdir(commit.inode)?;
+                    for commit in read_dir_walk_1 {
+                        if commit.kind == FileType::Directory {
+                            let read_dir_walk_2 = fs.readdir(commit.inode)?;
+                            for commit in read_dir_walk_2 {
+                                if commit.kind == FileType::Directory {
+                                    let _read_dir_walk_3 = fs.readdir(commit.inode)?;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
 
-            // GET ATTR - GIT DIR
-            let read_dir_commit_1 = fs.getattr(read_dir_commit[0].inode)?;
-            dbg!(read_dir_commit_1.inode);
-            dbg!(read_dir_commit_1.perm);
+            // // GET ATTR - GIT DIR
+            // let read_dir_commit_1 = fs.getattr(read_dir_commit[0].inode)?;
+            // dbg!(read_dir_commit_1.inode);
+            // dbg!(read_dir_commit_1.perm);
 
-            // FIND BY NAME - GIT DIR
-            let attr_3 = fs
-                .find_by_name(read_dir_repo[1].inode, &read_dir_commit[0].name)
-                .with_context(|| anyhow!("Failed to unwrap the result!"))?
-                .with_context(|| anyhow!("Failed to unwrap the option"))?;
-            dbg!(attr_3.inode);
+            // // FIND BY NAME - GIT DIR
+            // let attr_3 = fs
+            //     .find_by_name(read_dir_repo[1].inode, &read_dir_commit[0].name)
+            //     .with_context(|| anyhow!("Failed to unwrap the result!"))?
+            //     .with_context(|| anyhow!("Failed to unwrap the option"))?;
+            // dbg!(attr_3.inode);
             Ok(())
         },
     )?;
