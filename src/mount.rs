@@ -23,7 +23,7 @@ use crate::fs::{
     ROOT_INO, repo,
 };
 
-const TTL: Duration = Duration::from_secs(5);
+const TTL: Duration = Duration::from_secs(60);
 const FMODE_EXEC: i32 = 0x20;
 
 pub struct MountPoint {

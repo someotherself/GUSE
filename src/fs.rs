@@ -700,7 +700,7 @@ impl GitFs {
                 attr.inode = new_ino;
 
                 let nodes = vec![(ino, name.into(), attr)];
-                self.write_inodes_to_db(ino, nodes)?;
+                self.write_inodes_to_db(nodes)?;
 
                 Ok(attr)
             }
@@ -758,7 +758,7 @@ impl GitFs {
                         nodes.push((ino, commit.name, attr));
                         entries.push(entry);
                     }
-                    self.write_inodes_to_db(ino, nodes)?;
+                    self.write_inodes_to_db(nodes)?;
                     Ok(entries)
                 } else {
                     bail!("Repo is not found!");
@@ -800,19 +800,33 @@ impl GitFs {
             }
             FsOperationContext::InsideGitDir { ino } => {
                 let repo = self.get_repo(ino)?;
-                let parent_oid = repo.connection.read().unwrap().get_oid_from_db(ino)?;
                 let (commit_oid, _) = self.find_commit_in_gitdir(ino)?;
-                let git_objects = if parent_oid == commit_oid {
-                    repo.list_tree(parent_oid, None)?
+                let parent_ino = repo.connection.read().unwrap().get_parent_ino(ino)?;
+
+                // If parent ino is gitdir
+                let parent_tree_oid = if parent_ino == GitFs::repo_id_to_ino(repo.repo_id) {
+                    // parent tree_oid is the commit.tree_oid()
+                    let commit = repo.inner.find_commit(commit_oid)?;
+                    commit.tree_id()
                 } else {
-                    repo.list_tree(commit_oid, Some(parent_oid))?
+                    // else, get parent oid from db
+                    repo.connection
+                        .read()
+                        .unwrap()
+                        .get_oid_from_db(parent_ino)?
+                };
+
+                let git_objects = if parent_tree_oid == commit_oid {
+                    repo.list_tree(commit_oid, None)?
+                } else {
+                    repo.list_tree(commit_oid, Some(parent_tree_oid))?
                 };
                 let mut nodes: Vec<(u64, String, FileAttr)> = vec![];
 
                 let mut entries: Vec<DirectoryEntry> = vec![];
                 for entry in git_objects {
-                    let mut attr = self.object_to_file_attr(ino, &entry)?;
                     let entry_ino = self.next_inode(ino)?;
+                    let mut attr = self.object_to_file_attr(entry_ino, &entry)?;
                     attr.inode = entry_ino;
                     if attr.kind == FileType::Directory {
                         attr.perm = 0o555;
@@ -828,7 +842,7 @@ impl GitFs {
                     nodes.push((ino, entry.name, attr));
                     entries.push(dir_entry);
                 }
-                self.write_inodes_to_db(ino, nodes)?;
+                self.write_inodes_to_db(nodes)?;
                 Ok(entries)
             }
         }
@@ -980,9 +994,10 @@ impl GitFs {
                 } else {
                     match repo.attr_from_snap(name) {
                         Ok(git_attr) => {
-                            let ino = repo.connection.read().unwrap().get_ino_from_db(ino, name)?;
-                            let mut attr = self.object_to_file_attr(ino, &git_attr)?;
-                            attr.inode = ino;
+                            let child_ino =
+                                repo.connection.read().unwrap().get_ino_from_db(ino, name)?;
+                            let mut attr = self.object_to_file_attr(child_ino, &git_attr)?;
+                            attr.inode = child_ino;
                             attr
                         }
                         Err(_) => return Ok(None),
@@ -1014,7 +1029,7 @@ impl GitFs {
                 let tree_oid = repo.inner.find_commit(commit_id)?.tree_id();
                 let object_attr = repo.find_by_name(tree_oid, name)?;
                 let child_ino = self.get_ino_from_db(ino, name)?;
-                let mut attr = self.object_to_file_attr(ino, &object_attr)?;
+                let mut attr = self.object_to_file_attr(child_ino, &object_attr)?;
                 attr.inode = child_ino;
                 Ok(Some(attr))
             }
@@ -1257,12 +1272,11 @@ impl GitFs {
         conn.get_path_from_db(inode)
     }
 
-    fn write_inodes_to_db(
-        &self,
-        parent: u64,
-        nodes: Vec<(u64, String, FileAttr)>,
-    ) -> anyhow::Result<()> {
-        let conn = &self.get_repo(parent)?.connection;
+    fn write_inodes_to_db(&self, nodes: Vec<(u64, String, FileAttr)>) -> anyhow::Result<()> {
+        if nodes.is_empty() {
+            bail!("No entries received.")
+        }
+        let conn = &self.get_repo(nodes[0].0)?.connection;
         let mut conn = conn.write().unwrap();
         conn.write_inodes_to_db(nodes)
     }
