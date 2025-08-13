@@ -116,7 +116,7 @@ impl MetaDb {
 
             match row {
                 Some((parent, name)) => {
-                    if name == "live".to_owned() {
+                    if name == "live" {
                         curr = parent;
                         continue;
                     }

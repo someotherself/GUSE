@@ -2,8 +2,8 @@
 
 use anyhow::{Context, anyhow, bail};
 use git2::{
-    Commit, Direction, FetchOptions, ObjectType, Oid, Reference, RemoteCallbacks, Repository, Sort,
-    Time, Tree, TreeWalkMode, TreeWalkResult,
+    Commit, Direction, ErrorClass, ErrorCode, FetchOptions, ObjectType, Oid, Reference,
+    RemoteCallbacks, Repository, Sort, Time, Tree, TreeWalkMode, TreeWalkResult,
 };
 use std::{
     ffi::OsStr,
@@ -339,33 +339,35 @@ impl GitRepo {
 
         // Search recursively for a matching entry id
         let mut found: Option<ObjectAttr> = None;
-        tree.walk(TreeWalkMode::PreOrder, |root, entry| {
+        let walk_res = tree.walk(TreeWalkMode::PreOrder, |root, entry| {
             if entry.id() == oid {
-                let kind = entry.kind().unwrap_or(ObjectType::Any);
-                let size = if kind == ObjectType::Blob {
-                    self.inner
-                        .find_blob(entry.id())
-                        .map(|b| b.size() as u64)
-                        .unwrap_or(0)
-                } else {
-                    0
-                };
-
-                let name = format!("{}{}", root, entry.name().unwrap_or("<non-utf8>"));
-
+                // ... build ObjectAttr into `found` exactly like you already do ...
                 found = Some(ObjectAttr {
-                    name,
+                    name: format!("{}{}", root, entry.name().unwrap_or("<non-utf8>")),
                     oid,
-                    kind,
-                    filemode: entry.filemode() as u32, // 040000/100644/100755/120000/160000
-                    size,
+                    kind: entry.kind().unwrap_or(ObjectType::Any),
+                    filemode: entry.filemode() as u32,
+                    size: if entry.kind() == Some(ObjectType::Blob) {
+                        self.inner
+                            .find_blob(entry.id())
+                            .map(|b| b.size() as u64)
+                            .unwrap_or(0)
+                    } else {
+                        0
+                    },
                     commit_time,
                 });
-                return TreeWalkResult::Abort;
+                return TreeWalkResult::Abort; // triggers GIT_EUSER (-7)
             }
             TreeWalkResult::Ok
-        })?;
+        });
 
+        // Treat the intentional abort as success; propagate anything else
+        if let Err(e) = walk_res {
+            if !(e.class() == ErrorClass::Callback && e.code() == ErrorCode::User) {
+                return Err(e.into());
+            }
+        }
         found.ok_or_else(|| anyhow!("oid {} not found in commit {}", oid, commit_obj.id()))
     }
 

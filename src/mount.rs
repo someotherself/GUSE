@@ -141,7 +141,7 @@ impl fuser::Filesystem for GitFsAdapter {
         Ok(())
     }
 
-    fn destroy(&mut self) {}
+    fn destroy(&mut self) {} // parent_attrs.mode
 
     fn lookup(&mut self, req: &fuser::Request<'_>, parent: u64, name: &OsStr, reply: ReplyEntry) {
         let fs_arc = self.getfs();
@@ -152,7 +152,7 @@ impl fuser::Filesystem for GitFsAdapter {
             if !check_access(
                 parent_attrs.uid,
                 parent_attrs.gid,
-                parent_attrs.mode as u16,
+                parent_attrs.perm,
                 req.uid(),
                 req.gid(),
                 libc::X_OK,
@@ -339,22 +339,24 @@ impl fuser::Filesystem for GitFsAdapter {
                 return;
             }
         };
-
         match fs.getattr(ino) {
             Ok(attr) => {
                 if !check_access(
                     attr.uid,
                     attr.gid,
-                    attr.mode as u16,
+                    attr.perm,
                     req.uid(),
                     req.gid(),
                     access_mask,
                 ) {
                     reply.error(libc::EACCES);
                     return;
-                };
-                let fh = fs.open(ino, read, write).unwrap();
-                reply.opened(fh, 0)
+                }
+
+                match fs.open(ino, read, write) {
+                    Ok(fh) => reply.opened(fh, 0),
+                    Err(e) => reply.error(libc::EIO),
+                }
             }
             Err(e) => reply.error(libc::ENOENT),
         }
@@ -373,14 +375,14 @@ impl fuser::Filesystem for GitFsAdapter {
         let mask: u64 = (1u64 << 48) - 1;
         let parent_entries: Vec<DirectoryEntry> = vec![
             DirectoryEntry {
-                inode: ROOT_INO,
+                inode: ino,
                 oid: Oid::zero(),
                 kind: FileType::Directory,
                 name: ".".to_string(),
                 filemode: libc::S_IFDIR,
             },
             DirectoryEntry {
-                inode: ROOT_INO,
+                inode: fs.get_parent_ino(ino).unwrap_or(ROOT_INO),
                 oid: Oid::zero(),
                 kind: FileType::Directory,
                 name: "..".to_string(),
@@ -396,11 +398,7 @@ impl fuser::Filesystem for GitFsAdapter {
             entries.push(entry);
         }
 
-        for (i, entry) in entries
-            .into_iter()
-            .enumerate()
-            .skip(offset as usize)
-        {
+        for (i, entry) in entries.into_iter().enumerate().skip(offset as usize) {
             if reply.add(entry.inode, (i + 1) as i64, entry.kind.into(), entry.name) {
                 break;
             }
@@ -553,23 +551,6 @@ impl fuser::Filesystem for GitFsAdapter {
     fn opendir(&mut self, req: &fuser::Request<'_>, ino: u64, flags: i32, reply: ReplyOpen) {
         let fs_arc = self.getfs();
         let fs = fs_arc.lock().unwrap();
-        let (access_mask, _read, _write) = match flags & libc::O_ACCMODE {
-            libc::O_RDONLY => {
-                // Behavior is undefined, but most filesystems return EACCES
-                if flags & libc::O_TRUNC != 0 {
-                    return reply.error(EACCES);
-                }
-                (libc::R_OK, true, false)
-            }
-            libc::O_WRONLY => (libc::W_OK, false, true),
-            libc::O_RDWR => (libc::R_OK | libc::W_OK, true, true),
-            _ => return reply.error(libc::EINVAL),
-        };
-
-        if flags & O_DIRECTORY == 0 {
-            reply.error(ENOTDIR);
-            return;
-        }
 
         let attr = match fs.getattr(ino) {
             Ok(attr) => attr,
@@ -578,6 +559,29 @@ impl fuser::Filesystem for GitFsAdapter {
                 return reply.error(ENOENT);
             }
         };
+
+        if fuser::FileType::Directory != attr.kind.into() {
+            return reply.error(ENOTDIR);
+        }
+
+        let mut access_mask = match flags & libc::O_ACCMODE {
+            libc::O_RDONLY => libc::R_OK,
+            libc::O_WRONLY => libc::W_OK,
+            libc::O_RDWR => libc::R_OK | libc::W_OK,
+            _ => return reply.error(libc::EINVAL),
+        };
+
+        access_mask |= libc::X_OK;
+
+        if flags & O_DIRECTORY == 0 {
+            return reply.error(ENOTDIR);
+        }
+
+        info!(
+            "opendir ino={} kind={:?} uid:{} gid:{} perm={:#o}",
+            ino, attr.kind, attr.uid, attr.gid, attr.perm
+        );
+
         if check_access(
             attr.uid,
             attr.gid,
@@ -671,7 +675,7 @@ impl From<FileAttr> for fuser::FileAttr {
 pub const fn dir_attr() -> CreateFileAttr {
     CreateFileAttr {
         kind: FileType::Directory,
-        perm: 0o774,
+        perm: 0o775,
         uid: 0,
         mode: libc::S_IFDIR,
         gid: 0,
@@ -683,7 +687,7 @@ pub const fn dir_attr() -> CreateFileAttr {
 pub const fn file_attr() -> CreateFileAttr {
     CreateFileAttr {
         kind: FileType::RegularFile,
-        perm: 0o644,
+        perm: 0o655,
         uid: 0,
         mode: libc::S_IFREG,
         gid: 0,
