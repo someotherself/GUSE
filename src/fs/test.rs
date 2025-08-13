@@ -85,16 +85,20 @@ fn test_mkdir_fetch() -> anyhow::Result<()> {
             // no files in live
 
             // READ DIR - GIT_DIR
+            let _attr = fs.getattr(commit_attr.inode)?;
             let read_dir_commit = fs.readdir(commit_attr.inode)?;
             for commit in read_dir_commit {
                 if commit.kind == FileType::Directory {
                     let read_dir_walk_1 = fs.readdir(commit.inode)?;
+                    let _attr = fs.getattr(commit.inode)?;
                     for commit in read_dir_walk_1 {
                         if commit.kind == FileType::Directory {
                             let read_dir_walk_2 = fs.readdir(commit.inode)?;
+                            let _attr = fs.getattr(commit.inode)?;
                             for commit in read_dir_walk_2 {
                                 if commit.kind == FileType::Directory {
                                     let _read_dir_walk_3 = fs.readdir(commit.inode)?;
+                                    let _attr = fs.getattr(commit.inode)?;
                                 }
                             }
                         }

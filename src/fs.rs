@@ -632,7 +632,11 @@ impl GitFs {
                     let attr = self.object_to_file_attr(ino, &commit_attr)?;
                     Ok(attr)
                 } else {
-                    let git_attr = repo.find_in_commit(&snap_name, oid)?;
+                    let repo_ino = GitFs::repo_id_to_ino(repo.repo_id);
+                    let gitdir_attr = self
+                        .find_by_name(repo_ino, &snap_name)?
+                        .ok_or_else(|| anyhow!("Failed to retrieve the commit attribute"))?;
+                    let git_attr = repo.find_in_commit(gitdir_attr.oid, oid)?;
                     let mut attr = self.object_to_file_attr(ino, &git_attr)?;
                     attr.inode = ino;
 

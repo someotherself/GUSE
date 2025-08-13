@@ -317,11 +317,8 @@ impl GitRepo {
         ))
     }
 
-    pub fn find_in_commit(&self, commit: &str, oid: Oid) -> anyhow::Result<ObjectAttr> {
-        let commit_id = self
-            .commit_from_snap(commit)
-            .ok_or_else(|| anyhow!("Invalid folder name"))?;
-        let commit_obj = self.inner.find_commit_by_prefix(&commit_id)?;
+    pub fn find_in_commit(&self, commit_id: Oid, oid: Oid) -> anyhow::Result<ObjectAttr> {
+        let commit_obj = self.inner.find_commit(commit_id)?;
         let commit_time = commit_obj.time();
         let tree = commit_obj.tree()?;
 
@@ -336,7 +333,6 @@ impl GitRepo {
                 commit_time,
             });
         }
-
         // Search recursively for a matching entry id
         let mut found: Option<ObjectAttr> = None;
         let walk_res = tree.walk(TreeWalkMode::PreOrder, |root, entry| {
