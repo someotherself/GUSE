@@ -626,17 +626,14 @@ impl GitFs {
                 let repo = self.get_repo(ino)?;
                 let (commit_id, snap_name) = self.find_commit_in_gitdir(ino)?;
                 let oid = repo.connection.read().unwrap().get_oid_from_db(ino)?;
-                let repo_ino = self.get_repo_ino(ino)?;
-                let gitdir_attr = self
-                    .find_by_name(repo_ino, &snap_name)?
-                    .ok_or_else(|| anyhow!("Failed to retrieve the commit attribute"))?;
+                let gitdir_commit = repo.inner.find_commit(commit_id)?;
                 if oid == commit_id {
                     // We are looking at a commit
-                    let commit_attr = repo.attr_from_snap(gitdir_attr.oid, &snap_name)?;
+                    let commit_attr = repo.attr_from_snap(gitdir_commit.id(), &snap_name)?;
                     let attr = self.object_to_file_attr(ino, &commit_attr)?;
                     Ok(attr)
                 } else {
-                    let git_attr = repo.find_in_commit(gitdir_attr.oid, oid)?;
+                    let git_attr = repo.find_in_commit(gitdir_commit.id(), oid)?;
                     let mut attr = self.object_to_file_attr(ino, &git_attr)?;
                     attr.inode = ino;
 

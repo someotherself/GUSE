@@ -1,5 +1,7 @@
 use std::ffi::OsStr;
 
+use anyhow::{Context, anyhow};
+
 use crate::{
     fs::{FileType, REPO_SHIFT},
     mount::dir_attr,
@@ -91,6 +93,9 @@ fn test_mkdir_fetch() -> anyhow::Result<()> {
                 if commit.kind == FileType::Directory {
                     let read_dir_walk_1 = fs.readdir(commit.inode)?;
                     let _attr = fs.getattr(commit.inode)?;
+                    let _attr = fs
+                        .find_by_name(commit_attr.inode, &commit.name)?
+                        .with_context(|| anyhow!(""))?;
                     for commit in read_dir_walk_1 {
                         if commit.kind == FileType::Directory {
                             let read_dir_walk_2 = fs.readdir(commit.inode)?;
