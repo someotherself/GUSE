@@ -766,15 +766,7 @@ impl GitFs {
             }
             FsOperationContext::InsideLiveDir { ino } => {
                 let ignore_list = [OsString::from(".git"), OsString::from("fs_meta.db")];
-                // let db_path = self.get_path_from_db(ino)?;
                 let path = self.build_full_path(ino)?;
-                // let path = &self.repos_dir;
-                // dbg!(&path);
-                // let path = if db_path.file_name().unwrap() == PathBuf::from("live") {
-                //     path
-                // } else {
-                //     &path.join(db_path)
-                // };
                 let mut entries: Vec<DirectoryEntry> = vec![];
                 for node in path.read_dir()? {
                     let node = node?;
