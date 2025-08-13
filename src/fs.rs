@@ -626,16 +626,16 @@ impl GitFs {
                 let repo = self.get_repo(ino)?;
                 let (commit_id, snap_name) = self.find_commit_in_gitdir(ino)?;
                 let oid = repo.connection.read().unwrap().get_oid_from_db(ino)?;
+                let repo_ino = self.get_repo_ino(ino)?;
+                let gitdir_attr = self
+                    .find_by_name(repo_ino, &snap_name)?
+                    .ok_or_else(|| anyhow!("Failed to retrieve the commit attribute"))?;
                 if oid == commit_id {
                     // We are looking at a commit
-                    let commit_attr = repo.attr_from_snap(&snap_name)?;
+                    let commit_attr = repo.attr_from_snap(gitdir_attr.oid, &snap_name)?;
                     let attr = self.object_to_file_attr(ino, &commit_attr)?;
                     Ok(attr)
                 } else {
-                    let repo_ino = GitFs::repo_id_to_ino(repo.repo_id);
-                    let gitdir_attr = self
-                        .find_by_name(repo_ino, &snap_name)?
-                        .ok_or_else(|| anyhow!("Failed to retrieve the commit attribute"))?;
                     let git_attr = repo.find_in_commit(gitdir_attr.oid, oid)?;
                     let mut attr = self.object_to_file_attr(ino, &git_attr)?;
                     attr.inode = ino;
@@ -805,19 +805,15 @@ impl GitFs {
             FsOperationContext::InsideGitDir { ino } => {
                 let repo = self.get_repo(ino)?;
                 let (commit_oid, _) = self.find_commit_in_gitdir(ino)?;
-                let parent_ino = repo.connection.read().unwrap().get_parent_ino(ino)?;
 
                 // If parent ino is gitdir
-                let parent_tree_oid = if parent_ino == GitFs::repo_id_to_ino(repo.repo_id) {
+                let parent_tree_oid = if ino == self.get_repo_ino(ino)? {
                     // parent tree_oid is the commit.tree_oid()
                     let commit = repo.inner.find_commit(commit_oid)?;
                     commit.tree_id()
                 } else {
                     // else, get parent oid from db
-                    repo.connection
-                        .read()
-                        .unwrap()
-                        .get_oid_from_db(parent_ino)?
+                    repo.connection.read().unwrap().get_oid_from_db(ino)?
                 };
 
                 let git_objects = if parent_tree_oid == commit_oid {
@@ -996,10 +992,14 @@ impl GitFs {
                     attr.inode = live_ino;
                     attr
                 } else {
-                    match repo.attr_from_snap(name) {
+                    let child_ino = repo
+                        .connection
+                        .read()
+                        .unwrap()
+                        .get_ino_from_db(parent, name)?;
+                    let oid = repo.connection.read().unwrap().get_oid_from_db(child_ino)?;
+                    match repo.attr_from_snap(oid, name) {
                         Ok(git_attr) => {
-                            let child_ino =
-                                repo.connection.read().unwrap().get_ino_from_db(ino, name)?;
                             let mut attr = self.object_to_file_attr(child_ino, &git_attr)?;
                             attr.inode = child_ino;
                             attr
@@ -1300,13 +1300,20 @@ impl GitFs {
             .ok_or_else(|| anyhow!("Invalid path"))?
             .into_string()
             .unwrap();
+        let repo_ino = self.get_repo_ino(ino)?;
+        let snap_ino = repo
+            .connection
+            .read()
+            .unwrap()
+            .get_ino_from_db(repo_ino, &snap_name)?;
+        let snap_oid = repo.connection.read().unwrap().get_oid_from_db(snap_ino)?;
 
-        let commit_id = repo
-            .find_commit_from_snap(&snap_name)
-            .ok()
-            .context(format!("Invalid folder name {snap_name}"))?
-            .id();
-        Ok((commit_id, snap_name))
+        Ok((snap_oid, snap_name))
+    }
+
+    fn get_repo_ino(&self, ino: u64) -> anyhow::Result<u64> {
+        let repo_id = self.get_repo(ino)?.repo_id;
+        Ok(GitFs::repo_id_to_ino(repo_id))
     }
 }
 

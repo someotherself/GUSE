@@ -418,8 +418,8 @@ impl GitRepo {
         Ok(entries)
     }
 
-    pub fn attr_from_snap(&self, name: &str) -> anyhow::Result<ObjectAttr> {
-        let commit = self.find_commit_from_snap(name)?;
+    pub fn attr_from_snap(&self, commit_oid: Oid, name: &str) -> anyhow::Result<ObjectAttr> {
+        let commit = self.inner.find_commit(commit_oid)?;
         let name = name.to_string();
         let oid = commit.id();
         let kind = ObjectType::Commit;
@@ -435,21 +435,6 @@ impl GitRepo {
             size,
             commit_time,
         })
-    }
-
-    pub fn find_commit_from_snap(&self, name: &str) -> anyhow::Result<Commit> {
-        let commit_id = match self.commit_from_snap(name) {
-            Some(id) => id,
-            None => bail!("Commit object {} not found", name),
-        };
-        let repo = &self.inner;
-        let commit = repo.find_commit_by_prefix(&commit_id)?;
-        Ok(commit)
-    }
-
-    fn commit_from_snap(&self, name: &str) -> Option<String> {
-        let commit_id = name.splitn(2, "_").last()?;
-        Some(commit_id.to_owned())
     }
 
     fn head_commit(&self) -> anyhow::Result<Commit> {
