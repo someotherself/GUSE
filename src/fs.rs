@@ -625,7 +625,7 @@ impl GitFs {
             FsOperationContext::InsideGitDir { ino } => {
                 let repo = self.get_repo(ino)?;
                 let (commit_id, snap_name) = self.find_commit_in_gitdir(ino)?;
-                let oid = repo.connection.read().unwrap().get_oid_from_db(ino)?;
+                let oid = self.get_oid_from_db(ino)?;
                 let gitdir_commit = repo.inner.find_commit(commit_id)?;
                 if oid == commit_id {
                     // We are looking at a commit
@@ -802,7 +802,7 @@ impl GitFs {
             FsOperationContext::InsideGitDir { ino } => {
                 let repo = self.get_repo(ino)?;
                 let (commit_oid, _) = self.find_commit_in_gitdir(ino)?;
-                let oid = repo.connection.read().unwrap().get_oid_from_db(ino)?;
+                let oid = self.get_oid_from_db(ino)?;
 
                 // If parent ino is gitdir
                 let parent_tree_oid = if oid == commit_oid {
@@ -811,7 +811,7 @@ impl GitFs {
                     commit.tree_id()
                 } else {
                     // else, get parent oid from db
-                    repo.connection.read().unwrap().get_oid_from_db(ino)?
+                    self.get_oid_from_db(ino)?
                 };
 
                 let git_objects = if parent_tree_oid == commit_oid {
@@ -995,7 +995,7 @@ impl GitFs {
                         .read()
                         .unwrap()
                         .get_ino_from_db(parent, name)?;
-                    let oid = repo.connection.read().unwrap().get_oid_from_db(child_ino)?;
+                    let oid = self.get_oid_from_db(child_ino)?;
                     match repo.attr_from_snap(oid, name) {
                         Ok(git_attr) => {
                             let mut attr = self.object_to_file_attr(child_ino, &git_attr)?;
@@ -1024,13 +1024,13 @@ impl GitFs {
             FsOperationContext::InsideGitDir { ino } => {
                 let repo = self.get_repo(ino)?;
                 let (commit_oid, _) = self.find_commit_in_gitdir(ino)?;
-                let oid = repo.connection.read().unwrap().get_oid_from_db(ino)?;
+                let oid = self.get_oid_from_db(ino)?;
                 let parent_tree_oid = if oid == commit_oid {
                     let commit = repo.inner.find_commit(commit_oid)?;
                     commit.tree_id()
                 } else {
                     // else, get parent oid from db
-                    repo.connection.read().unwrap().get_oid_from_db(ino)?
+                    self.get_oid_from_db(ino)?
                 };
                 let object_attr = repo.find_by_name(parent_tree_oid, name)?;
                 let child_ino = self.get_ino_from_db(ino, name)?;
@@ -1277,6 +1277,12 @@ impl GitFs {
         conn.get_path_from_db(inode)
     }
 
+    fn get_oid_from_db(&self, ino: u64) -> anyhow::Result<Oid> {
+        let repo = self.get_repo(ino)?;
+        let conn = repo.connection.read().unwrap();
+        conn.get_oid_from_db(ino)
+    }
+
     fn write_inodes_to_db(&self, nodes: Vec<(u64, String, FileAttr)>) -> anyhow::Result<()> {
         if nodes.is_empty() {
             bail!("No entries received.")
@@ -1307,7 +1313,7 @@ impl GitFs {
             .read()
             .unwrap()
             .get_ino_from_db(repo_ino, &snap_name)?;
-        let snap_oid = repo.connection.read().unwrap().get_oid_from_db(snap_ino)?;
+        let snap_oid = self.get_oid_from_db(snap_ino)?;
 
         Ok((snap_oid, snap_name))
     }

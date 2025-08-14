@@ -418,6 +418,8 @@ impl GitRepo {
         Ok(entries)
     }
 
+    // The FileAttr for the snap folder will contain the commit id instead of tree
+    // This makes walking and getting info for the Fileattr easier
     pub fn attr_from_snap(&self, commit_oid: Oid, name: &str) -> anyhow::Result<ObjectAttr> {
         let commit = self.inner.find_commit(commit_oid)?;
         let name = name.to_string();
