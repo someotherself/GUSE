@@ -617,8 +617,8 @@ impl GitFs {
         match ctx? {
             FsOperationContext::Root => Ok(build_attr_dir(ROOT_INO, st_mode)),
             FsOperationContext::RepoDir { ino } => Ok(build_attr_dir(ino, st_mode)),
-            FsOperationContext::InsideLiveDir { ino } => self.getattr_live_dir(ino),
-            FsOperationContext::InsideGitDir { ino } => self.getattr_git_dir(ino),
+            FsOperationContext::InsideLiveDir { ino } => ops::getattr::getattr_live_dir(self, ino),
+            FsOperationContext::InsideGitDir { ino } => ops::getattr::getattr_git_dir(self, ino),
         }
     }
 
@@ -644,48 +644,15 @@ impl GitFs {
 
         let ctx = FsOperationContext::get_operation(self, parent, true);
         match ctx? {
-            FsOperationContext::Root => {
-                match repo::parse_mkdir_url(name)? {
-                    Some((url, repo_name)) => {
-                        let repo = self.new_repo(&repo_name)?;
-
-                        // fetch
-                        repo.fetch_anon(&url)?;
-                        let attr = self.getattr((repo.repo_id as u64) << REPO_SHIFT)?;
-                        Ok(attr)
-                    }
-                    None => {
-                        let repo = self.new_repo(name)?;
-                        let attr = self.getattr((repo.repo_id as u64) << REPO_SHIFT)?;
-
-                        Ok(attr)
-                    }
-                }
-            }
-            FsOperationContext::RepoDir { ino: _ } => {
-                bail!("This directory is read only.")
+            FsOperationContext::Root => ops::mkdir::mkdir_root(self, ROOT_INO, name, create_attr),
+            FsOperationContext::RepoDir { ino } => {
+                ops::mkdir::mkdir_repo(self, ino, name, create_attr)
             }
             FsOperationContext::InsideLiveDir { ino } => {
-                if self.exists_by_name(ino, name)? {
-                    bail!("Name already exists!")
-                }
-
-                let dir_path = self.build_path(ino, name)?;
-                std::fs::create_dir(dir_path)?;
-
-                let new_ino = self.next_inode(ino)?;
-
-                let mut attr: FileAttr = create_attr.into();
-
-                attr.inode = new_ino;
-
-                let nodes = vec![(ino, name.into(), attr)];
-                self.write_inodes_to_db(nodes)?;
-
-                Ok(attr)
+                ops::mkdir::mkdir_live(self, ino, name, create_attr)
             }
-            FsOperationContext::InsideGitDir { ino: _ } => {
-                bail!("This directory is read only!")
+            FsOperationContext::InsideGitDir { ino } => {
+                ops::mkdir::mkdir_git(self, ino, name, create_attr)
             }
         }
     }
@@ -693,10 +660,10 @@ impl GitFs {
     pub fn readdir(&self, parent: u64) -> anyhow::Result<Vec<DirectoryEntry>> {
         let ctx = FsOperationContext::get_operation(self, parent, true);
         match ctx? {
-            FsOperationContext::Root => self.readdir_root_dir(),
-            FsOperationContext::RepoDir { ino } => self.readdir_repo_dir(ino),
-            FsOperationContext::InsideLiveDir { ino } => self.readdir_live_dir(ino),
-            FsOperationContext::InsideGitDir { ino } => self.readdir_git_dir(ino),
+            FsOperationContext::Root => ops::readdir::readdir_root_dir(self),
+            FsOperationContext::RepoDir { ino } => ops::readdir::readdir_repo_dir(self, ino),
+            FsOperationContext::InsideLiveDir { ino } => ops::readdir::readdir_live_dir(self, ino),
+            FsOperationContext::InsideGitDir { ino } => ops::readdir::readdir_git_dir(self, ino),
         }
     }
 
@@ -816,82 +783,10 @@ impl GitFs {
         }
         let ctx = FsOperationContext::get_operation(self, parent, true);
         match ctx? {
-            FsOperationContext::Root => {
-                // Handle a look-up for url -> github.tokio-rs.tokio.git
-                let attr = self.repos_list.values().find_map(|repo| {
-                    if repo.repo_dir == name {
-                        let perms = 0o775;
-                        let st_mode = libc::S_IFDIR | perms;
-                        let repo_ino = (repo.repo_id as u64) << REPO_SHIFT;
-                        Some(build_attr_dir(repo_ino, st_mode))
-                    } else {
-                        None
-                    }
-                });
-                Ok(attr)
-            }
-            FsOperationContext::RepoDir { ino } => {
-                // DOUBLE CHECK. Move code from GitDir.
-                let repo_id = GitFs::ino_to_repo_id(ino);
-                let repo = match self.repos_list.get(&repo_id) {
-                    Some(repo) => repo,
-                    None => return Ok(None),
-                };
-                let attr = if name == "live" {
-                    let live_ino = self.get_ino_from_db(ino, "live")?;
-                    let path = self.repos_dir.join(&repo.repo_dir);
-                    let mut attr = self.attr_from_dir(path)?;
-                    attr.inode = live_ino;
-                    attr
-                } else {
-                    let child_ino = repo
-                        .connection
-                        .read()
-                        .unwrap()
-                        .get_ino_from_db(parent, name)?;
-                    let oid = self.get_oid_from_db(child_ino)?;
-                    match repo.attr_from_snap(oid, name) {
-                        Ok(git_attr) => {
-                            let mut attr = self.object_to_file_attr(child_ino, &git_attr)?;
-                            attr.inode = child_ino;
-                            attr
-                        }
-                        Err(_) => return Ok(None),
-                    }
-                };
-                Ok(Some(attr))
-            }
-            FsOperationContext::InsideLiveDir { ino } => {
-                // TODO Handle case if target it live itself
-                let repo_id = GitFs::ino_to_repo_id(ino);
-                match self.repos_list.get(&repo_id) {
-                    Some(_) => {}
-                    None => return Ok(None),
-                };
-                let path = self.build_full_path(ino)?.join(name);
-                let mut attr = self.attr_from_dir(path)?;
-                let child_ino = self.get_ino_from_db(ino, name)?;
-                attr.inode = child_ino;
-
-                Ok(Some(attr))
-            }
-            FsOperationContext::InsideGitDir { ino } => {
-                let repo = self.get_repo(ino)?;
-                let (commit_oid, _) = self.find_commit_in_gitdir(ino)?;
-                let oid = self.get_oid_from_db(ino)?;
-                let parent_tree_oid = if oid == commit_oid {
-                    let commit = repo.inner.find_commit(commit_oid)?;
-                    commit.tree_id()
-                } else {
-                    // else, get parent oid from db
-                    self.get_oid_from_db(ino)?
-                };
-                let object_attr = repo.find_by_name(parent_tree_oid, name)?;
-                let child_ino = self.get_ino_from_db(ino, name)?;
-                let mut attr = self.object_to_file_attr(child_ino, &object_attr)?;
-                attr.inode = child_ino;
-                Ok(Some(attr))
-            }
+            FsOperationContext::Root => ops::lookup::lookup_root(self, name),
+            FsOperationContext::RepoDir { ino } => ops::lookup::lookup_repo(self, ino, name),
+            FsOperationContext::InsideLiveDir { ino } => ops::lookup::lookup_live(self, ino, name),
+            FsOperationContext::InsideGitDir { ino } => ops::lookup::lookup_git(self, ino, name),
         }
     }
 }

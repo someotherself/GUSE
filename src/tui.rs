@@ -26,7 +26,7 @@ pub fn run_tui_app() -> anyhow::Result<()> {
 }
 
 impl App {
-    #[warn(clippy::single_match)]
+    #[allow(clippy::single_match)]
     fn run(&mut self, terminal: &mut DefaultTerminal) -> anyhow::Result<()> {
         while !self.exit {
             match crossterm::event::read()? {

@@ -5,137 +5,135 @@ use git2::Oid;
 
 use crate::fs::{DirectoryEntry, FileAttr, FileType, GitFs, REPO_SHIFT};
 
-impl GitFs {
-    pub fn readdir_root_dir(&self) -> anyhow::Result<Vec<DirectoryEntry>> {
-        let mut entries: Vec<DirectoryEntry> = vec![];
-        for repo in self.repos_list.values() {
-            let repo_ino = GitFs::repo_id_to_ino(repo.repo_id);
-            let dir_entry = DirectoryEntry::new(
-                repo_ino,
-                Oid::zero(),
-                repo.repo_dir.clone(),
-                FileType::Directory,
-                libc::S_IFDIR,
-            );
-            entries.push(dir_entry);
-        }
-        Ok(entries)
+pub fn readdir_root_dir(fs: &GitFs) -> anyhow::Result<Vec<DirectoryEntry>> {
+    let mut entries: Vec<DirectoryEntry> = vec![];
+    for repo in fs.repos_list.values() {
+        let repo_ino = GitFs::repo_id_to_ino(repo.repo_id);
+        let dir_entry = DirectoryEntry::new(
+            repo_ino,
+            Oid::zero(),
+            repo.repo_dir.clone(),
+            FileType::Directory,
+            libc::S_IFDIR,
+        );
+        entries.push(dir_entry);
     }
+    Ok(entries)
+}
 
-    pub fn readdir_repo_dir(&self, ino: u64) -> anyhow::Result<Vec<DirectoryEntry>> {
-        let repo_id = (ino >> REPO_SHIFT) as u16;
-        if self.repos_list.contains_key(&repo_id) {
-            let mut entries: Vec<DirectoryEntry> = vec![];
-            let live_ino = self.get_ino_from_db(ino, "live")?;
-            let live_entry = DirectoryEntry::new(
-                live_ino,
-                Oid::zero(),
-                "live".to_string(),
-                FileType::Directory,
-                libc::S_IFDIR,
-            );
-            entries.push(live_entry);
-
-            let object_entries = self.get_repo(ino)?.read_log()?;
-            let mut nodes: Vec<(u64, String, FileAttr)> = vec![];
-            for commit in object_entries {
-                let entry_ino = self.next_inode(ino)?;
-                let mut attr = self.object_to_file_attr(entry_ino, &commit)?;
-                attr.perm = 0o555;
-                let entry = DirectoryEntry::new(
-                    entry_ino,
-                    attr.oid,
-                    commit.name.clone(),
-                    attr.kind,
-                    attr.mode,
-                );
-                nodes.push((ino, commit.name, attr));
-                entries.push(entry);
-            }
-            self.write_inodes_to_db(nodes)?;
-            Ok(entries)
-        } else {
-            bail!("Repo is not found!");
-        }
-    }
-
-    pub fn readdir_live_dir(&self, ino: u64) -> anyhow::Result<Vec<DirectoryEntry>> {
-        let ignore_list = [OsString::from(".git"), OsString::from("fs_meta.db")];
-        let path = self.build_full_path(ino)?;
+pub fn readdir_repo_dir(fs: &GitFs, ino: u64) -> anyhow::Result<Vec<DirectoryEntry>> {
+    let repo_id = (ino >> REPO_SHIFT) as u16;
+    if fs.repos_list.contains_key(&repo_id) {
         let mut entries: Vec<DirectoryEntry> = vec![];
-        for node in path.read_dir()? {
-            let node = node?;
-            let node_name = node.file_name();
-            let node_name_str = node_name.to_string_lossy();
-            if ignore_list.contains(&node_name) {
-                continue;
-            }
-            let (kind, filemode) = if node.file_type()?.is_dir() {
-                (FileType::Directory, libc::S_IFDIR)
-            } else if node.file_type()?.is_file() {
-                (FileType::RegularFile, libc::S_IFREG)
-            } else {
-                (FileType::Symlink, libc::S_IFLNK)
-            };
-            let attr = self.find_by_name(ino, &node_name_str)?;
-            let attr = match attr {
-                Some(attr) => attr,
-                None => continue,
-            };
+        let live_ino = fs.get_ino_from_db(ino, "live")?;
+        let live_entry = DirectoryEntry::new(
+            live_ino,
+            Oid::zero(),
+            "live".to_string(),
+            FileType::Directory,
+            libc::S_IFDIR,
+        );
+        entries.push(live_entry);
+
+        let object_entries = fs.get_repo(ino)?.read_log()?;
+        let mut nodes: Vec<(u64, String, FileAttr)> = vec![];
+        for commit in object_entries {
+            let entry_ino = fs.next_inode(ino)?;
+            let mut attr = fs.object_to_file_attr(entry_ino, &commit)?;
+            attr.perm = 0o555;
             let entry = DirectoryEntry::new(
-                attr.inode,
-                Oid::zero(),
-                node_name_str.into(),
-                kind,
-                filemode,
+                entry_ino,
+                attr.oid,
+                commit.name.clone(),
+                attr.kind,
+                attr.mode,
             );
+            nodes.push((ino, commit.name, attr));
             entries.push(entry);
         }
+        fs.write_inodes_to_db(nodes)?;
         Ok(entries)
+    } else {
+        bail!("Repo is not found!");
     }
+}
 
-    pub fn readdir_git_dir(&self, ino: u64) -> anyhow::Result<Vec<DirectoryEntry>> {
-        let repo = self.get_repo(ino)?;
-        let (commit_oid, _) = self.find_commit_in_gitdir(ino)?;
-        let oid = self.get_oid_from_db(ino)?;
-
-        // If parent ino is gitdir
-        let parent_tree_oid = if oid == commit_oid {
-            // parent tree_oid is the commit.tree_oid()
-            let commit = repo.inner.find_commit(commit_oid)?;
-            commit.tree_id()
-        } else {
-            // else, get parent oid from db
-            self.get_oid_from_db(ino)?
-        };
-
-        let git_objects = if parent_tree_oid == commit_oid {
-            repo.list_tree(commit_oid, None)?
-        } else {
-            repo.list_tree(commit_oid, Some(parent_tree_oid))?
-        };
-        let mut nodes: Vec<(u64, String, FileAttr)> = vec![];
-
-        let mut entries: Vec<DirectoryEntry> = vec![];
-        for entry in git_objects {
-            let entry_ino = self.next_inode(ino)?;
-            let mut attr = self.object_to_file_attr(entry_ino, &entry)?;
-            attr.inode = entry_ino;
-            if attr.kind == FileType::Directory {
-                attr.perm = 0o555;
-            }
-            let dir_entry = DirectoryEntry::new(
-                entry_ino,
-                entry.oid,
-                entry.name.clone(),
-                attr.kind,
-                entry.filemode,
-            );
-
-            nodes.push((ino, entry.name, attr));
-            entries.push(dir_entry);
+pub fn readdir_live_dir(fs: &GitFs, ino: u64) -> anyhow::Result<Vec<DirectoryEntry>> {
+    let ignore_list = [OsString::from(".git"), OsString::from("fs_meta.db")];
+    let path = fs.build_full_path(ino)?;
+    let mut entries: Vec<DirectoryEntry> = vec![];
+    for node in path.read_dir()? {
+        let node = node?;
+        let node_name = node.file_name();
+        let node_name_str = node_name.to_string_lossy();
+        if ignore_list.contains(&node_name) {
+            continue;
         }
-        self.write_inodes_to_db(nodes)?;
-        Ok(entries)
+        let (kind, filemode) = if node.file_type()?.is_dir() {
+            (FileType::Directory, libc::S_IFDIR)
+        } else if node.file_type()?.is_file() {
+            (FileType::RegularFile, libc::S_IFREG)
+        } else {
+            (FileType::Symlink, libc::S_IFLNK)
+        };
+        let attr = fs.find_by_name(ino, &node_name_str)?;
+        let attr = match attr {
+            Some(attr) => attr,
+            None => continue,
+        };
+        let entry = DirectoryEntry::new(
+            attr.inode,
+            Oid::zero(),
+            node_name_str.into(),
+            kind,
+            filemode,
+        );
+        entries.push(entry);
     }
+    Ok(entries)
+}
+
+pub fn readdir_git_dir(fs: &GitFs, ino: u64) -> anyhow::Result<Vec<DirectoryEntry>> {
+    let repo = fs.get_repo(ino)?;
+    let (commit_oid, _) = fs.find_commit_in_gitdir(ino)?;
+    let oid = fs.get_oid_from_db(ino)?;
+
+    // If parent ino is gitdir
+    let parent_tree_oid = if oid == commit_oid {
+        // parent tree_oid is the commit.tree_oid()
+        let commit = repo.inner.find_commit(commit_oid)?;
+        commit.tree_id()
+    } else {
+        // else, get parent oid from db
+        fs.get_oid_from_db(ino)?
+    };
+
+    let git_objects = if parent_tree_oid == commit_oid {
+        repo.list_tree(commit_oid, None)?
+    } else {
+        repo.list_tree(commit_oid, Some(parent_tree_oid))?
+    };
+    let mut nodes: Vec<(u64, String, FileAttr)> = vec![];
+
+    let mut entries: Vec<DirectoryEntry> = vec![];
+    for entry in git_objects {
+        let entry_ino = fs.next_inode(ino)?;
+        let mut attr = fs.object_to_file_attr(entry_ino, &entry)?;
+        attr.inode = entry_ino;
+        if attr.kind == FileType::Directory {
+            attr.perm = 0o555;
+        }
+        let dir_entry = DirectoryEntry::new(
+            entry_ino,
+            entry.oid,
+            entry.name.clone(),
+            attr.kind,
+            entry.filemode,
+        );
+
+        nodes.push((ino, entry.name, attr));
+        entries.push(dir_entry);
+    }
+    fs.write_inodes_to_db(nodes)?;
+    Ok(entries)
 }
