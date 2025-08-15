@@ -1,6 +1,7 @@
 use anyhow::bail;
 
-use crate::fs::{CreateFileAttr, FileAttr, GitFs, REPO_SHIFT, repo};
+use crate::fs::fileattr::FileAttr;
+use crate::fs::{CreateFileAttr, GitFs, REPO_SHIFT, repo};
 
 pub fn mkdir_root(
     fs: &mut GitFs,

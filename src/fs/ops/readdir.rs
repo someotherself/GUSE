@@ -3,7 +3,38 @@ use std::ffi::OsString;
 use anyhow::bail;
 use git2::Oid;
 
-use crate::fs::{DirectoryEntry, FileAttr, FileType, GitFs, REPO_SHIFT};
+use crate::fs::{FileAttr, GitFs, REPO_SHIFT, fileattr::FileType};
+
+pub struct DirectoryEntry {
+    pub inode: u64,
+    // The git Oid (SHA-1)
+    pub oid: Oid,
+    // The real filename
+    pub name: String,
+    // File (Blob), Dir (Tree), or Symlink
+    pub kind: FileType,
+    // Mode (permissions)
+    pub filemode: u32,
+}
+
+impl DirectoryEntry {
+    pub fn new(inode: u64, oid: Oid, name: String, kind: FileType, filemode: u32) -> Self {
+        Self {
+            inode,
+            oid,
+            name,
+            kind,
+            filemode,
+        }
+    }
+}
+
+pub struct DirectoryEntryPlus {
+    // The the attributes in the normal struct
+    pub entry: DirectoryEntry,
+    // Plus the file attributes
+    pub attr: FileAttr,
+}
 
 pub fn readdir_root_dir(fs: &GitFs) -> anyhow::Result<Vec<DirectoryEntry>> {
     let mut entries: Vec<DirectoryEntry> = vec![];
