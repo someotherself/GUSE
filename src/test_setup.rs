@@ -48,7 +48,9 @@ where
 {
     let s = SETUP_RESULT.get_or(|| Mutex::new(None));
     {
-        let mut s = s.lock().unwrap();
+        let mut s = s
+            .lock()
+            .map_err(|e| anyhow::anyhow!("lock poisoned: {e}"))?;
         *s = Some(setup(init));
     }
     t(s)?;

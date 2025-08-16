@@ -19,7 +19,7 @@ use tracing_subscriber::EnvFilter;
 // impl std::io::Write for BufferGuard {
 //     fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
 //         let s = String::from_utf8_lossy(buf).to_string();
-//         let mut guard = self.0.lock().unwrap();
+//         let mut guard = self.0.lock().map_err(|e| anyhow::anyhow!("lock poisoned: {e}"))?;
 //         guard.push(s);
 //         Ok(buf.len())
 //     }

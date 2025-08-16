@@ -349,7 +349,9 @@ impl GitFs {
 
         let ctx = self.read_handles.write().unwrap().remove(&fh);
         if let Some(ctx) = ctx {
-            let ctx = ctx.lock().unwrap();
+            let ctx = ctx
+                .lock()
+                .map_err(|e| anyhow::anyhow!("lock poisoned: {e}"))?;
             let mut opened_files_for_read = self.opened_handes_for_read.write().unwrap();
             opened_files_for_read
                 .get_mut(&ctx.ino)
@@ -367,7 +369,9 @@ impl GitFs {
 
         let ctx = self.write_handles.write().unwrap().remove(&fh);
         if let Some(ctx) = ctx {
-            let ctx = ctx.lock().unwrap();
+            let ctx = ctx
+                .lock()
+                .map_err(|e| anyhow::anyhow!("lock poisoned: {e}"))?;
             let mut opened_files_for_write = self.opened_handes_for_write.write().unwrap();
             opened_files_for_write
                 .get_mut(&ctx.ino)
@@ -400,7 +404,9 @@ impl GitFs {
         let mut valid_fh = read_lock.get(&fh).is_some();
         let write_lock = self.write_handles.read().unwrap();
         if let Some(ctx) = write_lock.get(&fh) {
-            let mut ctx = ctx.lock().unwrap();
+            let mut ctx = ctx
+                .lock()
+                .map_err(|e| anyhow::anyhow!("lock poisoned: {e}"))?;
             // Read-write locks not implemented. Write operations not allowed yet.
             ctx.writer.as_mut().context("No writer")?.flush()?;
             let path = self.get_path_from_db(ctx.ino)?;
@@ -539,7 +545,9 @@ impl GitFs {
             FsOperationContext::Root => {
                 let mut entries: Vec<DirectoryEntryPlus> = vec![];
                 for repo in self.repos_list.values() {
-                    let repo = repo.lock().unwrap();
+                    let repo = repo
+                        .lock()
+                        .map_err(|e| anyhow::anyhow!("lock poisoned: {e}"))?;
                     let repo_ino = GitFs::repo_id_to_ino(repo.repo_id);
                     let attr = self.getattr(repo_ino)?;
                     let dir_entry = DirectoryEntry::new(
@@ -584,7 +592,9 @@ impl GitFs {
                 let db_path = self.get_path_from_db(ino)?;
                 let path = {
                     let repo = &self.get_repo(ino)?;
-                    let repo = repo.lock().unwrap();
+                    let repo = repo
+                        .lock()
+                        .map_err(|e| anyhow::anyhow!("lock poisoned: {e}"))?;
                     self.repos_dir.join(&repo.repo_dir)
                 };
                 let path = if db_path == PathBuf::from("live") {
@@ -705,7 +715,9 @@ impl GitFs {
     fn build_path(&self, parent: u64, name: &str) -> anyhow::Result<PathBuf> {
         let repo_name = {
             let repo = &self.get_repo(parent)?;
-            let repo = repo.lock().unwrap();
+            let repo = repo
+                .lock()
+                .map_err(|e| anyhow::anyhow!("lock poisoned: {e}"))?;
             repo.repo_dir.clone()
         };
         let path_to_repo = PathBuf::from(&self.repos_dir).join(repo_name);
@@ -717,10 +729,14 @@ impl GitFs {
 
         let conn_arc = {
             let repo = &self.get_repo(parent)?;
-            let repo = repo.lock().unwrap();
+            let repo = repo
+                .lock()
+                .map_err(|e| anyhow::anyhow!("lock poisoned: {e}"))?;
             std::sync::Arc::clone(&repo.connection)
         };
-        let conn = conn_arc.lock().unwrap();
+        let conn = conn_arc
+            .lock()
+            .map_err(|e| anyhow::anyhow!("lock poisoned: {e}"))?;
         let db_path = conn.get_path_from_db(parent)?;
         Ok(PathBuf::from(&self.repos_dir).join(db_path).join(name))
     }
@@ -779,10 +795,14 @@ impl GitFs {
     pub fn get_parent_ino(&self, ino: u64) -> anyhow::Result<u64> {
         let conn_arc = {
             let repo = &self.get_repo(ino)?;
-            let repo = repo.lock().unwrap();
+            let repo = repo
+                .lock()
+                .map_err(|e| anyhow::anyhow!("lock poisoned: {e}"))?;
             std::sync::Arc::clone(&repo.connection)
         };
-        let conn = conn_arc.lock().unwrap();
+        let conn = conn_arc
+            .lock()
+            .map_err(|e| anyhow::anyhow!("lock poisoned: {e}"))?;
         conn.get_parent_ino(ino)
     }
 
@@ -832,10 +852,14 @@ impl GitFs {
     fn exists_by_name(&self, parent: u64, name: &str) -> anyhow::Result<bool> {
         let conn_arc = {
             let repo = &self.get_repo(parent)?;
-            let repo = repo.lock().unwrap();
+            let repo = repo
+                .lock()
+                .map_err(|e| anyhow::anyhow!("lock poisoned: {e}"))?;
             std::sync::Arc::clone(&repo.connection)
         };
-        let conn = conn_arc.lock().unwrap();
+        let conn = conn_arc
+            .lock()
+            .map_err(|e| anyhow::anyhow!("lock poisoned: {e}"))?;
         conn.exists_by_name(parent, name)
     }
 
@@ -889,17 +913,23 @@ impl GitFs {
     fn get_ino_from_db(&self, parent: u64, name: &str) -> anyhow::Result<u64> {
         let conn_arc = {
             let repo = &self.get_repo(parent)?;
-            let repo = repo.lock().unwrap();
+            let repo = repo
+                .lock()
+                .map_err(|e| anyhow::anyhow!("lock poisoned: {e}"))?;
             std::sync::Arc::clone(&repo.connection)
         };
-        let conn = conn_arc.lock().unwrap();
+        let conn = conn_arc
+            .lock()
+            .map_err(|e| anyhow::anyhow!("lock poisoned: {e}"))?;
         conn.get_ino_from_db(parent, name)
     }
 
     fn build_full_path(&self, ino: u64) -> anyhow::Result<PathBuf> {
         let repo_ino = {
             let repo = self.get_repo(ino)?;
-            let repo = repo.lock().unwrap();
+            let repo = repo
+                .lock()
+                .map_err(|e| anyhow::anyhow!("lock poisoned: {e}"))?;
             GitFs::repo_id_to_ino(repo.repo_id)
         };
         let path = PathBuf::from(&self.repos_dir);
@@ -918,20 +948,28 @@ impl GitFs {
     fn get_path_from_db(&self, ino: u64) -> anyhow::Result<PathBuf> {
         let conn_arc = {
             let repo = &self.get_repo(ino)?;
-            let repo = repo.lock().unwrap();
+            let repo = repo
+                .lock()
+                .map_err(|e| anyhow::anyhow!("lock poisoned: {e}"))?;
             std::sync::Arc::clone(&repo.connection)
         };
-        let conn = conn_arc.lock().unwrap();
+        let conn = conn_arc
+            .lock()
+            .map_err(|e| anyhow::anyhow!("lock poisoned: {e}"))?;
         conn.get_path_from_db(ino)
     }
 
     fn get_oid_from_db(&self, ino: u64) -> anyhow::Result<Oid> {
         let conn_arc = {
             let repo = &self.get_repo(ino)?;
-            let repo = repo.lock().unwrap();
+            let repo = repo
+                .lock()
+                .map_err(|e| anyhow::anyhow!("lock poisoned: {e}"))?;
             std::sync::Arc::clone(&repo.connection)
         };
-        let conn = conn_arc.lock().unwrap();
+        let conn = conn_arc
+            .lock()
+            .map_err(|e| anyhow::anyhow!("lock poisoned: {e}"))?;
         conn.get_oid_from_db(ino)
     }
 
@@ -941,10 +979,14 @@ impl GitFs {
         }
         let conn_arc = {
             let repo = &self.get_repo(nodes[0].0)?;
-            let repo = repo.lock().unwrap();
+            let repo = repo
+                .lock()
+                .map_err(|e| anyhow::anyhow!("lock poisoned: {e}"))?;
             std::sync::Arc::clone(&repo.connection)
         };
-        let mut conn = conn_arc.lock().unwrap();
+        let mut conn = conn_arc
+            .lock()
+            .map_err(|e| anyhow::anyhow!("lock poisoned: {e}"))?;
         conn.write_inodes_to_db(nodes)
     }
 
@@ -965,7 +1007,9 @@ impl GitFs {
         let repo_ino = self.get_repo_ino(ino)?;
         let snap_ino = {
             let repo = self.get_repo(ino)?;
-            let repo = repo.lock().unwrap();
+            let repo = repo
+                .lock()
+                .map_err(|e| anyhow::anyhow!("lock poisoned: {e}"))?;
             repo.connection
                 .lock()
                 .unwrap()

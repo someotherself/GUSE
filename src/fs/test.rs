@@ -21,17 +21,19 @@ fn test_mkdir_fetch() -> anyhow::Result<()> {
         },
         |_| -> anyhow::Result<()> {
             let fs = get_fs();
-            let mut fs = fs.lock().unwrap();
+            let mut fs = fs
+                .lock()
+                .map_err(|e| anyhow::anyhow!("lock poisoned: {e}"))?;
 
             let create_attr = dir_attr();
             // let name = OsStr::new("github.tokio-rs.mio.git");
             let name = OsStr::new("github.someotherself.git_rust.git");
             fs.mkdir(ROOT_INO, name, create_attr)?;
 
-            // // GET ATTR ROOT
-            // let root_attr = fs.getattr(ROOT_INO)?;
-            // assert_eq!(root_attr.inode, ROOT_INO);
-            // assert_eq!(root_attr.kind, FileType::Directory);
+            // GET ATTR ROOT
+            let root_attr = fs.getattr(ROOT_INO)?;
+            assert_eq!(root_attr.inode, ROOT_INO);
+            assert_eq!(root_attr.kind, FileType::Directory);
 
             // READ DIR ROOT
             let read_dir_root = fs.readdir(ROOT_INO)?;
@@ -104,7 +106,9 @@ fn test_mkdir_fetch() -> anyhow::Result<()> {
             assert_eq!(read_dir_root[0].name, "git_rust");
             let parent_for_mio = {
                 let repo = fs.get_repo(read_dir_root[0].inode)?;
-                let repo = repo.lock().unwrap();
+                let repo = repo
+                    .lock()
+                    .map_err(|e| anyhow::anyhow!("lock poisoned: {e}"))?;
                 repo.connection
                     .lock()
                     .unwrap()
@@ -136,7 +140,7 @@ fn test_mkdir_fetch() -> anyhow::Result<()> {
 //         },
 //         |_| -> anyhow::Result<()> {
 //             let fs = get_fs();
-//             let mut fs = fs.lock().unwrap();
+//             let mut fs = fs.lock().map_err(|e| anyhow::anyhow!("lock poisoned: {e}"))?;
 
 //             let create_attr = dir_attr();
 //             let name = OsStr::new("new_folder");

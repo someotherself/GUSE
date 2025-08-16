@@ -144,7 +144,13 @@ impl fuser::Filesystem for GitFsAdapter {
 
     fn lookup(&mut self, req: &fuser::Request<'_>, parent: u64, name: &OsStr, reply: ReplyEntry) {
         let fs_arc = self.getfs();
-        let fs = fs_arc.lock().unwrap();
+        let fs = match fs_arc.lock() {
+            Ok(fs) => fs,
+            Err(e) => {
+                eprintln!("fs mutex poisoned: {e}");
+                return reply.error(EIO);
+            }
+        };
         let attr_result = fs.getattr(parent);
         if attr_result.is_ok() {
             let parent_attrs = attr_result.unwrap();
@@ -196,7 +202,13 @@ impl fuser::Filesystem for GitFsAdapter {
 
     fn getattr(&mut self, _req: &fuser::Request<'_>, ino: u64, _fh: Option<u64>, reply: ReplyAttr) {
         let fs_arc = self.getfs();
-        let fs = fs_arc.lock().unwrap();
+        let fs = match fs_arc.lock() {
+            Ok(fs) => fs,
+            Err(e) => {
+                eprintln!("fs mutex poisoned: {e}");
+                return reply.error(EIO);
+            }
+        };
 
         match fs.exists(ino) {
             Err(e) => {
@@ -244,7 +256,13 @@ impl fuser::Filesystem for GitFsAdapter {
         reply: ReplyEntry,
     ) {
         let fs_arc = self.getfs();
-        let mut fs = fs_arc.lock().unwrap();
+        let mut fs = match fs_arc.lock() {
+            Ok(fs) => fs,
+            Err(e) => {
+                eprintln!("fs mutex poisoned: {e}");
+                return reply.error(EIO);
+            }
+        };
         match fs.getattr(parent) {
             Ok(attr) => {
                 if !check_access(
@@ -313,7 +331,13 @@ impl fuser::Filesystem for GitFsAdapter {
 
     fn open(&mut self, req: &fuser::Request<'_>, ino: u64, flags: i32, reply: ReplyOpen) {
         let fs_arc = self.getfs();
-        let fs = fs_arc.lock().unwrap();
+        let fs = match fs_arc.lock() {
+            Ok(fs) => fs,
+            Err(e) => {
+                eprintln!("fs mutex poisoned: {e}");
+                return reply.error(EIO);
+            }
+        };
         if ino == ROOT_INO {
             reply.error(EISDIR);
             return;
@@ -370,7 +394,13 @@ impl fuser::Filesystem for GitFsAdapter {
         mut reply: fuser::ReplyDirectory,
     ) {
         let fs_arc = self.getfs();
-        let fs: std::sync::MutexGuard<'_, GitFs> = fs_arc.lock().unwrap();
+        let fs: std::sync::MutexGuard<'_, GitFs> = match fs_arc.lock() {
+            Ok(fs) => fs,
+            Err(e) => {
+                eprintln!("fs mutex poisoned: {e}");
+                return reply.error(EIO);
+            }
+        };
         let mask: u64 = (1u64 << 48) - 1;
         let parent_entries: Vec<DirectoryEntry> = vec![
             DirectoryEntry {
@@ -415,7 +445,13 @@ impl fuser::Filesystem for GitFsAdapter {
     //     mut reply: fuser::ReplyDirectoryPlus,
     // ) {
     //     let fs_arc = self.getfs();
-    //     let fs: std::sync::MutexGuard<'_, GitFs> = fs_arc.lock().unwrap();
+    //     let fs: std::sync::MutexGuard<'_, GitFs> = match fs_arc.lock() {
+    //     Ok(fs) => fs,
+    //     Err(e) => {
+    //         eprintln!("fs mutex poisoned: {e}");
+    //         return reply.error(EIO)
+    //     },
+    // };
     //     let mask: u64 = (1u64 << 48) - 1;
     //     let parent_entries: Vec<DirectoryEntry> = vec![
     //         DirectoryEntry {
@@ -549,7 +585,13 @@ impl fuser::Filesystem for GitFsAdapter {
 
     fn opendir(&mut self, req: &fuser::Request<'_>, ino: u64, flags: i32, reply: ReplyOpen) {
         let fs_arc = self.getfs();
-        let fs = fs_arc.lock().unwrap();
+        let fs = match fs_arc.lock() {
+            Ok(fs) => fs,
+            Err(e) => {
+                eprintln!("fs mutex poisoned: {e}");
+                return reply.error(EIO);
+            }
+        };
 
         let attr = match fs.getattr(ino) {
             Ok(attr) => attr,

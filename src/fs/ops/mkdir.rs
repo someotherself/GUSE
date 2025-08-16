@@ -14,11 +14,15 @@ pub fn mkdir_root(
             println!("fetching repo {}", &repo_name);
             let repo = fs.new_repo(&repo_name)?;
             {
-                let repo = repo.lock().unwrap();
+                let repo = repo
+                    .lock()
+                    .map_err(|e| anyhow::anyhow!("lock poisoned: {e}"))?;
                 repo.fetch_anon(&url)?;
             }
             let repo_id = {
-                let repo = repo.lock().unwrap();
+                let repo = repo
+                    .lock()
+                    .map_err(|e| anyhow::anyhow!("lock poisoned: {e}"))?;
                 repo.repo_id
             };
             let attr = fs.getattr((repo_id as u64) << REPO_SHIFT)?;
@@ -28,7 +32,9 @@ pub fn mkdir_root(
             println!("Creating repo {name}");
             let repo_id = {
                 let repo = fs.new_repo(name)?;
-                let repo = repo.lock().unwrap();
+                let repo = repo
+                    .lock()
+                    .map_err(|e| anyhow::anyhow!("lock poisoned: {e}"))?;
                 repo.repo_id
             };
             let attr = fs.getattr((repo_id as u64) << REPO_SHIFT)?;
