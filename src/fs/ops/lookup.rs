@@ -1,13 +1,10 @@
-use crate::fs::{FileAttr, GitFs, REPO_SHIFT, build_attr_dir};
+use crate::fs::{FileAttr, FsError, FsResult, GitFs, REPO_SHIFT, build_attr_dir};
 
-pub fn lookup_root(fs: &GitFs, name: &str) -> anyhow::Result<Option<FileAttr>> {
+pub fn lookup_root(fs: &GitFs, name: &str) -> FsResult<Option<FileAttr>> {
     // Handle a look-up for url -> github.tokio-rs.tokio.git
     let attr = fs.repos_list.values().find_map(|repo| {
         let (repo_name, repo_id) = {
-            let repo = repo
-                .lock()
-                .map_err(|e| anyhow::anyhow!("lock poisoned: {e}"))
-                .ok()?;
+            let repo = repo.lock().map_err(|_| FsError::LockPoisoned).ok()?;
             (repo.repo_dir.clone(), repo.repo_id)
         };
         if repo_name == name {
@@ -22,7 +19,7 @@ pub fn lookup_root(fs: &GitFs, name: &str) -> anyhow::Result<Option<FileAttr>> {
     Ok(attr)
 }
 
-pub fn lookup_repo(fs: &GitFs, parent: u64, name: &str) -> anyhow::Result<Option<FileAttr>> {
+pub fn lookup_repo(fs: &GitFs, parent: u64, name: &str) -> FsResult<Option<FileAttr>> {
     // DOUBLE CHECK. Move code from GitDir.
     let repo_id = GitFs::ino_to_repo_id(parent);
     let repo = match fs.repos_list.get(&repo_id) {
@@ -32,9 +29,7 @@ pub fn lookup_repo(fs: &GitFs, parent: u64, name: &str) -> anyhow::Result<Option
     let attr = if name == "live" {
         let live_ino = fs.get_ino_from_db(parent, "live")?;
         let path = {
-            let repo = repo
-                .lock()
-                .map_err(|e| anyhow::anyhow!("lock poisoned: {e}"))?;
+            let repo = repo.lock().map_err(|_| FsError::LockPoisoned)?;
             fs.repos_dir.join(&repo.repo_dir)
         };
         let mut attr = fs.attr_from_dir(path)?;
@@ -42,9 +37,7 @@ pub fn lookup_repo(fs: &GitFs, parent: u64, name: &str) -> anyhow::Result<Option
         attr
     } else {
         let child_ino = {
-            let repo = repo
-                .lock()
-                .map_err(|e| anyhow::anyhow!("lock poisoned: {e}"))?;
+            let repo = repo.lock().map_err(|_| FsError::LockPoisoned)?;
             repo.connection
                 .lock()
                 .unwrap()
@@ -63,7 +56,7 @@ pub fn lookup_repo(fs: &GitFs, parent: u64, name: &str) -> anyhow::Result<Option
     Ok(Some(attr))
 }
 
-pub fn lookup_live(fs: &GitFs, parent: u64, name: &str) -> anyhow::Result<Option<FileAttr>> {
+pub fn lookup_live(fs: &GitFs, parent: u64, name: &str) -> FsResult<Option<FileAttr>> {
     // TODO Handle case if target it live itself
     let repo_id = GitFs::ino_to_repo_id(parent);
     match fs.repos_list.get(&repo_id) {
@@ -78,14 +71,12 @@ pub fn lookup_live(fs: &GitFs, parent: u64, name: &str) -> anyhow::Result<Option
     Ok(Some(attr))
 }
 
-pub fn lookup_git(fs: &GitFs, parent: u64, name: &str) -> anyhow::Result<Option<FileAttr>> {
+pub fn lookup_git(fs: &GitFs, parent: u64, name: &str) -> FsResult<Option<FileAttr>> {
     let repo = fs.get_repo(parent)?;
     let (commit_oid, _) = fs.find_commit_in_gitdir(parent)?;
     let oid = fs.get_oid_from_db(parent)?;
     let parent_tree_oid = if oid == commit_oid {
-        let repo = repo
-            .lock()
-            .map_err(|e| anyhow::anyhow!("lock poisoned: {e}"))?;
+        let repo = repo.lock().map_err(|_| FsError::LockPoisoned)?;
         let commit = repo.inner.find_commit(commit_oid)?;
         commit.tree_id()
     } else {
@@ -93,9 +84,7 @@ pub fn lookup_git(fs: &GitFs, parent: u64, name: &str) -> anyhow::Result<Option<
         fs.get_oid_from_db(parent)?
     };
     let object_attr = {
-        let repo = repo
-            .lock()
-            .map_err(|e| anyhow::anyhow!("lock poisoned: {e}"))?;
+        let repo = repo.lock().map_err(|_| FsError::LockPoisoned)?;
         repo.find_by_name(parent_tree_oid, name)?
     };
     let child_ino = fs.get_ino_from_db(parent, name)?;

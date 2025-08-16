@@ -5,7 +5,7 @@ use std::{
 
 use thread_local::ThreadLocal;
 
-use crate::fs::GitFs;
+use crate::fs::{FsError, FsResult, GitFs};
 
 pub static SETUP_RESULT: ThreadLocal<Mutex<Option<SetupResult>>> = ThreadLocal::new();
 
@@ -42,15 +42,13 @@ fn setup(setup: TestSetup) -> SetupResult {
     }
 }
 
-pub fn run_test<T>(init: TestSetup, t: T) -> anyhow::Result<()>
+pub fn run_test<T>(init: TestSetup, t: T) -> FsResult<()>
 where
-    T: Fn(&Mutex<Option<SetupResult>>) -> anyhow::Result<()>,
+    T: Fn(&Mutex<Option<SetupResult>>) -> FsResult<()>,
 {
     let s = SETUP_RESULT.get_or(|| Mutex::new(None));
     {
-        let mut s = s
-            .lock()
-            .map_err(|e| anyhow::anyhow!("lock poisoned: {e}"))?;
+        let mut s = s.lock().map_err(|_| FsError::LockPoisoned)?;
         *s = Some(setup(init));
     }
     t(s)?;

@@ -4,7 +4,6 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-anyhow = "1.0.98"
 clap = { version = "4.5.42", features = ["cargo"] }
 libc = "0.2.174"
 tracing = { version = "0.1.41", features = ["max_level_trace", "release_max_level_info"] }
@@ -14,3 +13,4 @@ fuser = "0.15.1"
 rusqlite = "0.37.0"
 ratatui = "0.29.0"
 thread_local = "1.1.9"
+thiserror = "2.0.14"

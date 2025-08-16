@@ -13,9 +13,9 @@ use std::{
     time::SystemTime,
 };
 
-use anyhow::{Context, anyhow, bail};
 use git2::{ObjectType, Oid, Repository};
 use rusqlite::{Connection, OptionalExtension, params};
+use thiserror::Error;
 
 use crate::fs::fileattr::{
     CreateFileAttr, FileAttr, FileType, ObjectAttr, TimesFileAttr, build_attr_dir,
@@ -61,7 +61,7 @@ enum FsOperationContext {
 }
 
 impl FsOperationContext {
-    fn get_operation(fs: &GitFs, ino: u64, _is_parent: bool) -> anyhow::Result<Self> {
+    fn get_operation(fs: &GitFs, ino: u64, _is_parent: bool) -> FsResult<Self> {
         let mask: u64 = (1u64 << 48) - 1;
         let repo_dir = GitFs::ino_to_repo_id(ino);
         if ino == ROOT_INO {
@@ -73,6 +73,64 @@ impl FsOperationContext {
             Ok(FsOperationContext::InsideLiveDir { ino })
         } else {
             Ok(FsOperationContext::InsideGitDir { ino })
+        }
+    }
+}
+
+pub type FsResult<T> = Result<T, FsError>;
+
+#[derive(Debug, Error)]
+pub enum FsError {
+    #[error("IO error: {source}")]
+    Io {
+        #[from]
+        source: std::io::Error,
+    },
+    #[error("Repo does not exist")]
+    NoRepo,
+    #[error("GitFs is in read only")]
+    ReadOnly,
+    #[error("Already exists")]
+    AlreadyExists,
+    #[error("Invalid input")]
+    InvalidInput,
+    #[error("permission denied")]
+    PermissionDenied,
+    #[error("busy")]
+    Busy,
+    #[error("Is a directory")]
+    IsDirectory,
+    #[error("Is a file")]
+    NotADirectory,
+    #[error("lock poisoned")]
+    LockPoisoned,
+    #[error("internal: {0}")]
+    Internal(String),
+    #[error("not found: {thing}")]
+    NotFound { thing: String },
+    #[error(transparent)]
+    Db(#[from] rusqlite::Error),
+    #[error(transparent)]
+    Git(#[from] git2::Error),
+}
+
+impl From<FsError> for i32 {
+    fn from(e: FsError) -> i32 {
+        match e {
+            FsError::Git(_) => libc::ENOENT,
+            FsError::ReadOnly => libc::EROFS,
+            FsError::InvalidInput => libc::EINVAL,
+            FsError::Db(_) => libc::ENOENT,
+            FsError::IsDirectory => libc::EISDIR,
+            FsError::NotADirectory => libc::ENOTDIR,
+            FsError::Io { source: _ } => libc::EIO,
+            FsError::NotFound { thing: _ } => libc::ENOENT,
+            FsError::AlreadyExists => libc::ENOENT,
+            FsError::NoRepo => libc::ENOENT, // Correct?
+            FsError::PermissionDenied => libc::EACCES,
+            FsError::Busy => libc::EBUSY,
+            FsError::LockPoisoned => libc::EIO,
+            FsError::Internal(_) => libc::EIO,
         }
     }
 }
@@ -122,7 +180,7 @@ pub struct GitFs {
 
 // gitfs_fuse_functions
 impl GitFs {
-    pub fn new(repos_dir: PathBuf, read_only: bool) -> anyhow::Result<Arc<Mutex<Self>>> {
+    pub fn new(repos_dir: PathBuf, read_only: bool) -> FsResult<Arc<Mutex<Self>>> {
         let fs = Self {
             repos_dir,
             repos_list: BTreeMap::new(),
@@ -134,17 +192,16 @@ impl GitFs {
             opened_handes_for_write: RwLock::new(HashMap::new()),
             next_inode: HashMap::new(),
         };
-        fs.ensure_base_dirs_exist()
-            .context("Failed to initialize base directories")?;
+        fs.ensure_base_dirs_exist()?;
         Ok(Arc::from(Mutex::new(fs)))
     }
 
-    pub fn new_repo(&mut self, repo_name: &str) -> anyhow::Result<Arc<Mutex<GitRepo>>> {
+    pub fn new_repo(&mut self, repo_name: &str) -> FsResult<Arc<Mutex<GitRepo>>> {
         let repo_path = self.repos_dir.join(repo_name);
         if repo_path.exists() {
-            bail!("Repo name already exists!")
+            return Err(FsError::AlreadyExists);
         }
-        std::fs::create_dir(&repo_path).context("Could not create repo dir")?;
+        std::fs::create_dir(&repo_path)?;
         std::fs::set_permissions(&repo_path, std::fs::Permissions::from_mode(0o775))?;
         let mut connection = self.init_meta_db(repo_name)?;
 
@@ -185,7 +242,7 @@ impl GitFs {
         Ok(repo_rc)
     }
 
-    pub fn open_repo(&self, repo_name: &str) -> anyhow::Result<GitRepo> {
+    pub fn open_repo(&self, repo_name: &str) -> FsResult<GitRepo> {
         let repo_path = PathBuf::from(&self.repos_dir).join(repo_name).join("git");
         let repo = Repository::open(&repo_path)?;
         let head = repo.revparse_single("HEAD")?.id();
@@ -197,12 +254,11 @@ impl GitFs {
               LIMIT 1",
         )?;
 
-        let opt: Option<i64> = stmt
-            .query_row(params![], |row| row.get(0))
-            .optional()
-            .map_err(|e| anyhow!("DB error fetching an inode: {}", e))?;
+        let opt: Option<i64> = stmt.query_row(params![], |row| row.get(0)).optional()?;
 
-        let inode = opt.ok_or_else(|| anyhow!("no inodes in inode_map"))?;
+        let inode = opt.ok_or_else(|| FsError::NotFound {
+            thing: "no inodes in inode_map".to_string(),
+        })?;
         let repo_id = (inode >> REPO_SHIFT) as u16;
         drop(stmt);
 
@@ -215,16 +271,17 @@ impl GitFs {
         })
     }
 
-    pub fn open_meta_db<P: AsRef<Path>>(&self, repo_name: P) -> anyhow::Result<MetaDb> {
+    pub fn open_meta_db<P: AsRef<Path>>(&self, repo_name: P) -> FsResult<MetaDb> {
         let db_path = PathBuf::from(&self.repos_dir)
             .join(repo_name)
             .join(META_STORE);
-        let conn = Connection::open(&db_path)
-            .with_context(|| format!("Could not find db at path {}", db_path.display()))?;
+        let conn = Connection::open(&db_path).map_err(|_| FsError::NotFound {
+            thing: format!("Could not find db at path {}", db_path.display()),
+        })?;
         Ok(MetaDb { conn })
     }
 
-    pub fn init_meta_db<P: AsRef<Path>>(&self, repo_name: P) -> anyhow::Result<MetaDb> {
+    pub fn init_meta_db<P: AsRef<Path>>(&self, repo_name: P) -> FsResult<MetaDb> {
         // Must take in the name of the folder of the REPO
         // repos_dir/repo_name1
         //------------------├── fs_meta.db
@@ -232,8 +289,7 @@ impl GitFs {
         let db_path = PathBuf::from(&self.repos_dir)
             .join(repo_name)
             .join(META_STORE);
-        let conn = Connection::open(&db_path)
-            .with_context(|| format!("Could not find db at path {}", db_path.display()))?;
+        let conn = Connection::open(&db_path)?;
 
         // DB layout
         //   inode        INTEGER   PRIMARY KEY,    -> the u64 inode
@@ -256,24 +312,20 @@ impl GitFs {
         Ok(MetaDb { conn })
     }
 
-    pub fn open(&self, ino: u64, read: bool, write: bool) -> anyhow::Result<u64> {
+    pub fn open(&self, ino: u64, read: bool, write: bool) -> FsResult<u64> {
         if write && self.read_only {
-            bail!("Filesystem is in read only!")
+            return Err(FsError::ReadOnly);
         }
         if !write && !read {
-            bail!("Read and write cannot be false at the same time!")
+            return Err(FsError::InvalidInput);
         }
         if self.is_dir(ino)? {
-            bail!("Target must be a file!")
+            return Err(FsError::IsDirectory);
         }
         let ctx = FsOperationContext::get_operation(self, ino, false);
         match ctx? {
-            FsOperationContext::Root => {
-                bail!("Target must be a file!")
-            }
-            FsOperationContext::RepoDir { ino: _ } => {
-                bail!("Target must be a file!")
-            }
+            FsOperationContext::Root => Err(FsError::IsDirectory),
+            FsOperationContext::RepoDir { ino: _ } => Err(FsError::IsDirectory),
             FsOperationContext::InsideLiveDir { ino } => {
                 let mut handle: Option<u64> = None;
                 if read {
@@ -289,12 +341,12 @@ impl GitFs {
                 Ok(handle.unwrap())
             }
             FsOperationContext::InsideGitDir { ino: _ } => {
-                bail!("GitDir for open is not implemented")
+                Err(FsError::Internal("Not implemented!".to_string()))
             }
         }
     }
 
-    fn register_read(&self, ino: u64, fh: u64) -> anyhow::Result<()> {
+    fn register_read(&self, ino: u64, fh: u64) -> FsResult<()> {
         let attr = self.getattr(ino)?.into();
         let path = self.get_path_from_db(ino)?;
         let reader = std::io::BufReader::new(OpenOptions::new().read(true).open(&path)?);
@@ -316,7 +368,7 @@ impl GitFs {
         Ok(())
     }
 
-    fn register_write(&self, ino: u64, fh: u64) -> anyhow::Result<()> {
+    fn register_write(&self, ino: u64, fh: u64) -> FsResult<()> {
         let attr = self.getattr(ino)?.into();
         let path = self.get_path_from_db(ino)?;
         let writer =
@@ -339,7 +391,7 @@ impl GitFs {
         Ok(())
     }
 
-    pub fn release(&self, fh: u64) -> anyhow::Result<()> {
+    pub fn release(&self, fh: u64) -> FsResult<()> {
         // TODO: Double check
         if fh == 0 {
             return Ok(());
@@ -349,17 +401,15 @@ impl GitFs {
 
         let ctx = self.read_handles.write().unwrap().remove(&fh);
         if let Some(ctx) = ctx {
-            let ctx = ctx
-                .lock()
-                .map_err(|e| anyhow::anyhow!("lock poisoned: {e}"))?;
+            let ctx = ctx.lock().map_err(|_| FsError::LockPoisoned)?;
             let mut opened_files_for_read = self.opened_handes_for_read.write().unwrap();
             opened_files_for_read
                 .get_mut(&ctx.ino)
-                .context("handle is missing")?
+                .ok_or_else(|| FsError::Internal("File handle is missing".to_string()))?
                 .remove(&fh);
             if opened_files_for_read
                 .get(&ctx.ino)
-                .context("handle is missing")?
+                .ok_or_else(|| FsError::Internal("File handle is missing".to_string()))?
                 .is_empty()
             {
                 opened_files_for_read.remove(&ctx.ino);
@@ -369,17 +419,15 @@ impl GitFs {
 
         let ctx = self.write_handles.write().unwrap().remove(&fh);
         if let Some(ctx) = ctx {
-            let ctx = ctx
-                .lock()
-                .map_err(|e| anyhow::anyhow!("lock poisoned: {e}"))?;
+            let ctx = ctx.lock().map_err(|_| FsError::LockPoisoned)?;
             let mut opened_files_for_write = self.opened_handes_for_write.write().unwrap();
             opened_files_for_write
                 .get_mut(&ctx.ino)
-                .context("handle is missing")?
+                .ok_or_else(|| FsError::Internal("File handle is missing".to_string()))?
                 .remove(&fh);
             if opened_files_for_write
                 .get(&ctx.ino)
-                .context("handle is missing")?
+                .ok_or_else(|| FsError::Internal("File handle is missing".to_string()))?
                 .is_empty()
             {
                 opened_files_for_write.remove(&ctx.ino);
@@ -387,15 +435,15 @@ impl GitFs {
             valid_fh = true;
         }
         if !valid_fh {
-            bail!("Fine handle is not valid!")
+            return Err(FsError::Internal("Invalid file handle.".to_string()));
         }
         Ok(())
     }
 
-    pub fn flush(&self, fh: u64) -> anyhow::Result<()> {
+    pub fn flush(&self, fh: u64) -> FsResult<()> {
         // TODO: Double check
         if self.read_only {
-            bail!("Filesystem is in read-only mode")
+            return Err(FsError::ReadOnly);
         }
         if fh == 0 {
             return Ok(());
@@ -404,11 +452,12 @@ impl GitFs {
         let mut valid_fh = read_lock.get(&fh).is_some();
         let write_lock = self.write_handles.read().unwrap();
         if let Some(ctx) = write_lock.get(&fh) {
-            let mut ctx = ctx
-                .lock()
-                .map_err(|e| anyhow::anyhow!("lock poisoned: {e}"))?;
+            let mut ctx = ctx.lock().map_err(|_| FsError::LockPoisoned)?;
             // Read-write locks not implemented. Write operations not allowed yet.
-            ctx.writer.as_mut().context("No writer")?.flush()?;
+            ctx.writer
+                .as_mut()
+                .ok_or_else(|| FsError::Internal("Writer missing".to_string()))?
+                .flush()?;
             let path = self.get_path_from_db(ctx.ino)?;
             File::open(path)?.sync_all()?;
             drop(ctx);
@@ -417,16 +466,16 @@ impl GitFs {
         }
 
         if !valid_fh {
-            bail!("Fine handle is not valid!")
+            return Err(FsError::Internal("Invalid file handle.".to_string()));
         }
         Ok(())
     }
 
-    fn reset_handles(&self) -> anyhow::Result<()> {
+    fn reset_handles(&self) -> FsResult<()> {
         todo!()
     }
 
-    fn object_to_file_attr(&self, inode: u64, git_attr: &ObjectAttr) -> anyhow::Result<FileAttr> {
+    fn object_to_file_attr(&self, inode: u64, git_attr: &ObjectAttr) -> FsResult<FileAttr> {
         let blocks = git_attr.size.div_ceil(512);
 
         // Compute atime and mtime from commit_time
@@ -473,9 +522,11 @@ impl GitFs {
         })
     }
 
-    pub fn getattr(&self, inode: u64) -> anyhow::Result<FileAttr> {
+    pub fn getattr(&self, inode: u64) -> FsResult<FileAttr> {
         if !self.exists(inode)? {
-            bail!("Inode not found!")
+            return Err(FsError::NotFound {
+                thing: format!("inode {inode}"),
+            });
         }
         let perms = 0o775;
         let st_mode = libc::S_IFDIR | perms;
@@ -496,15 +547,17 @@ impl GitFs {
         parent: u64,
         os_name: &OsStr,
         create_attr: CreateFileAttr,
-    ) -> anyhow::Result<FileAttr> {
+    ) -> FsResult<FileAttr> {
         if self.read_only {
-            bail!("Filesystem is in read only!")
+            return Err(FsError::ReadOnly);
         }
         if !self.exists(parent)? {
-            bail!("Parent does not exist!")
+            return Err(FsError::NotFound {
+                thing: "Parent does not exist!".to_string(),
+            });
         }
         if !self.is_dir(parent)? {
-            bail!("Parent must be a folder!")
+            return Err(FsError::NotADirectory);
         }
         let name = os_name.to_str().unwrap();
 
@@ -529,7 +582,7 @@ impl GitFs {
         }
     }
 
-    pub fn readdir(&self, parent: u64) -> anyhow::Result<Vec<DirectoryEntry>> {
+    pub fn readdir(&self, parent: u64) -> FsResult<Vec<DirectoryEntry>> {
         let ctx = FsOperationContext::get_operation(self, parent, true);
         match ctx? {
             FsOperationContext::Root => ops::readdir::readdir_root_dir(self),
@@ -539,15 +592,13 @@ impl GitFs {
         }
     }
 
-    pub fn readdirplus(&self, parent: u64) -> anyhow::Result<Vec<DirectoryEntryPlus>> {
+    pub fn readdirplus(&self, parent: u64) -> FsResult<Vec<DirectoryEntryPlus>> {
         let ctx = FsOperationContext::get_operation(self, parent, true);
         match ctx? {
             FsOperationContext::Root => {
                 let mut entries: Vec<DirectoryEntryPlus> = vec![];
                 for repo in self.repos_list.values() {
-                    let repo = repo
-                        .lock()
-                        .map_err(|e| anyhow::anyhow!("lock poisoned: {e}"))?;
+                    let repo = repo.lock().map_err(|_| FsError::LockPoisoned)?;
                     let repo_ino = GitFs::repo_id_to_ino(repo.repo_id);
                     let attr = self.getattr(repo_ino)?;
                     let dir_entry = DirectoryEntry::new(
@@ -584,7 +635,9 @@ impl GitFs {
                     });
                     Ok(entries)
                 } else {
-                    bail!("Repo is not found!");
+                    Err(FsError::NotFound {
+                        thing: "Repo is not found!".to_string(),
+                    })
                 }
             }
             FsOperationContext::InsideLiveDir { ino } => {
@@ -592,9 +645,7 @@ impl GitFs {
                 let db_path = self.get_path_from_db(ino)?;
                 let path = {
                     let repo = &self.get_repo(ino)?;
-                    let repo = repo
-                        .lock()
-                        .map_err(|e| anyhow::anyhow!("lock poisoned: {e}"))?;
+                    let repo = repo.lock().map_err(|_| FsError::LockPoisoned)?;
                     self.repos_dir.join(&repo.repo_dir)
                 };
                 let path = if db_path == PathBuf::from("live") {
@@ -655,12 +706,14 @@ impl GitFs {
         }
     }
 
-    pub fn find_by_name(&self, parent: u64, name: &str) -> anyhow::Result<Option<FileAttr>> {
+    pub fn find_by_name(&self, parent: u64, name: &str) -> FsResult<Option<FileAttr>> {
         if !self.exists(parent)? {
-            bail!("Parent does not exist!")
+            return Err(FsError::NotFound {
+                thing: format!("Inode {parent}"),
+            });
         }
         if !self.is_dir(parent)? {
-            bail!("Parent must be a dir!")
+            return Err(FsError::NotADirectory);
         }
         let ctx = FsOperationContext::get_operation(self, parent, true);
         match ctx? {
@@ -674,7 +727,7 @@ impl GitFs {
 
 // gitfs_helpers
 impl GitFs {
-    fn attr_from_dir(&self, path: PathBuf) -> anyhow::Result<FileAttr> {
+    fn attr_from_dir(&self, path: PathBuf) -> FsResult<FileAttr> {
         let metadata = path.metadata()?;
         let atime: SystemTime = metadata.accessed()?;
         let mtime: SystemTime = metadata.modified()?;
@@ -712,12 +765,10 @@ impl GitFs {
         })
     }
 
-    fn build_path(&self, parent: u64, name: &str) -> anyhow::Result<PathBuf> {
+    fn build_path(&self, parent: u64, name: &str) -> FsResult<PathBuf> {
         let repo_name = {
             let repo = &self.get_repo(parent)?;
-            let repo = repo
-                .lock()
-                .map_err(|e| anyhow::anyhow!("lock poisoned: {e}"))?;
+            let repo = repo.lock().map_err(|_| FsError::LockPoisoned)?;
             repo.repo_dir.clone()
         };
         let path_to_repo = PathBuf::from(&self.repos_dir).join(repo_name);
@@ -729,28 +780,24 @@ impl GitFs {
 
         let conn_arc = {
             let repo = &self.get_repo(parent)?;
-            let repo = repo
-                .lock()
-                .map_err(|e| anyhow::anyhow!("lock poisoned: {e}"))?;
+            let repo = repo.lock().map_err(|_| FsError::LockPoisoned)?;
             std::sync::Arc::clone(&repo.connection)
         };
-        let conn = conn_arc
-            .lock()
-            .map_err(|e| anyhow::anyhow!("lock poisoned: {e}"))?;
+        let conn = conn_arc.lock().map_err(|_| FsError::LockPoisoned)?;
         let db_path = conn.get_path_from_db(parent)?;
         Ok(PathBuf::from(&self.repos_dir).join(db_path).join(name))
     }
 
-    fn get_repo(&self, inode: u64) -> anyhow::Result<Arc<Mutex<GitRepo>>> {
+    fn get_repo(&self, inode: u64) -> FsResult<Arc<Mutex<GitRepo>>> {
         let repo_id = (inode >> REPO_SHIFT) as u16;
         let repo = self
             .repos_list
             .get(&repo_id)
-            .ok_or_else(|| anyhow!("No repo found for this ID"))?;
+            .ok_or_else(|| FsError::NoRepo)?;
         Ok(repo.clone())
     }
 
-    fn is_in_live(&self, ino: u64) -> anyhow::Result<bool> {
+    fn is_in_live(&self, ino: u64) -> FsResult<bool> {
         let live_ino = self.get_live_ino(ino);
         if live_ino == ino {
             return Ok(true);
@@ -769,12 +816,12 @@ impl GitFs {
         }
     }
 
-    fn next_inode(&self, parent: u64) -> anyhow::Result<u64> {
+    fn next_inode(&self, parent: u64) -> FsResult<u64> {
         let repo_id = (parent >> REPO_SHIFT) as u16;
         let inode = self
             .next_inode
             .get(&repo_id)
-            .ok_or_else(|| anyhow!("No repo found for this ID"))?
+            .ok_or_else(|| FsError::NoRepo)?
             .fetch_add(1, Ordering::SeqCst);
         Ok(inode)
     }
@@ -792,17 +839,13 @@ impl GitFs {
         }
     }
 
-    pub fn get_parent_ino(&self, ino: u64) -> anyhow::Result<u64> {
+    pub fn get_parent_ino(&self, ino: u64) -> FsResult<u64> {
         let conn_arc = {
             let repo = &self.get_repo(ino)?;
-            let repo = repo
-                .lock()
-                .map_err(|e| anyhow::anyhow!("lock poisoned: {e}"))?;
+            let repo = repo.lock().map_err(|_| FsError::LockPoisoned)?;
             std::sync::Arc::clone(&repo.connection)
         };
-        let conn = conn_arc
-            .lock()
-            .map_err(|e| anyhow::anyhow!("lock poisoned: {e}"))?;
+        let conn = conn_arc.lock().map_err(|_| FsError::LockPoisoned)?;
         conn.get_parent_ino(ino)
     }
 
@@ -818,7 +861,7 @@ impl GitFs {
         (ino >> REPO_SHIFT) as u16
     }
 
-    fn ensure_base_dirs_exist(&self) -> anyhow::Result<()> {
+    fn ensure_base_dirs_exist(&self) -> FsResult<()> {
         if !self.repos_dir.exists() {
             let mut attr: FileAttr = CreateFileAttr {
                 kind: FileType::Directory,
@@ -836,8 +879,7 @@ impl GitFs {
             }
 
             let repos_dir = &self.repos_dir;
-            std::fs::create_dir_all(repos_dir)
-                .with_context(|| format!("Failed to create repos dir {repos_dir:?}"))?;
+            std::fs::create_dir_all(repos_dir)?;
         }
         Ok(())
     }
@@ -849,21 +891,17 @@ impl GitFs {
         repo_ino + 1
     }
 
-    fn exists_by_name(&self, parent: u64, name: &str) -> anyhow::Result<bool> {
+    fn exists_by_name(&self, parent: u64, name: &str) -> FsResult<bool> {
         let conn_arc = {
             let repo = &self.get_repo(parent)?;
-            let repo = repo
-                .lock()
-                .map_err(|e| anyhow::anyhow!("lock poisoned: {e}"))?;
+            let repo = repo.lock().map_err(|_| FsError::LockPoisoned)?;
             std::sync::Arc::clone(&repo.connection)
         };
-        let conn = conn_arc
-            .lock()
-            .map_err(|e| anyhow::anyhow!("lock poisoned: {e}"))?;
+        let conn = conn_arc.lock().map_err(|_| FsError::LockPoisoned)?;
         conn.exists_by_name(parent, name)
     }
 
-    pub fn exists(&self, ino: u64) -> anyhow::Result<bool> {
+    pub fn exists(&self, ino: u64) -> FsResult<bool> {
         if ino == ROOT_INO {
             return Ok(true);
         }
@@ -877,7 +915,7 @@ impl GitFs {
         Ok(self.get_path_from_db(ino).is_ok())
     }
 
-    fn is_dir(&self, ino: u64) -> anyhow::Result<bool> {
+    fn is_dir(&self, ino: u64) -> FsResult<bool> {
         if ino == ROOT_INO {
             return Ok(true);
         }
@@ -892,7 +930,7 @@ impl GitFs {
         Ok(git_attr.kind == ObjectType::Tree)
     }
 
-    fn is_file(&self, inode: u64) -> anyhow::Result<bool> {
+    fn is_file(&self, inode: u64) -> FsResult<bool> {
         let git_attr = {
             let path = self.get_path_from_db(inode)?;
             let repo = self.get_repo(inode)?;
@@ -901,7 +939,7 @@ impl GitFs {
         Ok(git_attr.kind == ObjectType::Blob && git_attr.filemode != libc::S_IFLNK)
     }
 
-    fn is_link(&self, inode: u64) -> anyhow::Result<bool> {
+    fn is_link(&self, inode: u64) -> FsResult<bool> {
         let git_attr = {
             let repo = self.get_repo(inode)?;
             let path = self.get_path_from_db(inode)?;
@@ -910,26 +948,20 @@ impl GitFs {
         Ok(git_attr.kind == ObjectType::Blob && git_attr.filemode == libc::S_IFLNK)
     }
 
-    fn get_ino_from_db(&self, parent: u64, name: &str) -> anyhow::Result<u64> {
+    fn get_ino_from_db(&self, parent: u64, name: &str) -> FsResult<u64> {
         let conn_arc = {
             let repo = &self.get_repo(parent)?;
-            let repo = repo
-                .lock()
-                .map_err(|e| anyhow::anyhow!("lock poisoned: {e}"))?;
+            let repo = repo.lock().map_err(|_| FsError::LockPoisoned)?;
             std::sync::Arc::clone(&repo.connection)
         };
-        let conn = conn_arc
-            .lock()
-            .map_err(|e| anyhow::anyhow!("lock poisoned: {e}"))?;
+        let conn = conn_arc.lock().map_err(|_| FsError::LockPoisoned)?;
         conn.get_ino_from_db(parent, name)
     }
 
-    fn build_full_path(&self, ino: u64) -> anyhow::Result<PathBuf> {
+    fn build_full_path(&self, ino: u64) -> FsResult<PathBuf> {
         let repo_ino = {
             let repo = self.get_repo(ino)?;
-            let repo = repo
-                .lock()
-                .map_err(|e| anyhow::anyhow!("lock poisoned: {e}"))?;
+            let repo = repo.lock().map_err(|_| FsError::LockPoisoned)?;
             GitFs::repo_id_to_ino(repo.repo_id)
         };
         let path = PathBuf::from(&self.repos_dir);
@@ -945,52 +977,40 @@ impl GitFs {
         }
     }
 
-    fn get_path_from_db(&self, ino: u64) -> anyhow::Result<PathBuf> {
+    fn get_path_from_db(&self, ino: u64) -> FsResult<PathBuf> {
         let conn_arc = {
             let repo = &self.get_repo(ino)?;
-            let repo = repo
-                .lock()
-                .map_err(|e| anyhow::anyhow!("lock poisoned: {e}"))?;
+            let repo = repo.lock().map_err(|_| FsError::LockPoisoned)?;
             std::sync::Arc::clone(&repo.connection)
         };
-        let conn = conn_arc
-            .lock()
-            .map_err(|e| anyhow::anyhow!("lock poisoned: {e}"))?;
+        let conn = conn_arc.lock().map_err(|_| FsError::LockPoisoned)?;
         conn.get_path_from_db(ino)
     }
 
-    fn get_oid_from_db(&self, ino: u64) -> anyhow::Result<Oid> {
+    fn get_oid_from_db(&self, ino: u64) -> FsResult<Oid> {
         let conn_arc = {
             let repo = &self.get_repo(ino)?;
-            let repo = repo
-                .lock()
-                .map_err(|e| anyhow::anyhow!("lock poisoned: {e}"))?;
+            let repo = repo.lock().map_err(|_| FsError::LockPoisoned)?;
             std::sync::Arc::clone(&repo.connection)
         };
-        let conn = conn_arc
-            .lock()
-            .map_err(|e| anyhow::anyhow!("lock poisoned: {e}"))?;
+        let conn = conn_arc.lock().map_err(|_| FsError::LockPoisoned)?;
         conn.get_oid_from_db(ino)
     }
 
-    fn write_inodes_to_db(&self, nodes: Vec<(u64, String, FileAttr)>) -> anyhow::Result<()> {
+    fn write_inodes_to_db(&self, nodes: Vec<(u64, String, FileAttr)>) -> FsResult<()> {
         if nodes.is_empty() {
-            bail!("No entries received.")
+            return Err(FsError::InvalidInput);
         }
         let conn_arc = {
             let repo = &self.get_repo(nodes[0].0)?;
-            let repo = repo
-                .lock()
-                .map_err(|e| anyhow::anyhow!("lock poisoned: {e}"))?;
+            let repo = repo.lock().map_err(|_| FsError::LockPoisoned)?;
             std::sync::Arc::clone(&repo.connection)
         };
-        let mut conn = conn_arc
-            .lock()
-            .map_err(|e| anyhow::anyhow!("lock poisoned: {e}"))?;
+        let mut conn = conn_arc.lock().map_err(|_| FsError::LockPoisoned)?;
         conn.write_inodes_to_db(nodes)
     }
 
-    fn find_commit_in_gitdir(&self, ino: u64) -> anyhow::Result<(Oid, String)> {
+    fn find_commit_in_gitdir(&self, ino: u64) -> FsResult<(Oid, String)> {
         // Will return something: "repo_name/snapX_XXXXX/path/to/file"
         let path = self.get_path_from_db(ino)?;
         let snap_name = path
@@ -1001,15 +1021,13 @@ impl GitFs {
                 }
                 _ => None,
             })
-            .ok_or_else(|| anyhow!("Invalid path"))?
+            .ok_or_else(|| FsError::InvalidInput)?
             .into_string()
             .unwrap();
         let repo_ino = self.get_repo_ino(ino)?;
         let snap_ino = {
             let repo = self.get_repo(ino)?;
-            let repo = repo
-                .lock()
-                .map_err(|e| anyhow::anyhow!("lock poisoned: {e}"))?;
+            let repo = repo.lock().map_err(|_| FsError::LockPoisoned)?;
             repo.connection
                 .lock()
                 .unwrap()
@@ -1020,7 +1038,7 @@ impl GitFs {
         Ok((snap_oid, snap_name))
     }
 
-    fn get_repo_ino(&self, ino: u64) -> anyhow::Result<u64> {
+    fn get_repo_ino(&self, ino: u64) -> FsResult<u64> {
         let repo_id = {
             let repo = self.get_repo(ino)?;
             repo.lock().unwrap().repo_id

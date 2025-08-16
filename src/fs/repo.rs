@@ -1,6 +1,5 @@
 #![allow(unused_imports)]
 
-use anyhow::{Context, anyhow, bail};
 use git2::{
     Commit, Direction, ErrorClass, ErrorCode, FetchOptions, ObjectType, Oid, Reference,
     RemoteCallbacks, Repository, Sort, Time, Tree, TreeWalkMode, TreeWalkResult,
@@ -14,7 +13,7 @@ use tracing::info;
 
 use std::{io::Write, path::Path};
 
-use crate::fs::{FileType, GitFs, ObjectAttr, meta_db::MetaDb};
+use crate::fs::{FileType, FsError, FsResult, GitFs, ObjectAttr, meta_db::MetaDb};
 
 pub struct GitRepo {
     // Caching the database connection for reads.
@@ -32,7 +31,7 @@ pub struct Remote {
 }
 
 impl GitRepo {
-    pub fn fetch_anon(&self, url: &str) -> anyhow::Result<()> {
+    pub fn fetch_anon(&self, url: &str) -> FsResult<()> {
         let repo = &self.inner;
         // Set up the anonymous remote and callbacks
         let mut remote = repo.remote_anonymous(url)?;
@@ -83,9 +82,7 @@ impl GitRepo {
         }
         let refs_as_str: Vec<&str> = refspecs.iter().map(|s| s.as_str()).collect();
 
-        remote
-            .fetch(&refs_as_str, Some(&mut fo), None)
-            .context("anonymous fetch failed")?;
+        remote.fetch(&refs_as_str, Some(&mut fo), None)?;
 
         if repo.head().is_err() {
             if let Some(ref buf) = default_branch {
@@ -115,7 +112,7 @@ impl GitRepo {
         Ok(())
     }
 
-    pub fn getattr<P: AsRef<Path>>(&self, path: P) -> anyhow::Result<ObjectAttr> {
+    pub fn getattr<P: AsRef<Path>>(&self, path: P) -> FsResult<ObjectAttr> {
         // Get the commit the head points to
         let commit = self.inner.head()?.peel_to_commit()?;
         let commit_time = commit.time();
@@ -124,7 +121,7 @@ impl GitRepo {
             .as_ref()
             .components()
             .next_back()
-            .ok_or_else(|| anyhow!("empty path"))?;
+            .ok_or_else(|| FsError::InvalidInput)?;
 
         let mut last_name = None;
 
@@ -134,9 +131,9 @@ impl GitRepo {
 
             // Lookup this name in the current tree
             let entry = tree.clone();
-            let entry = entry
-                .get_name(name)
-                .ok_or_else(|| anyhow!("component {:?} not found in tree", name))?;
+            let entry = entry.get_name(name).ok_or_else(|| FsError::NotFound {
+                thing: format!("inode {name}"),
+            })?;
 
             if entry.kind() == Some(ObjectType::Tree) {
                 if is_last_comp {
@@ -166,7 +163,7 @@ impl GitRepo {
                     }
                 // Not a final component and not a tree either. Something is wrong
                 } else {
-                    return Err(anyhow!("path {:?} is not a directory", path.as_ref()));
+                    return Err(FsError::NotADirectory);
                 }
             }
         }
@@ -181,7 +178,7 @@ impl GitRepo {
     }
 
     // Read_dir
-    pub fn list_tree(&self, commit: Oid, tree_oid: Option<Oid>) -> anyhow::Result<Vec<ObjectAttr>> {
+    pub fn list_tree(&self, commit: Oid, tree_oid: Option<Oid>) -> FsResult<Vec<ObjectAttr>> {
         let commit = self.inner.find_commit(commit)?;
         let mut entries = vec![];
         let tree = match tree_oid {
@@ -224,15 +221,12 @@ impl GitRepo {
     //     Ok(list_tree_plus)
     // }
 
-    pub fn find_by_name(&self, tree_oid: Oid, name: &str) -> anyhow::Result<ObjectAttr> {
-        let tree = self
-            .inner
-            .find_tree(tree_oid)
-            .context("Parent tree does not exist")?;
+    pub fn find_by_name(&self, tree_oid: Oid, name: &str) -> FsResult<ObjectAttr> {
+        let tree = self.inner.find_tree(tree_oid)?;
 
-        let entry = tree
-            .get_name(name)
-            .ok_or_else(|| anyhow!("{} not found in tree {}", name, tree_oid))?;
+        let entry = tree.get_name(name).ok_or_else(|| FsError::NotFound {
+            thing: format!("{name} not found in tree {tree_oid}"),
+        })?;
         let size = match entry.kind().unwrap() {
             ObjectType::Blob => entry
                 .to_object(&self.inner)
@@ -254,7 +248,7 @@ impl GitRepo {
         })
     }
 
-    pub fn find_by_path<P: AsRef<Path>>(&self, path: P, oid: Oid) -> anyhow::Result<ObjectAttr> {
+    pub fn find_by_path<P: AsRef<Path>>(&self, path: P, oid: Oid) -> FsResult<ObjectAttr> {
         // HEAD → commit → root tree
         let commit = self.inner.head()?.peel_to_commit()?;
         let commit_time = commit.time();
@@ -269,18 +263,22 @@ impl GitRepo {
             };
 
         if let Some(ref relp) = rel {
-            let e = tree
-                .get_path(relp)
-                .map_err(|_| anyhow!("directory {:?} not found in HEAD", relp))?;
+            let e = tree.get_path(relp).map_err(|_| FsError::NotFound {
+                thing: format!("directory {relp:?} not found in HEAD"),
+            })?;
             if e.kind() != Some(ObjectType::Tree) {
-                return Err(anyhow!("'{}' is not a directory (tree)", relp.display()));
+                return Err(FsError::NotFound {
+                    thing: format!("'{}' is not a directory (tree)", relp.display()),
+                });
             }
             tree = self.inner.find_tree(e.id())?;
         }
 
         for entry in tree.iter() {
             if entry.id() == oid {
-                let kind = entry.kind().ok_or_else(|| anyhow!("unknown entry kind"))?;
+                let kind = entry.kind().ok_or_else(|| FsError::NotFound {
+                    thing: "unknown entry kind".to_string(),
+                })?;
                 let size = if kind == ObjectType::Blob {
                     self.inner.find_blob(entry.id())?.size() as u64
                 } else {
@@ -308,16 +306,18 @@ impl GitRepo {
             }
         }
 
-        Err(anyhow!(
-            "oid {} not found directly under {}",
-            oid,
-            rel.as_deref()
-                .map(|p| p.to_string_lossy().into_owned())
-                .unwrap_or_else(|| "<root>".into())
-        ))
+        Err(FsError::NotFound {
+            thing: format!(
+                "oid {} not found directly under {}",
+                oid,
+                rel.as_deref()
+                    .map(|p| p.to_string_lossy().into_owned())
+                    .unwrap_or_else(|| "<root>".into())
+            ),
+        })
     }
 
-    pub fn find_in_commit(&self, commit_id: Oid, oid: Oid) -> anyhow::Result<ObjectAttr> {
+    pub fn find_in_commit(&self, commit_id: Oid, oid: Oid) -> FsResult<ObjectAttr> {
         let commit_obj = self.inner.find_commit(commit_id)?;
         let commit_time = commit_obj.time();
         let tree = commit_obj.tree()?;
@@ -364,10 +364,12 @@ impl GitRepo {
                 return Err(e.into());
             }
         }
-        found.ok_or_else(|| anyhow!("oid {} not found in commit {}", oid, commit_obj.id()))
+        found.ok_or_else(|| FsError::NotFound {
+            thing: format!("oid {} not found in commit {}", oid, commit_obj.id()),
+        })
     }
 
-    pub fn read_log(&self) -> anyhow::Result<Vec<ObjectAttr>> {
+    pub fn read_log(&self) -> FsResult<Vec<ObjectAttr>> {
         let limit = 20;
         let head_commit = self.head_commit()?;
 
@@ -395,7 +397,7 @@ impl GitRepo {
         Ok(out)
     }
 
-    pub fn readdir_commit(&self) -> anyhow::Result<Vec<ObjectAttr>> {
+    pub fn readdir_commit(&self) -> FsResult<Vec<ObjectAttr>> {
         let mut entries: Vec<ObjectAttr> = vec![];
         let commit = self.head_commit()?;
         let root_tree = commit.tree()?;
@@ -419,7 +421,7 @@ impl GitRepo {
 
     // The FileAttr for the snap folder will contain the commit id instead of tree
     // This makes walking and getting info for the Fileattr easier
-    pub fn attr_from_snap(&self, commit_oid: Oid, name: &str) -> anyhow::Result<ObjectAttr> {
+    pub fn attr_from_snap(&self, commit_oid: Oid, name: &str) -> FsResult<ObjectAttr> {
         let commit = self.inner.find_commit(commit_oid)?;
         let name = name.to_string();
         let oid = commit.id();
@@ -438,12 +440,12 @@ impl GitRepo {
         })
     }
 
-    fn head_commit(&self) -> anyhow::Result<Commit> {
+    fn head_commit(&self) -> FsResult<Commit> {
         let repo = &self.inner;
         Ok(repo.head()?.peel_to_commit()?)
     }
 
-    fn head_tree(&self) -> anyhow::Result<Tree> {
+    fn head_tree(&self) -> FsResult<Tree> {
         Ok(self.head_commit()?.tree()?)
     }
 }
@@ -453,26 +455,26 @@ impl GitRepo {
 /// It will parse it and return the fetch url. <br>
 /// Otherwise, it will return None
 /// This will signal that we create a normal folder <br>
-pub fn parse_mkdir_url(name: &str) -> anyhow::Result<Option<(String, String)>> {
+pub fn parse_mkdir_url(name: &str) -> FsResult<Option<(String, String)>> {
     if !name.starts_with("github.") && !name.ends_with(".git") {
         return Ok(None);
     }
     let mut comp = name.splitn(4, ".");
     if comp.clone().count() != 4 {
-        bail!("Incorrect url format!");
+        return Err(FsError::InvalidInput);
     }
-    let website = comp
-        .next()
-        .ok_or_else(|| anyhow!("Error getting website from url"))?;
-    let account = comp
-        .next()
-        .ok_or_else(|| anyhow!("Error getting account from url"))?;
-    let repo = comp
-        .next()
-        .ok_or_else(|| anyhow!("Error gettingrepo name from url"))?;
-    let git = comp
-        .next()
-        .ok_or_else(|| anyhow!("Error getting .git name from url"))?;
+    let website = comp.next().ok_or_else(|| FsError::NotFound {
+        thing: "Error getting website from url".to_string(),
+    })?;
+    let account = comp.next().ok_or_else(|| FsError::NotFound {
+        thing: "Error getting account from url".to_string(),
+    })?;
+    let repo = comp.next().ok_or_else(|| FsError::NotFound {
+        thing: "Error gettingrepo name from url".to_string(),
+    })?;
+    let git = comp.next().ok_or_else(|| FsError::NotFound {
+        thing: "Error getting .git name from url".to_string(),
+    })?;
 
     let url = format!("https://{website}.com/{account}/{repo}.{git}");
     Ok(Some((url, repo.into())))

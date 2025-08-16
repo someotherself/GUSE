@@ -1,6 +1,5 @@
 #![allow(unused_imports, unused_variables)]
 
-use anyhow::bail;
 use fuser::{
     BackgroundSession, MountOption, ReplyAttr, ReplyData, ReplyEntry, ReplyOpen, ReplyWrite,
 };
@@ -20,7 +19,7 @@ use std::{num::NonZeroU32, path::PathBuf};
 
 use crate::fs::fileattr::{CreateFileAttr, FileAttr, FileType};
 use crate::fs::ops::readdir::{DirectoryEntry, DirectoryEntryPlus};
-use crate::fs::{GitFs, REPO_SHIFT, ROOT_INO, repo};
+use crate::fs::{FsResult, GitFs, REPO_SHIFT, ROOT_INO, repo};
 
 const TTL: Duration = Duration::from_secs(60);
 const FMODE_EXEC: i32 = 0x20;
@@ -51,7 +50,7 @@ impl MountPoint {
     }
 }
 
-pub fn mount_fuse(opts: MountPoint) -> anyhow::Result<()> {
+pub fn mount_fuse(opts: MountPoint) -> FsResult<()> {
     let MountPoint {
         mountpoint,
         repos_dir,
@@ -120,7 +119,7 @@ struct GitFsAdapter {
 }
 
 impl GitFsAdapter {
-    fn new(repos_dir: PathBuf, read_only: bool) -> anyhow::Result<Self> {
+    fn new(repos_dir: PathBuf, read_only: bool) -> FsResult<Self> {
         let fs = GitFs::new(repos_dir, read_only)?;
         Ok(GitFsAdapter { inner: fs })
     }

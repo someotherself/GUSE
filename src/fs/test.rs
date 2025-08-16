@@ -1,9 +1,7 @@
 use std::ffi::OsStr;
 
-use anyhow::{Context, anyhow};
-
 use crate::{
-    fs::{FileType, REPO_SHIFT},
+    fs::{FileType, FsError, FsResult, REPO_SHIFT},
     mount::dir_attr,
     test_setup::{TestSetup, get_fs, run_test},
 };
@@ -13,17 +11,15 @@ const REPO_DIR_INO: u64 = (1 as u64) << REPO_SHIFT;
 const LIVE_DIR_INO: u64 = REPO_DIR_INO + 1;
 
 #[test]
-fn test_mkdir_fetch() -> anyhow::Result<()> {
+fn test_mkdir_fetch() -> FsResult<()> {
     run_test(
         TestSetup {
             key: "test_mkdir_fetch",
             read_only: false,
         },
-        |_| -> anyhow::Result<()> {
+        |_| -> FsResult<()> {
             let fs = get_fs();
-            let mut fs = fs
-                .lock()
-                .map_err(|e| anyhow::anyhow!("lock poisoned: {e}"))?;
+            let mut fs = fs.lock().map_err(|_| FsError::LockPoisoned)?;
 
             let create_attr = dir_attr();
             // let name = OsStr::new("github.tokio-rs.mio.git");
@@ -70,7 +66,7 @@ fn test_mkdir_fetch() -> anyhow::Result<()> {
                 if a.kind == FileType::Directory {
                     let a_attr = fs
                         .find_by_name(parent_snap_ino, &a.name)?
-                        .with_context(|| anyhow!(""))?;
+                        .ok_or_else(|| FsError::InvalidInput)?;
                     assert_eq!(a.inode, a_attr.inode);
 
                     for b in fs.readdir(a_attr.inode)? {
@@ -79,7 +75,7 @@ fn test_mkdir_fetch() -> anyhow::Result<()> {
                         if b.kind == FileType::Directory {
                             let b_attr = fs
                                 .find_by_name(a_attr.inode, &b.name)?
-                                .with_context(|| anyhow!(""))?;
+                                .ok_or_else(|| FsError::InvalidInput)?;
                             assert_eq!(b.inode, b_attr.inode);
                             for c in fs.readdir(b_attr.inode)? {
                                 let c_attr_1 = fs.getattr(c.inode)?;
@@ -88,7 +84,7 @@ fn test_mkdir_fetch() -> anyhow::Result<()> {
                                     let _c_attr = fs.getattr(c.inode)?;
                                     let c_attr = fs
                                         .find_by_name(b_attr.inode, &c.name)?
-                                        .with_context(|| anyhow!(""))?;
+                                        .ok_or_else(|| FsError::InvalidInput)?;
                                     assert_eq!(c.inode, c_attr.inode);
                                 }
                             }
@@ -106,9 +102,7 @@ fn test_mkdir_fetch() -> anyhow::Result<()> {
             assert_eq!(read_dir_root[0].name, "git_rust");
             let parent_for_mio = {
                 let repo = fs.get_repo(read_dir_root[0].inode)?;
-                let repo = repo
-                    .lock()
-                    .map_err(|e| anyhow::anyhow!("lock poisoned: {e}"))?;
+                let repo = repo.lock().map_err(|_| FsError::LockPoisoned)?;
                 repo.connection
                     .lock()
                     .unwrap()

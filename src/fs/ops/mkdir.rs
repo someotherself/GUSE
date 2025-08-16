@@ -1,28 +1,22 @@
-use anyhow::bail;
-
 use crate::fs::fileattr::FileAttr;
-use crate::fs::{CreateFileAttr, GitFs, REPO_SHIFT, repo};
+use crate::fs::{CreateFileAttr, FsError, FsResult, GitFs, REPO_SHIFT, repo};
 
 pub fn mkdir_root(
     fs: &mut GitFs,
     _parent: u64,
     name: &str,
     _create_attr: CreateFileAttr,
-) -> anyhow::Result<FileAttr> {
+) -> FsResult<FileAttr> {
     match repo::parse_mkdir_url(name)? {
         Some((url, repo_name)) => {
             println!("fetching repo {}", &repo_name);
             let repo = fs.new_repo(&repo_name)?;
             {
-                let repo = repo
-                    .lock()
-                    .map_err(|e| anyhow::anyhow!("lock poisoned: {e}"))?;
+                let repo = repo.lock().map_err(|_| FsError::LockPoisoned)?;
                 repo.fetch_anon(&url)?;
             }
             let repo_id = {
-                let repo = repo
-                    .lock()
-                    .map_err(|e| anyhow::anyhow!("lock poisoned: {e}"))?;
+                let repo = repo.lock().map_err(|_| FsError::LockPoisoned)?;
                 repo.repo_id
             };
             let attr = fs.getattr((repo_id as u64) << REPO_SHIFT)?;
@@ -32,9 +26,7 @@ pub fn mkdir_root(
             println!("Creating repo {name}");
             let repo_id = {
                 let repo = fs.new_repo(name)?;
-                let repo = repo
-                    .lock()
-                    .map_err(|e| anyhow::anyhow!("lock poisoned: {e}"))?;
+                let repo = repo.lock().map_err(|_| FsError::LockPoisoned)?;
                 repo.repo_id
             };
             let attr = fs.getattr((repo_id as u64) << REPO_SHIFT)?;
@@ -49,8 +41,8 @@ pub fn mkdir_repo(
     _parent: u64,
     _name: &str,
     _create_attr: CreateFileAttr,
-) -> anyhow::Result<FileAttr> {
-    bail!("This directory is read only.")
+) -> FsResult<FileAttr> {
+    Err(FsError::Internal("This directory is read only".to_string()))
 }
 
 pub fn mkdir_live(
@@ -58,9 +50,9 @@ pub fn mkdir_live(
     parent: u64,
     name: &str,
     create_attr: CreateFileAttr,
-) -> anyhow::Result<FileAttr> {
+) -> FsResult<FileAttr> {
     if fs.exists_by_name(parent, name)? {
-        bail!("Name already exists!")
+        return Err(FsError::AlreadyExists);
     }
 
     let dir_path = fs.build_path(parent, name)?;
@@ -83,6 +75,6 @@ pub fn mkdir_git(
     _parent: u64,
     _name: &str,
     _create_attr: CreateFileAttr,
-) -> anyhow::Result<FileAttr> {
-    bail!("This directory is read only.")
+) -> FsResult<FileAttr> {
+    Err(FsError::Internal("This directory is read only".to_string()))
 }

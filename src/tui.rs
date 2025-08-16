@@ -9,11 +9,13 @@ use ratatui::{
     widgets::Widget,
 };
 
+use crate::fs::FsResult;
+
 struct App {
     exit: bool,
 }
 
-pub fn run_tui_app() -> anyhow::Result<()> {
+pub fn run_tui_app() -> FsResult<()> {
     let mut terminal = ratatui::init();
 
     let mut app = App { exit: false };
@@ -27,7 +29,7 @@ pub fn run_tui_app() -> anyhow::Result<()> {
 
 impl App {
     #[allow(clippy::single_match)]
-    fn run(&mut self, terminal: &mut DefaultTerminal) -> anyhow::Result<()> {
+    fn run(&mut self, terminal: &mut DefaultTerminal) -> FsResult<()> {
         while !self.exit {
             match crossterm::event::read()? {
                 crossterm::event::Event::Key(key_event) => self.handle_key_event(key_event)?,
@@ -39,7 +41,7 @@ impl App {
         Ok(())
     }
 
-    fn handle_key_event(&mut self, key_event: KeyEvent) -> anyhow::Result<()> {
+    fn handle_key_event(&mut self, key_event: KeyEvent) -> FsResult<()> {
         if key_event.kind == KeyEventKind::Press && key_event.code == KeyCode::Char('q') {
             self.exit = true;
         }

@@ -1,9 +1,8 @@
 use std::ffi::OsString;
 
-use anyhow::bail;
 use git2::Oid;
 
-use crate::fs::{FileAttr, GitFs, REPO_SHIFT, fileattr::FileType};
+use crate::fs::{FileAttr, FsError, FsResult, GitFs, REPO_SHIFT, fileattr::FileType};
 
 pub struct DirectoryEntry {
     pub inode: u64,
@@ -36,13 +35,11 @@ pub struct DirectoryEntryPlus {
     pub attr: FileAttr,
 }
 
-pub fn readdir_root_dir(fs: &GitFs) -> anyhow::Result<Vec<DirectoryEntry>> {
+pub fn readdir_root_dir(fs: &GitFs) -> FsResult<Vec<DirectoryEntry>> {
     let mut entries: Vec<DirectoryEntry> = vec![];
     for repo in fs.repos_list.values() {
         let (repo_dir, repo_ino) = {
-            let repo = repo
-                .lock()
-                .map_err(|e| anyhow::anyhow!("lock poisoned: {e}"))?;
+            let repo = repo.lock().map_err(|_| FsError::LockPoisoned)?;
             (repo.repo_dir.clone(), GitFs::repo_id_to_ino(repo.repo_id))
         };
         let dir_entry = DirectoryEntry::new(
@@ -57,7 +54,7 @@ pub fn readdir_root_dir(fs: &GitFs) -> anyhow::Result<Vec<DirectoryEntry>> {
     Ok(entries)
 }
 
-pub fn readdir_repo_dir(fs: &GitFs, ino: u64) -> anyhow::Result<Vec<DirectoryEntry>> {
+pub fn readdir_repo_dir(fs: &GitFs, ino: u64) -> FsResult<Vec<DirectoryEntry>> {
     let repo_id = (ino >> REPO_SHIFT) as u16;
     if fs.repos_list.contains_key(&repo_id) {
         let mut entries: Vec<DirectoryEntry> = vec![];
@@ -73,9 +70,7 @@ pub fn readdir_repo_dir(fs: &GitFs, ino: u64) -> anyhow::Result<Vec<DirectoryEnt
 
         let object_entries = {
             let repo = fs.get_repo(ino)?;
-            let repo = repo
-                .lock()
-                .map_err(|e| anyhow::anyhow!("lock poisoned: {e}"))?;
+            let repo = repo.lock().map_err(|_| FsError::LockPoisoned)?;
             repo.read_log()?
         };
         let mut nodes: Vec<(u64, String, FileAttr)> = vec![];
@@ -96,11 +91,13 @@ pub fn readdir_repo_dir(fs: &GitFs, ino: u64) -> anyhow::Result<Vec<DirectoryEnt
         fs.write_inodes_to_db(nodes)?;
         Ok(entries)
     } else {
-        bail!("Repo is not found!");
+        Err(FsError::NotFound {
+            thing: "Repo is not found!".to_string(),
+        })
     }
 }
 
-pub fn readdir_live_dir(fs: &GitFs, ino: u64) -> anyhow::Result<Vec<DirectoryEntry>> {
+pub fn readdir_live_dir(fs: &GitFs, ino: u64) -> FsResult<Vec<DirectoryEntry>> {
     let ignore_list = [OsString::from(".git"), OsString::from("fs_meta.db")];
     let path = fs.build_full_path(ino)?;
     let mut entries: Vec<DirectoryEntry> = vec![];
@@ -135,7 +132,7 @@ pub fn readdir_live_dir(fs: &GitFs, ino: u64) -> anyhow::Result<Vec<DirectoryEnt
     Ok(entries)
 }
 
-pub fn readdir_git_dir(fs: &GitFs, ino: u64) -> anyhow::Result<Vec<DirectoryEntry>> {
+pub fn readdir_git_dir(fs: &GitFs, ino: u64) -> FsResult<Vec<DirectoryEntry>> {
     let repo = fs.get_repo(ino)?;
     let (commit_oid, _) = fs.find_commit_in_gitdir(ino)?;
     let oid = fs.get_oid_from_db(ino)?;
@@ -143,9 +140,7 @@ pub fn readdir_git_dir(fs: &GitFs, ino: u64) -> anyhow::Result<Vec<DirectoryEntr
     // If parent ino is gitdir
     let parent_tree_oid = if oid == commit_oid {
         // parent tree_oid is the commit.tree_oid()
-        let repo = repo
-            .lock()
-            .map_err(|e| anyhow::anyhow!("lock poisoned: {e}"))?;
+        let repo = repo.lock().map_err(|_| FsError::LockPoisoned)?;
         let commit = repo.inner.find_commit(commit_oid)?;
         commit.tree_id()
     } else {
@@ -154,14 +149,10 @@ pub fn readdir_git_dir(fs: &GitFs, ino: u64) -> anyhow::Result<Vec<DirectoryEntr
     };
 
     let git_objects = if parent_tree_oid == commit_oid {
-        let repo = repo
-            .lock()
-            .map_err(|e| anyhow::anyhow!("lock poisoned: {e}"))?;
+        let repo = repo.lock().map_err(|_| FsError::LockPoisoned)?;
         repo.list_tree(commit_oid, None)?
     } else {
-        let repo = repo
-            .lock()
-            .map_err(|e| anyhow::anyhow!("lock poisoned: {e}"))?;
+        let repo = repo.lock().map_err(|_| FsError::LockPoisoned)?;
         repo.list_tree(commit_oid, Some(parent_tree_oid))?
     };
     let mut nodes: Vec<(u64, String, FileAttr)> = vec![];
