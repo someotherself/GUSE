@@ -39,11 +39,14 @@ pub struct DirectoryEntryPlus {
 pub fn readdir_root_dir(fs: &GitFs) -> anyhow::Result<Vec<DirectoryEntry>> {
     let mut entries: Vec<DirectoryEntry> = vec![];
     for repo in fs.repos_list.values() {
-        let repo_ino = GitFs::repo_id_to_ino(repo.repo_id);
+        let (repo_dir, repo_ino) = {
+            let repo = repo.lock().unwrap();
+            (repo.repo_dir.clone(), GitFs::repo_id_to_ino(repo.repo_id))
+        };
         let dir_entry = DirectoryEntry::new(
             repo_ino,
             Oid::zero(),
-            repo.repo_dir.clone(),
+            repo_dir,
             FileType::Directory,
             libc::S_IFDIR,
         );
@@ -66,7 +69,11 @@ pub fn readdir_repo_dir(fs: &GitFs, ino: u64) -> anyhow::Result<Vec<DirectoryEnt
         );
         entries.push(live_entry);
 
-        let object_entries = fs.get_repo(ino)?.read_log()?;
+        let object_entries = {
+            let repo = fs.get_repo(ino)?;
+            let repo = repo.lock().unwrap();
+            repo.read_log()?
+        };
         let mut nodes: Vec<(u64, String, FileAttr)> = vec![];
         for commit in object_entries {
             let entry_ino = fs.next_inode(ino)?;
@@ -132,6 +139,7 @@ pub fn readdir_git_dir(fs: &GitFs, ino: u64) -> anyhow::Result<Vec<DirectoryEntr
     // If parent ino is gitdir
     let parent_tree_oid = if oid == commit_oid {
         // parent tree_oid is the commit.tree_oid()
+        let repo = repo.lock().unwrap();
         let commit = repo.inner.find_commit(commit_oid)?;
         commit.tree_id()
     } else {
@@ -140,8 +148,10 @@ pub fn readdir_git_dir(fs: &GitFs, ino: u64) -> anyhow::Result<Vec<DirectoryEntr
     };
 
     let git_objects = if parent_tree_oid == commit_oid {
+        let repo = repo.lock().unwrap();
         repo.list_tree(commit_oid, None)?
     } else {
+        let repo = repo.lock().unwrap();
         repo.list_tree(commit_oid, Some(parent_tree_oid))?
     };
     let mut nodes: Vec<(u64, String, FileAttr)> = vec![];

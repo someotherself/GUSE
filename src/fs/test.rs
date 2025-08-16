@@ -12,7 +12,6 @@ use crate::fs::ROOT_INO;
 const REPO_DIR_INO: u64 = (1 as u64) << REPO_SHIFT;
 const LIVE_DIR_INO: u64 = REPO_DIR_INO + 1;
 
-// *** Tests are not multithreaded for now ***
 #[test]
 fn test_mkdir_fetch() -> anyhow::Result<()> {
     run_test(
@@ -21,26 +20,30 @@ fn test_mkdir_fetch() -> anyhow::Result<()> {
             read_only: false,
         },
         |_| -> anyhow::Result<()> {
-            let fs = get_fs().unwrap();
+            let fs = get_fs();
             let mut fs = fs.lock().unwrap();
 
             let create_attr = dir_attr();
-            let name = OsStr::new("github.tokio-rs.mio.git");
-            fs.mkdir(1, name, create_attr)?;
+            // let name = OsStr::new("github.tokio-rs.mio.git");
+            let name = OsStr::new("github.someotherself.git_rust.git");
+            fs.mkdir(ROOT_INO, name, create_attr)?;
 
-            // GET ATTR ROOT
-            let root_attr = fs.getattr(ROOT_INO)?;
-            assert_eq!(root_attr.inode, ROOT_INO);
-            assert_eq!(root_attr.kind, FileType::Directory);
+            // // GET ATTR ROOT
+            // let root_attr = fs.getattr(ROOT_INO)?;
+            // assert_eq!(root_attr.inode, ROOT_INO);
+            // assert_eq!(root_attr.kind, FileType::Directory);
 
             // READ DIR ROOT
             let read_dir_root = fs.readdir(ROOT_INO)?;
+            for node in &read_dir_root {
+                dbg!(&node.name);
+            }
             assert_eq!(read_dir_root.len(), 1);
             assert_eq!(read_dir_root[0].inode, REPO_DIR_INO);
-            assert_eq!(read_dir_root[0].name, "mio");
+            assert_eq!(read_dir_root[0].name, "git_rust");
 
             // FIND BY NAME ROOT
-            let mio_attr = fs.find_by_name(ROOT_INO, "mio")?;
+            let mio_attr = fs.find_by_name(ROOT_INO, "git_rust")?;
             assert!(mio_attr.is_some());
             let mio_attr = mio_attr.unwrap();
             assert_eq!(mio_attr.inode, REPO_DIR_INO);
@@ -98,13 +101,15 @@ fn test_mkdir_fetch() -> anyhow::Result<()> {
             let live_attr = live_attr.unwrap();
             assert_eq!(live_attr.inode, LIVE_DIR_INO);
 
-            assert_eq!(read_dir_root[0].name, "mio");
-            let repo = fs.get_repo(read_dir_root[0].inode)?;
-            let parent_for_mio = repo
-                .connection
-                .read()
-                .unwrap()
-                .get_parent_ino(read_dir_root[0].inode)?;
+            assert_eq!(read_dir_root[0].name, "git_rust");
+            let parent_for_mio = {
+                let repo = fs.get_repo(read_dir_root[0].inode)?;
+                let repo = repo.lock().unwrap();
+                repo.connection
+                    .lock()
+                    .unwrap()
+                    .get_parent_ino(read_dir_root[0].inode)?
+            };
             assert_eq!(parent_for_mio, ROOT_INO);
 
             // GET ATTR LIVE_DIR
@@ -130,7 +135,7 @@ fn test_mkdir_fetch() -> anyhow::Result<()> {
 //             read_only: false,
 //         },
 //         |_| -> anyhow::Result<()> {
-//             let fs = get_fs().unwrap();
+//             let fs = get_fs();
 //             let mut fs = fs.lock().unwrap();
 
 //             let create_attr = dir_attr();

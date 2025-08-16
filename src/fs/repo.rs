@@ -8,7 +8,7 @@ use git2::{
 use std::{
     ffi::OsStr,
     path::PathBuf,
-    sync::{Arc, RwLock},
+    sync::{Arc, Mutex, RwLock},
 };
 use tracing::info;
 
@@ -19,7 +19,7 @@ use crate::fs::{FileType, GitFs, ObjectAttr, meta_db::MetaDb};
 pub struct GitRepo {
     // Caching the database connection for reads.
     // Must be refreshed after every write.
-    pub connection: Arc<RwLock<MetaDb>>,
+    pub connection: Arc<Mutex<MetaDb>>,
     pub repo_dir: String,
     pub repo_id: u16,
     pub inner: Repository,
@@ -369,8 +369,7 @@ impl GitRepo {
 
     pub fn read_log(&self) -> anyhow::Result<Vec<ObjectAttr>> {
         let limit = 20;
-        let head = self.inner.head()?;
-        let head_commit = head.peel_to_commit()?;
+        let head_commit = self.head_commit()?;
 
         let mut walk = self.inner.revwalk()?;
         walk.set_sorting(Sort::TOPOLOGICAL | Sort::TIME)?;

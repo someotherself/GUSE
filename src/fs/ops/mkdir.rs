@@ -11,16 +11,27 @@ pub fn mkdir_root(
 ) -> anyhow::Result<FileAttr> {
     match repo::parse_mkdir_url(name)? {
         Some((url, repo_name)) => {
+            println!("fetching repo {}", &repo_name);
             let repo = fs.new_repo(&repo_name)?;
-
-            // fetch
-            repo.fetch_anon(&url)?;
-            let attr = fs.getattr((repo.repo_id as u64) << REPO_SHIFT)?;
+            {
+                let repo = repo.lock().unwrap();
+                repo.fetch_anon(&url)?;
+            }
+            let repo_id = {
+                let repo = repo.lock().unwrap();
+                repo.repo_id
+            };
+            let attr = fs.getattr((repo_id as u64) << REPO_SHIFT)?;
             Ok(attr)
         }
         None => {
-            let repo = fs.new_repo(name)?;
-            let attr = fs.getattr((repo.repo_id as u64) << REPO_SHIFT)?;
+            println!("Creating repo {name}");
+            let repo_id = {
+                let repo = fs.new_repo(name)?;
+                let repo = repo.lock().unwrap();
+                repo.repo_id
+            };
+            let attr = fs.getattr((repo_id as u64) << REPO_SHIFT)?;
 
             Ok(attr)
         }

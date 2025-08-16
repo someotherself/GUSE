@@ -110,8 +110,8 @@ impl FsOperationContext {
 // repo_id from ino     = (ino >> REPO_SHIFT) as u16
 pub struct GitFs {
     pub repos_dir: PathBuf,
-    pub repos_list: BTreeMap<u16, Arc<GitRepo>>, // <repo_id, repo>
-    next_inode: HashMap<u16, AtomicU64>,         // Each Repo has a set of inodes
+    pub repos_list: BTreeMap<u16, Arc<Mutex<GitRepo>>>, // <repo_id, repo>
+    next_inode: HashMap<u16, AtomicU64>,                // Each Repo has a set of inodes
     current_handle: AtomicU64,
     read_handles: RwLock<HashMap<u64, Mutex<ReadHandleContext>>>, // ino
     write_handles: RwLock<HashMap<u64, Mutex<WriteHandleContext>>>, // ino
@@ -139,7 +139,7 @@ impl GitFs {
         Ok(Arc::from(Mutex::new(fs)))
     }
 
-    pub fn new_repo(&mut self, repo_name: &str) -> anyhow::Result<Arc<GitRepo>> {
+    pub fn new_repo(&mut self, repo_name: &str) -> anyhow::Result<Arc<Mutex<GitRepo>>> {
         let repo_path = self.repos_dir.join(repo_name);
         if repo_path.exists() {
             bail!("Repo name already exists!")
@@ -170,7 +170,7 @@ impl GitFs {
         nodes.push((repo_ino, live_name, live_attr));
         connection.write_inodes_to_db(nodes)?;
 
-        let connection = Arc::from(RwLock::from(connection));
+        let connection = Arc::from(Mutex::from(connection));
 
         let git_repo = GitRepo {
             connection,
@@ -180,7 +180,7 @@ impl GitFs {
             head: None,
         };
 
-        let repo_rc = Arc::from(git_repo);
+        let repo_rc = Arc::from(Mutex::from(git_repo));
         self.repos_list.insert(repo_id, repo_rc.clone());
         Ok(repo_rc)
     }
@@ -207,7 +207,7 @@ impl GitFs {
         drop(stmt);
 
         Ok(GitRepo {
-            connection: Arc::from(RwLock::from(db)),
+            connection: Arc::from(Mutex::from(db)),
             repo_dir: repo_name.to_string(),
             repo_id,
             inner: repo,
@@ -504,14 +504,20 @@ impl GitFs {
 
         let ctx = FsOperationContext::get_operation(self, parent, true);
         match ctx? {
-            FsOperationContext::Root => ops::mkdir::mkdir_root(self, ROOT_INO, name, create_attr),
+            FsOperationContext::Root => {
+                dbg!("root arm");
+                ops::mkdir::mkdir_root(self, ROOT_INO, name, create_attr)
+            }
             FsOperationContext::RepoDir { ino } => {
+                dbg!("repo arm");
                 ops::mkdir::mkdir_repo(self, ino, name, create_attr)
             }
             FsOperationContext::InsideLiveDir { ino } => {
+                dbg!("live arm");
                 ops::mkdir::mkdir_live(self, ino, name, create_attr)
             }
             FsOperationContext::InsideGitDir { ino } => {
+                dbg!("git arm");
                 ops::mkdir::mkdir_git(self, ino, name, create_attr)
             }
         }
@@ -533,6 +539,7 @@ impl GitFs {
             FsOperationContext::Root => {
                 let mut entries: Vec<DirectoryEntryPlus> = vec![];
                 for repo in self.repos_list.values() {
+                    let repo = repo.lock().unwrap();
                     let repo_ino = GitFs::repo_id_to_ino(repo.repo_id);
                     let attr = self.getattr(repo_ino)?;
                     let dir_entry = DirectoryEntry::new(
@@ -575,7 +582,11 @@ impl GitFs {
             FsOperationContext::InsideLiveDir { ino } => {
                 let ignore_list = [OsString::from(".git"), OsString::from("fs_meta.db")];
                 let db_path = self.get_path_from_db(ino)?;
-                let path = self.repos_dir.join(&self.get_repo(ino)?.repo_dir);
+                let path = {
+                    let repo = &self.get_repo(ino)?;
+                    let repo = repo.lock().unwrap();
+                    self.repos_dir.join(&repo.repo_dir)
+                };
                 let path = if db_path == PathBuf::from("live") {
                     path
                 } else {
@@ -692,7 +703,11 @@ impl GitFs {
     }
 
     fn build_path(&self, parent: u64, name: &str) -> anyhow::Result<PathBuf> {
-        let repo_name = &self.get_repo(parent)?.repo_dir;
+        let repo_name = {
+            let repo = &self.get_repo(parent)?;
+            let repo = repo.lock().unwrap();
+            repo.repo_dir.clone()
+        };
         let path_to_repo = PathBuf::from(&self.repos_dir).join(repo_name);
 
         let live_ino = self.get_live_ino(parent);
@@ -700,14 +715,17 @@ impl GitFs {
             return Ok(path_to_repo.join(name));
         }
 
-        let conn = &self.get_repo(parent)?.connection;
-        let conn = conn.read().unwrap();
-        // TODO: Test how get_path_from_db returns
+        let conn_arc = {
+            let repo = &self.get_repo(parent)?;
+            let repo = repo.lock().unwrap();
+            std::sync::Arc::clone(&repo.connection)
+        };
+        let conn = conn_arc.lock().unwrap();
         let db_path = conn.get_path_from_db(parent)?;
         Ok(PathBuf::from(&self.repos_dir).join(db_path).join(name))
     }
 
-    fn get_repo(&self, inode: u64) -> anyhow::Result<Arc<GitRepo>> {
+    fn get_repo(&self, inode: u64) -> anyhow::Result<Arc<Mutex<GitRepo>>> {
         let repo_id = (inode >> REPO_SHIFT) as u16;
         let repo = self
             .repos_list
@@ -759,8 +777,12 @@ impl GitFs {
     }
 
     pub fn get_parent_ino(&self, ino: u64) -> anyhow::Result<u64> {
-        let repo = self.get_repo(ino)?;
-        let conn = &repo.connection.read().unwrap();
+        let conn_arc = {
+            let repo = &self.get_repo(ino)?;
+            let repo = repo.lock().unwrap();
+            std::sync::Arc::clone(&repo.connection)
+        };
+        let conn = conn_arc.lock().unwrap();
         conn.get_parent_ino(ino)
     }
 
@@ -808,8 +830,12 @@ impl GitFs {
     }
 
     fn exists_by_name(&self, parent: u64, name: &str) -> anyhow::Result<bool> {
-        let conn = &self.get_repo(parent)?.connection;
-        let conn = conn.read().unwrap();
+        let conn_arc = {
+            let repo = &self.get_repo(parent)?;
+            let repo = repo.lock().unwrap();
+            std::sync::Arc::clone(&repo.connection)
+        };
+        let conn = conn_arc.lock().unwrap();
         conn.exists_by_name(parent, name)
     }
 
@@ -838,35 +864,44 @@ impl GitFs {
         let repo = self.get_repo(ino)?;
         let path = self.get_path_from_db(ino)?;
 
-        let git_attr = repo.getattr(path)?;
+        let git_attr = repo.lock().unwrap().getattr(path)?;
         Ok(git_attr.kind == ObjectType::Tree)
     }
 
     fn is_file(&self, inode: u64) -> anyhow::Result<bool> {
-        let repo = self.get_repo(inode)?;
-        let path = self.get_path_from_db(inode)?;
-
-        let git_attr = repo.getattr(path)?;
+        let git_attr = {
+            let path = self.get_path_from_db(inode)?;
+            let repo = self.get_repo(inode)?;
+            repo.lock().unwrap().getattr(path)?
+        };
         Ok(git_attr.kind == ObjectType::Blob && git_attr.filemode != libc::S_IFLNK)
     }
 
     fn is_link(&self, inode: u64) -> anyhow::Result<bool> {
-        let repo = self.get_repo(inode)?;
-        let path = self.get_path_from_db(inode)?;
-
-        let git_attr = repo.getattr(path)?;
+        let git_attr = {
+            let repo = self.get_repo(inode)?;
+            let path = self.get_path_from_db(inode)?;
+            repo.lock().unwrap().getattr(path)?
+        };
         Ok(git_attr.kind == ObjectType::Blob && git_attr.filemode == libc::S_IFLNK)
     }
 
     fn get_ino_from_db(&self, parent: u64, name: &str) -> anyhow::Result<u64> {
-        let conn = &self.get_repo(parent)?.connection;
-        let conn = conn.read().unwrap();
+        let conn_arc = {
+            let repo = &self.get_repo(parent)?;
+            let repo = repo.lock().unwrap();
+            std::sync::Arc::clone(&repo.connection)
+        };
+        let conn = conn_arc.lock().unwrap();
         conn.get_ino_from_db(parent, name)
     }
 
     fn build_full_path(&self, ino: u64) -> anyhow::Result<PathBuf> {
-        let repo = self.get_repo(ino)?;
-        let repo_ino = GitFs::repo_id_to_ino(repo.repo_id);
+        let repo_ino = {
+            let repo = self.get_repo(ino)?;
+            let repo = repo.lock().unwrap();
+            GitFs::repo_id_to_ino(repo.repo_id)
+        };
         let path = PathBuf::from(&self.repos_dir);
         if ino == repo_ino {
             return Ok(path);
@@ -880,15 +915,23 @@ impl GitFs {
         }
     }
 
-    fn get_path_from_db(&self, inode: u64) -> anyhow::Result<PathBuf> {
-        let repo = self.get_repo(inode)?;
-        let conn = repo.connection.read().unwrap();
-        conn.get_path_from_db(inode)
+    fn get_path_from_db(&self, ino: u64) -> anyhow::Result<PathBuf> {
+        let conn_arc = {
+            let repo = &self.get_repo(ino)?;
+            let repo = repo.lock().unwrap();
+            std::sync::Arc::clone(&repo.connection)
+        };
+        let conn = conn_arc.lock().unwrap();
+        conn.get_path_from_db(ino)
     }
 
     fn get_oid_from_db(&self, ino: u64) -> anyhow::Result<Oid> {
-        let repo = self.get_repo(ino)?;
-        let conn = repo.connection.read().unwrap();
+        let conn_arc = {
+            let repo = &self.get_repo(ino)?;
+            let repo = repo.lock().unwrap();
+            std::sync::Arc::clone(&repo.connection)
+        };
+        let conn = conn_arc.lock().unwrap();
         conn.get_oid_from_db(ino)
     }
 
@@ -896,13 +939,16 @@ impl GitFs {
         if nodes.is_empty() {
             bail!("No entries received.")
         }
-        let conn = &self.get_repo(nodes[0].0)?.connection;
-        let mut conn = conn.write().unwrap();
+        let conn_arc = {
+            let repo = &self.get_repo(nodes[0].0)?;
+            let repo = repo.lock().unwrap();
+            std::sync::Arc::clone(&repo.connection)
+        };
+        let mut conn = conn_arc.lock().unwrap();
         conn.write_inodes_to_db(nodes)
     }
 
     fn find_commit_in_gitdir(&self, ino: u64) -> anyhow::Result<(Oid, String)> {
-        let repo = self.get_repo(ino)?;
         // Will return something: "repo_name/snapX_XXXXX/path/to/file"
         let path = self.get_path_from_db(ino)?;
         let snap_name = path
@@ -917,18 +963,24 @@ impl GitFs {
             .into_string()
             .unwrap();
         let repo_ino = self.get_repo_ino(ino)?;
-        let snap_ino = repo
-            .connection
-            .read()
-            .unwrap()
-            .get_ino_from_db(repo_ino, &snap_name)?;
+        let snap_ino = {
+            let repo = self.get_repo(ino)?;
+            let repo = repo.lock().unwrap();
+            repo.connection
+                .lock()
+                .unwrap()
+                .get_ino_from_db(repo_ino, &snap_name)?
+        };
         let snap_oid = self.get_oid_from_db(snap_ino)?;
 
         Ok((snap_oid, snap_name))
     }
 
     fn get_repo_ino(&self, ino: u64) -> anyhow::Result<u64> {
-        let repo_id = self.get_repo(ino)?.repo_id;
+        let repo_id = {
+            let repo = self.get_repo(ino)?;
+            repo.lock().unwrap().repo_id
+        };
         Ok(GitFs::repo_id_to_ino(repo_id))
     }
 }

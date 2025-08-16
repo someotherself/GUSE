@@ -1,14 +1,13 @@
 use std::{
-    cell::RefCell,
     path::PathBuf,
     sync::{Arc, LazyLock, Mutex},
 };
 
+use thread_local::ThreadLocal;
+
 use crate::fs::GitFs;
 
-thread_local! {
-    pub static SETUP_RESULT: RefCell<Option<SetupResult>> = const { RefCell::new(None) };
-}
+pub static SETUP_RESULT: ThreadLocal<Mutex<Option<SetupResult>>> = ThreadLocal::new();
 
 pub static TESTS_DATA_DIR: LazyLock<PathBuf> = LazyLock::new(|| {
     std::env::current_dir()
@@ -45,15 +44,20 @@ fn setup(setup: TestSetup) -> SetupResult {
 
 pub fn run_test<T>(init: TestSetup, t: T) -> anyhow::Result<()>
 where
-    T: Fn(Option<SetupResult>) -> anyhow::Result<()>,
+    T: Fn(&Mutex<Option<SetupResult>>) -> anyhow::Result<()>,
 {
-    let setup = SETUP_RESULT.replace(Some(setup(init)));
-    t(setup)?;
+    let s = SETUP_RESULT.get_or(|| Mutex::new(None));
+    {
+        let mut s = s.lock().unwrap();
+        *s = Some(setup(init));
+    }
+    t(s)?;
     std::fs::remove_dir_all(TESTS_DATA_DIR.as_path()).unwrap();
     Ok(())
 }
 
-pub fn get_fs() -> Option<Arc<Mutex<GitFs>>> {
-    let fs = SETUP_RESULT.take();
-    fs.unwrap().fs
+pub fn get_fs() -> Arc<Mutex<GitFs>> {
+    let fs = SETUP_RESULT.get_or(|| Mutex::new(None));
+    let mut fs = fs.lock().unwrap();
+    fs.as_mut().unwrap().fs.clone().unwrap()
 }
