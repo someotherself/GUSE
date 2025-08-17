@@ -4,7 +4,7 @@ use git2::{
     Repository, Sort, Time, Tree, TreeWalkMode, TreeWalkResult,
 };
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, HashSet},
     sync::{Arc, Mutex},
 };
 
@@ -122,6 +122,65 @@ impl GitRepo {
                 size: 0,
                 commit_time: git2::Time::new(*secs, 0),
             });
+        }
+
+        Ok(out)
+    }
+
+    fn parse_month_key(key: &str) -> Option<(i32, u32)> {
+        let (y, m) = key.split_once('-')?;
+        Some((y.parse().ok()?, m.parse().ok()?))
+    }
+
+    /// Build *virtual* day folders for a given month (key "YYYY-MM"), newest → oldest.
+    /// Folder name format: "Snaps on Aug 6, 2025".
+    pub fn day_folders_newest_first(
+        &self,
+        month_key: &str,
+        use_offset: bool,
+    ) -> FsResult<Vec<ObjectAttr>> {
+        let (want_year, want_month) =
+            Self::parse_month_key(month_key).ok_or_else(|| FsError::InvalidInput)?;
+
+        let mut out: Vec<ObjectAttr> = Vec::new();
+        let mut seen_days: HashSet<(i32, u32, u32)> = HashSet::new();
+
+        // self.snapshots: BTreeMap<i64 /*secs UTC*/, Vec<Oid>>; iterate newest -> oldest
+        for (&secs_utc, oids) in self.snapshots.iter().rev() {
+            for &oid in oids {
+                let commit = self.inner.find_commit(oid)?;
+                let t = commit.time();
+                let secs_base = t.seconds();
+                let secs_adj = if use_offset {
+                    secs_base + (t.offset_minutes() as i64) * 60
+                } else {
+                    secs_base
+                };
+
+                let dt = DateTime::from_timestamp(secs_adj, 0)
+                    .unwrap_or_else(|| DateTime::from_timestamp(0, 0).unwrap());
+
+                if dt.year() != want_year || dt.month() != want_month {
+                    continue;
+                }
+
+                let day_key = (dt.year(), dt.month(), dt.day());
+                // No duplicates
+                if !seen_days.insert(day_key) {
+                    continue;
+                }
+
+                let folder_name = format!("Snaps on {}", dt.format("%b %-d, %Y"));
+
+                out.push(ObjectAttr {
+                    name: folder_name,
+                    oid: git2::Oid::zero(),
+                    kind: ObjectType::Tree,
+                    filemode: 0o040000,
+                    size: 0,
+                    commit_time: git2::Time::new(secs_utc, t.offset_minutes()),
+                });
+            }
         }
 
         Ok(out)
