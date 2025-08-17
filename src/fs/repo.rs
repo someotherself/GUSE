@@ -1,19 +1,16 @@
-#![allow(unused_imports)]
-
+use chrono::{DateTime, Datelike};
 use git2::{
-    Commit, Direction, ErrorClass, ErrorCode, FetchOptions, ObjectType, Oid, Reference,
-    RemoteCallbacks, Repository, Sort, Time, Tree, TreeWalkMode, TreeWalkResult,
+    Commit, Direction, ErrorClass, ErrorCode, FetchOptions, ObjectType, Oid, RemoteCallbacks,
+    Repository, Sort, Time, Tree, TreeWalkMode, TreeWalkResult,
 };
 use std::{
-    ffi::OsStr,
-    path::PathBuf,
-    sync::{Arc, Mutex, RwLock},
+    collections::BTreeMap,
+    sync::{Arc, Mutex},
 };
-use tracing::info;
 
-use std::{io::Write, path::Path};
+use std::path::Path;
 
-use crate::fs::{FileType, FsError, FsResult, GitFs, ObjectAttr, meta_db::MetaDb};
+use crate::fs::{FsError, FsResult, ObjectAttr, meta_db::MetaDb};
 
 pub struct GitRepo {
     // Caching the database connection for reads.
@@ -23,6 +20,9 @@ pub struct GitRepo {
     pub repo_id: u16,
     pub inner: Repository,
     pub head: Option<Oid>,
+    // i64 -> commit_time -> seconds since EPOCH
+    // Vec<Oid> -> Vec<commit_oid> -> In case commits are made at the same time
+    pub snapshots: BTreeMap<i64, Vec<Oid>>, //
 }
 
 // For customized fetch
@@ -31,6 +31,102 @@ pub struct Remote {
 }
 
 impl GitRepo {
+    pub fn refresh_snapshots(&mut self, limit: usize) -> FsResult<()> {
+        let head = match self.inner.head() {
+            Ok(h) => h,
+            Err(_) => {
+                // empty repo
+                self.head = None;
+                self.snapshots.clear();
+                return Ok(());
+            }
+        };
+        let head_commit = head.peel_to_commit()?;
+        self.head = Some(head_commit.id());
+
+        let mut walk = self.inner.revwalk()?;
+        walk.set_sorting(git2::Sort::TOPOLOGICAL | git2::Sort::TIME)?;
+        walk.push(head_commit.id())?;
+
+        self.snapshots.clear();
+
+        for (i, oid_res) in walk.enumerate() {
+            if i >= limit {
+                break;
+            }
+            let oid = oid_res?;
+            let c = self.inner.find_commit(oid)?;
+            let t = c.time();
+            let secs = t.seconds(); // see “offset” note below
+            self.snapshots.entry(secs).or_default().push(oid);
+        }
+        Ok(())
+    }
+
+    pub fn months_from_cache(&self, use_offset: bool) -> BTreeMap<String, Vec<git2::Oid>> {
+        let mut buckets: BTreeMap<String, Vec<git2::Oid>> = BTreeMap::new();
+
+        for (&secs, oids) in &self.snapshots {
+            let adj = if use_offset {
+                let t = self
+                    .inner
+                    .find_commit(oids[0])
+                    .ok()
+                    .map(|c| c.time().offset_minutes())
+                    .unwrap_or(0);
+                secs + (t as i64) * 60
+            } else {
+                secs
+            };
+
+            let dt = DateTime::from_timestamp(adj, 0)
+                .unwrap_or_else(|| DateTime::from_timestamp(0, 0).unwrap());
+
+            let key = format!("{:04}-{:02}", dt.year(), dt.month());
+
+            buckets.entry(key).or_default().extend(oids.iter().copied());
+        }
+        buckets
+    }
+
+    pub fn month_folders(&self, use_offset: bool) -> FsResult<Vec<ObjectAttr>> {
+        let mut out = Vec::new();
+
+        for (secs, oids) in &self.snapshots {
+            let adj = if use_offset {
+                let t = self
+                    .inner
+                    .find_commit(oids[0])
+                    .ok()
+                    .map(|c| c.time().offset_minutes())
+                    .unwrap_or(0);
+                secs + (t as i64) * 60
+            } else {
+                *secs
+            };
+
+            let dt = chrono::DateTime::from_timestamp(adj, 0)
+                .unwrap_or_else(|| chrono::DateTime::from_timestamp(0, 0).unwrap());
+            let folder_name = format!("{:04}-{:02}", dt.year(), dt.month());
+
+            // No duplicates
+            if out.iter().any(|attr: &ObjectAttr| attr.name == folder_name) {
+                continue;
+            }
+
+            out.push(ObjectAttr {
+                name: folder_name,
+                oid: git2::Oid::zero(),
+                kind: ObjectType::Tree,
+                filemode: 0o040000,
+                size: 0,
+                commit_time: git2::Time::new(*secs, 0),
+            });
+        }
+
+        Ok(out)
+    }
+
     pub fn fetch_anon(&self, url: &str) -> FsResult<()> {
         let repo = &self.inner;
         // Set up the anonymous remote and callbacks
@@ -199,28 +295,6 @@ impl GitRepo {
         Ok(entries)
     }
 
-    // read_dir plus
-    // pub fn list_tree_plus(
-    //     &self,
-    //     fs: &GitFs,
-    //     tree_oid: Oid,
-    //     tree_inode: u64,
-    // ) -> anyhow::Result<Vec<DirectoryEntryPlus>> {
-    //     let list_tree = self.list_tree(fs, tree_oid, tree_inode)?;
-    //     let mut list_tree_plus: Vec<DirectoryEntryPlus> = Vec::new();
-    //     for entry in list_tree {
-    //         let attr = fs.find_by_name(tree_inode, &entry.name)?.ok_or_else(|| {
-    //             anyhow!(
-    //                 "no entry named {:?} in tree inode {}",
-    //                 entry.name,
-    //                 tree_inode
-    //             )
-    //         })?;
-    //         list_tree_plus.push(DirectoryEntryPlus { entry, attr });
-    //     }
-    //     Ok(list_tree_plus)
-    // }
-
     pub fn find_by_name(&self, tree_oid: Oid, name: &str) -> FsResult<ObjectAttr> {
         let tree = self.inner.find_tree(tree_oid)?;
 
@@ -245,75 +319,6 @@ impl GitRepo {
             filemode: entry.filemode() as u32,
             size: size as u64,
             commit_time,
-        })
-    }
-
-    pub fn find_by_path<P: AsRef<Path>>(&self, path: P, oid: Oid) -> FsResult<ObjectAttr> {
-        // HEAD → commit → root tree
-        let commit = self.inner.head()?.peel_to_commit()?;
-        let commit_time = commit.time();
-        let mut tree = commit.tree()?;
-
-        let d = path.as_ref();
-        let rel: Option<PathBuf> =
-            if d.as_os_str().is_empty() || d == Path::new(".") || d == Path::new("/") {
-                None
-            } else {
-                Some(d.strip_prefix("/").unwrap_or(d).to_path_buf())
-            };
-
-        if let Some(ref relp) = rel {
-            let e = tree.get_path(relp).map_err(|_| FsError::NotFound {
-                thing: format!("directory {relp:?} not found in HEAD"),
-            })?;
-            if e.kind() != Some(ObjectType::Tree) {
-                return Err(FsError::NotFound {
-                    thing: format!("'{}' is not a directory (tree)", relp.display()),
-                });
-            }
-            tree = self.inner.find_tree(e.id())?;
-        }
-
-        for entry in tree.iter() {
-            if entry.id() == oid {
-                let kind = entry.kind().ok_or_else(|| FsError::NotFound {
-                    thing: "unknown entry kind".to_string(),
-                })?;
-                let size = if kind == ObjectType::Blob {
-                    self.inner.find_blob(entry.id())?.size() as u64
-                } else {
-                    0
-                };
-                let filemode = entry.filemode() as u32;
-
-                // Build full repo-relative path for name
-                let name = if let Some(ref relp) = rel {
-                    let mut full = relp.clone();
-                    full.push(entry.name().unwrap_or("<non-utf8>"));
-                    full.to_string_lossy().into_owned()
-                } else {
-                    entry.name().unwrap_or("<non-utf8>").to_string()
-                };
-
-                return Ok(ObjectAttr {
-                    name,
-                    oid: entry.id(),
-                    kind,
-                    filemode,
-                    size,
-                    commit_time,
-                });
-            }
-        }
-
-        Err(FsError::NotFound {
-            thing: format!(
-                "oid {} not found directly under {}",
-                oid,
-                rel.as_deref()
-                    .map(|p| p.to_string_lossy().into_owned())
-                    .unwrap_or_else(|| "<root>".into())
-            ),
         })
     }
 
@@ -450,7 +455,7 @@ impl GitRepo {
     }
 }
 
-/// If the name supplier follows the format:
+/// If the name supplied follows the format:
 ///      --> github.tokio-rs.tokio.git <br>
 /// It will parse it and return the fetch url. <br>
 /// Otherwise, it will return None

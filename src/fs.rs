@@ -235,6 +235,7 @@ impl GitFs {
             repo_id,
             inner: repo,
             head: None,
+            snapshots: BTreeMap::new(),
         };
 
         let repo_rc = Arc::from(Mutex::from(git_repo));
@@ -268,6 +269,7 @@ impl GitFs {
             repo_id,
             inner: repo,
             head: Some(head),
+            snapshots: BTreeMap::new(),
         })
     }
 
@@ -560,23 +562,16 @@ impl GitFs {
             return Err(FsError::NotADirectory);
         }
         let name = os_name.to_str().unwrap();
-
         let ctx = FsOperationContext::get_operation(self, parent, true);
         match ctx? {
-            FsOperationContext::Root => {
-                dbg!("root arm");
-                ops::mkdir::mkdir_root(self, ROOT_INO, name, create_attr)
-            }
+            FsOperationContext::Root => ops::mkdir::mkdir_root(self, ROOT_INO, name, create_attr),
             FsOperationContext::RepoDir { ino } => {
-                dbg!("repo arm");
                 ops::mkdir::mkdir_repo(self, ino, name, create_attr)
             }
             FsOperationContext::InsideLiveDir { ino } => {
-                dbg!("live arm");
                 ops::mkdir::mkdir_live(self, ino, name, create_attr)
             }
             FsOperationContext::InsideGitDir { ino } => {
-                dbg!("git arm");
                 ops::mkdir::mkdir_git(self, ino, name, create_attr)
             }
         }
