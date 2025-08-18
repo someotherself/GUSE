@@ -9,7 +9,7 @@ use ratatui::{
     widgets::Widget,
 };
 
-use crate::fs::FsResult;
+use crate::fs::{FsError, FsResult, MyBacktrace};
 
 struct App {
     exit: bool,
@@ -31,11 +31,19 @@ impl App {
     #[allow(clippy::single_match)]
     fn run(&mut self, terminal: &mut DefaultTerminal) -> FsResult<()> {
         while !self.exit {
-            match crossterm::event::read()? {
+            match crossterm::event::read().map_err(|s| FsError::Io {
+                source: s,
+                my_backtrace: MyBacktrace::capture(),
+            })? {
                 crossterm::event::Event::Key(key_event) => self.handle_key_event(key_event)?,
                 _ => {}
             }
-            terminal.draw(|frame| self.draw(frame))?;
+            terminal
+                .draw(|frame| self.draw(frame))
+                .map_err(|s| FsError::Io {
+                    source: s,
+                    my_backtrace: MyBacktrace::capture(),
+                })?;
         }
 
         Ok(())

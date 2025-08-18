@@ -89,6 +89,23 @@ impl MetaDb {
         Ok(git2::Oid::from_str(&oid_str)?)
     }
 
+    pub fn get_name_from_db(&self, ino: u64) -> FsResult<String> {
+        let mut stmt = self.conn.prepare(
+            "SELECT name
+           FROM inode_map
+          WHERE inode = ?1",
+        )?;
+
+        let name_str: Option<String> = stmt
+            .query_row(rusqlite::params![ino as i64], |row| row.get(0))
+            .optional()?;
+
+        let name_str = name_str.ok_or_else(|| FsError::NotFound {
+            thing: format!("inode {ino}"),
+        })?;
+        Ok(name_str.to_string())
+    }
+
     pub fn get_path_from_db(&self, inode: u64) -> FsResult<PathBuf> {
         let mut stmt = self.conn.prepare(
             "SELECT parent_inode, name

@@ -1,4 +1,9 @@
-use crate::fs::{FileAttr, FsError, FsResult, GitFs, REPO_SHIFT, build_attr_dir};
+use git2::Oid;
+
+use crate::{
+    fs::{FileAttr, FsError, FsResult, GitFs, REPO_SHIFT, build_attr_dir},
+    mount::dir_attr,
+};
 
 pub fn lookup_root(fs: &GitFs, name: &str) -> FsResult<Option<FileAttr>> {
     // Handle a look-up for url -> github.tokio-rs.tokio.git
@@ -20,7 +25,7 @@ pub fn lookup_root(fs: &GitFs, name: &str) -> FsResult<Option<FileAttr>> {
 }
 
 pub fn lookup_repo(fs: &GitFs, parent: u64, name: &str) -> FsResult<Option<FileAttr>> {
-    // DOUBLE CHECK. Move code from GitDir.
+    // DOUBLE CHECK. Move code from GitDir. getattr
     let repo_id = GitFs::ino_to_repo_id(parent);
     let repo = match fs.repos_list.get(&repo_id) {
         Some(repo) => repo,
@@ -36,6 +41,8 @@ pub fn lookup_repo(fs: &GitFs, parent: u64, name: &str) -> FsResult<Option<FileA
         attr.inode = live_ino;
         attr
     } else {
+        // It will always be a yyyy-mm fodler
+        // Build blank attr for it
         let child_ino = {
             let repo = repo.lock().map_err(|_| FsError::LockPoisoned)?;
             repo.connection
@@ -43,15 +50,10 @@ pub fn lookup_repo(fs: &GitFs, parent: u64, name: &str) -> FsResult<Option<FileA
                 .unwrap()
                 .get_ino_from_db(parent, name)?
         };
-        let oid = fs.get_oid_from_db(child_ino)?;
-        match repo.lock().unwrap().attr_from_snap(oid, name) {
-            Ok(git_attr) => {
-                let mut attr = fs.object_to_file_attr(child_ino, &git_attr)?;
-                attr.inode = child_ino;
-                attr
-            }
-            Err(_) => return Ok(None),
-        }
+        let mut attr: FileAttr = dir_attr().into();
+        attr.inode = child_ino;
+        attr.perm = 0o555;
+        attr
     };
     Ok(Some(attr))
 }
@@ -72,23 +74,39 @@ pub fn lookup_live(fs: &GitFs, parent: u64, name: &str) -> FsResult<Option<FileA
 }
 
 pub fn lookup_git(fs: &GitFs, parent: u64, name: &str) -> FsResult<Option<FileAttr>> {
+    // If oid == zero, folder is yyyy-mm-dd. Build black
+    // else oid is commit_id or tree_id
     let repo = fs.get_repo(parent)?;
-    let (commit_oid, _) = fs.find_commit_in_gitdir(parent)?;
+    let child_ino = {
+        let repo = repo.lock().map_err(|_| FsError::LockPoisoned)?;
+        repo.connection
+            .lock()
+            .unwrap()
+            .get_ino_from_db(parent, name)?
+    };
+
     let oid = fs.get_oid_from_db(parent)?;
-    let parent_tree_oid = if oid == commit_oid {
-        let repo = repo.lock().map_err(|_| FsError::LockPoisoned)?;
-        let commit = repo.inner.find_commit(commit_oid)?;
-        commit.tree_id()
+    let mut attr = if oid == Oid::zero() {
+        let attr: FileAttr = dir_attr().into();
+        attr
     } else {
-        // else, get parent oid from db
-        fs.get_oid_from_db(parent)?
+        let (commit_oid, _) = fs.get_parent_commit(parent)?;
+        let oid = fs.get_oid_from_db(parent)?;
+        let parent_tree_oid = if oid == commit_oid {
+            let repo = repo.lock().map_err(|_| FsError::LockPoisoned)?;
+            let commit = repo.inner.find_commit(commit_oid)?;
+            commit.tree_id()
+        } else {
+            // else, get parent oid from db
+            fs.get_oid_from_db(parent)?
+        };
+        let object_attr = {
+            let repo = repo.lock().map_err(|_| FsError::LockPoisoned)?;
+            repo.find_by_name(parent_tree_oid, name)?
+        };
+        fs.object_to_file_attr(child_ino, &object_attr)?
     };
-    let object_attr = {
-        let repo = repo.lock().map_err(|_| FsError::LockPoisoned)?;
-        repo.find_by_name(parent_tree_oid, name)?
-    };
-    let child_ino = fs.get_ino_from_db(parent, name)?;
-    let mut attr = fs.object_to_file_attr(child_ino, &object_attr)?;
     attr.inode = child_ino;
+    attr.perm = 0o555;
     Ok(Some(attr))
 }

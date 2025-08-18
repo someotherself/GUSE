@@ -1,5 +1,5 @@
 use crate::fs::fileattr::FileAttr;
-use crate::fs::{CreateFileAttr, FsError, FsResult, GitFs, REPO_SHIFT, repo};
+use crate::fs::{CreateFileAttr, FsError, FsResult, GitFs, MyBacktrace, REPO_SHIFT, repo};
 
 pub fn mkdir_root(
     fs: &mut GitFs,
@@ -12,8 +12,9 @@ pub fn mkdir_root(
             println!("fetching repo {}", &repo_name);
             let repo = fs.new_repo(&repo_name)?;
             {
-                let repo = repo.lock().map_err(|_| FsError::LockPoisoned)?;
+                let mut repo = repo.lock().map_err(|_| FsError::LockPoisoned)?;
                 repo.fetch_anon(&url)?;
+                repo.refresh_snapshots()?;
             }
             let repo_id = {
                 let repo = repo.lock().map_err(|_| FsError::LockPoisoned)?;
@@ -56,7 +57,10 @@ pub fn mkdir_live(
     }
 
     let dir_path = fs.build_path(parent, name)?;
-    std::fs::create_dir(dir_path)?;
+    std::fs::create_dir(dir_path).map_err(|s| FsError::Io {
+        source: s,
+        my_backtrace: MyBacktrace::capture(),
+    })?;
 
     let new_ino = fs.next_inode(parent)?;
 

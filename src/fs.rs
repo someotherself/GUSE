@@ -3,7 +3,7 @@ use std::ffi::{OsStr, OsString};
 use std::fs::{File, OpenOptions};
 use std::io::{BufReader, BufWriter, Write};
 use std::os::unix::fs::{MetadataExt, PermissionsExt};
-use std::path::{Component, Path};
+use std::path::Path;
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::{Duration, UNIX_EPOCH};
 use std::{
@@ -83,8 +83,9 @@ pub type FsResult<T> = Result<T, FsError>;
 pub enum FsError {
     #[error("IO error: {source}")]
     Io {
-        #[from]
+        #[source]
         source: std::io::Error,
+        my_backtrace: MyBacktrace,
     },
     #[error("Repo does not exist")]
     NoRepo,
@@ -110,20 +111,78 @@ pub enum FsError {
     NotFound { thing: String },
     #[error(transparent)]
     Db(#[from] rusqlite::Error),
-    #[error(transparent)]
-    Git(#[from] git2::Error),
+    #[error("git error during {op} at {source}")]
+    Git {
+        op: &'static str,
+        #[source]
+        source: git2::Error,
+        my_backtrace: MyBacktrace,
+    },
+}
+
+pub struct MyBacktrace(std::backtrace::Backtrace);
+
+impl MyBacktrace {
+    #[track_caller]
+    pub fn capture() -> Self {
+        Self(std::backtrace::Backtrace::force_capture())
+    }
+    pub fn as_std(&self) -> &std::backtrace::Backtrace {
+        &self.0
+    }
+}
+
+impl std::fmt::Display for MyBacktrace {
+    fn fmt(&self, _f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        Ok(())
+    }
+}
+impl std::fmt::Debug for MyBacktrace {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        if f.alternate() {
+            write!(f, "{}", self.0)
+        } else {
+            write!(f, "<bt>")
+        }
+    }
+}
+
+impl From<std::io::Error> for FsError {
+    fn from(source: std::io::Error) -> Self {
+        FsError::Io {
+            source,
+            my_backtrace: MyBacktrace::capture(),
+        }
+    }
+}
+
+impl From<git2::Error> for FsError {
+    fn from(source: git2::Error) -> Self {
+        FsError::Git {
+            op: "unknown",
+            source,
+            my_backtrace: MyBacktrace::capture(),
+        }
+    }
 }
 
 impl From<FsError> for i32 {
     fn from(e: FsError) -> i32 {
         match e {
-            FsError::Git(_) => libc::ENOENT,
+            FsError::Git {
+                op: _,
+                source: _,
+                my_backtrace: _,
+            } => libc::ENOENT,
             FsError::ReadOnly => libc::EROFS,
             FsError::InvalidInput => libc::EINVAL,
             FsError::Db(_) => libc::ENOENT,
             FsError::IsDirectory => libc::EISDIR,
             FsError::NotADirectory => libc::ENOTDIR,
-            FsError::Io { source: _ } => libc::EIO,
+            FsError::Io {
+                source: _,
+                my_backtrace: _,
+            } => libc::EIO,
             FsError::NotFound { thing: _ } => libc::ENOENT,
             FsError::AlreadyExists => libc::ENOENT,
             FsError::NoRepo => libc::ENOENT, // Correct?
@@ -201,8 +260,16 @@ impl GitFs {
         if repo_path.exists() {
             return Err(FsError::AlreadyExists);
         }
-        std::fs::create_dir(&repo_path)?;
-        std::fs::set_permissions(&repo_path, std::fs::Permissions::from_mode(0o775))?;
+        std::fs::create_dir(&repo_path).map_err(|s| FsError::Io {
+            source: s,
+            my_backtrace: MyBacktrace::capture(),
+        })?;
+        std::fs::set_permissions(&repo_path, std::fs::Permissions::from_mode(0o775)).map_err(
+            |s| FsError::Io {
+                source: s,
+                my_backtrace: MyBacktrace::capture(),
+            },
+        )?;
         let mut connection = self.init_meta_db(repo_name)?;
 
         let repo_id = self.next_repo_id();
@@ -245,8 +312,19 @@ impl GitFs {
 
     pub fn open_repo(&self, repo_name: &str) -> FsResult<GitRepo> {
         let repo_path = PathBuf::from(&self.repos_dir).join(repo_name).join("git");
-        let repo = Repository::open(&repo_path)?;
-        let head = repo.revparse_single("HEAD")?.id();
+        let repo = Repository::open(&repo_path).map_err(|source| FsError::Git {
+            op: "Repository::open",
+            source,
+            my_backtrace: MyBacktrace::capture(),
+        })?;
+        let head = repo
+            .revparse_single("HEAD")
+            .map_err(|source| FsError::Git {
+                op: "Repository::open",
+                source,
+                my_backtrace: MyBacktrace::capture(),
+            })?
+            .id();
         let db = self.open_meta_db(repo_name)?;
 
         let mut stmt = db.conn.prepare(
@@ -351,7 +429,13 @@ impl GitFs {
     fn register_read(&self, ino: u64, fh: u64) -> FsResult<()> {
         let attr = self.getattr(ino)?.into();
         let path = self.get_path_from_db(ino)?;
-        let reader = std::io::BufReader::new(OpenOptions::new().read(true).open(&path)?);
+        let reader =
+            std::io::BufReader::new(OpenOptions::new().read(true).open(&path).map_err(|s| {
+                FsError::Io {
+                    source: s,
+                    my_backtrace: MyBacktrace::capture(),
+                }
+            })?);
         let ctx = ReadHandleContext {
             ino,
             attr,
@@ -359,11 +443,11 @@ impl GitFs {
         };
         self.read_handles
             .write()
-            .unwrap()
+            .map_err(|_| FsError::LockPoisoned)?
             .insert(fh, Mutex::from(ctx));
         self.opened_handes_for_read
             .write()
-            .unwrap()
+            .map_err(|_| FsError::LockPoisoned)?
             .entry(ino)
             .or_default()
             .insert(fh);
@@ -373,8 +457,16 @@ impl GitFs {
     fn register_write(&self, ino: u64, fh: u64) -> FsResult<()> {
         let attr = self.getattr(ino)?.into();
         let path = self.get_path_from_db(ino)?;
-        let writer =
-            std::io::BufWriter::new(OpenOptions::new().read(true).write(true).open(&path)?);
+        let writer = std::io::BufWriter::new(
+            OpenOptions::new()
+                .read(true)
+                .write(true)
+                .open(&path)
+                .map_err(|s| FsError::Io {
+                    source: s,
+                    my_backtrace: MyBacktrace::capture(),
+                })?,
+        );
         let ctx = WriteHandleContext {
             ino,
             attr,
@@ -382,11 +474,11 @@ impl GitFs {
         };
         self.write_handles
             .write()
-            .unwrap()
+            .map_err(|_| FsError::LockPoisoned)?
             .insert(fh, Mutex::from(ctx));
         self.opened_handes_for_write
             .write()
-            .unwrap()
+            .map_err(|_| FsError::LockPoisoned)?
             .entry(ino)
             .or_default()
             .insert(fh);
@@ -459,9 +551,22 @@ impl GitFs {
             ctx.writer
                 .as_mut()
                 .ok_or_else(|| FsError::Internal("Writer missing".to_string()))?
-                .flush()?;
+                .flush()
+                .map_err(|s| FsError::Io {
+                    source: s,
+                    my_backtrace: MyBacktrace::capture(),
+                })?;
             let path = self.get_path_from_db(ctx.ino)?;
-            File::open(path)?.sync_all()?;
+            File::open(path)
+                .map_err(|s| FsError::Io {
+                    source: s,
+                    my_backtrace: MyBacktrace::capture(),
+                })?
+                .sync_all()
+                .map_err(|s| FsError::Io {
+                    source: s,
+                    my_backtrace: MyBacktrace::capture(),
+                })?;
             drop(ctx);
             self.reset_handles()?;
             valid_fh = true;
@@ -649,16 +754,36 @@ impl GitFs {
                     path.join(db_path)
                 };
                 let mut entries: Vec<DirectoryEntryPlus> = vec![];
-                for node in path.read_dir()? {
-                    let node = node?;
+                for node in path.read_dir().map_err(|s| FsError::Io {
+                    source: s,
+                    my_backtrace: MyBacktrace::capture(),
+                })? {
+                    let node = node.map_err(|s| FsError::Io {
+                        source: s,
+                        my_backtrace: MyBacktrace::capture(),
+                    })?;
                     let node_name = node.file_name();
                     let node_name_str = node_name.to_string_lossy();
                     if ignore_list.contains(&node_name) {
                         continue;
                     }
-                    let (kind, filemode) = if node.file_type()?.is_dir() {
+                    let (kind, filemode) = if node
+                        .file_type()
+                        .map_err(|s| FsError::Io {
+                            source: s,
+                            my_backtrace: MyBacktrace::capture(),
+                        })?
+                        .is_dir()
+                    {
                         (FileType::Directory, libc::S_IFDIR)
-                    } else if node.file_type()?.is_file() {
+                    } else if node
+                        .file_type()
+                        .map_err(|s| FsError::Io {
+                            source: s,
+                            my_backtrace: MyBacktrace::capture(),
+                        })?
+                        .is_file()
+                    {
                         (FileType::RegularFile, libc::S_IFREG)
                     } else {
                         (FileType::Symlink, libc::S_IFLNK)
@@ -723,10 +848,22 @@ impl GitFs {
 // gitfs_helpers
 impl GitFs {
     fn attr_from_dir(&self, path: PathBuf) -> FsResult<FileAttr> {
-        let metadata = path.metadata()?;
-        let atime: SystemTime = metadata.accessed()?;
-        let mtime: SystemTime = metadata.modified()?;
-        let crtime: SystemTime = metadata.created()?;
+        let metadata = path.metadata().map_err(|s| FsError::Io {
+            source: s,
+            my_backtrace: MyBacktrace::capture(),
+        })?;
+        let atime: SystemTime = metadata.accessed().map_err(|s| FsError::Io {
+            source: s,
+            my_backtrace: MyBacktrace::capture(),
+        })?;
+        let mtime: SystemTime = metadata.modified().map_err(|s| FsError::Io {
+            source: s,
+            my_backtrace: MyBacktrace::capture(),
+        })?;
+        let crtime: SystemTime = metadata.created().map_err(|s| FsError::Io {
+            source: s,
+            my_backtrace: MyBacktrace::capture(),
+        })?;
 
         let secs = metadata.ctime();
         let nsecs = metadata.ctime_nsec() as u32;
@@ -790,6 +927,27 @@ impl GitFs {
             .get(&repo_id)
             .ok_or_else(|| FsError::NoRepo)?;
         Ok(repo.clone())
+    }
+
+    pub fn get_parent_commit(&self, ino: u64) -> FsResult<(Oid, String)> {
+        let repo_arc = self.get_repo(ino)?;
+
+        let mut cur = ino;
+        let mut oid = self.get_oid_from_db(ino)?;
+        while {
+            let repo = repo_arc.lock().map_err(|_| FsError::LockPoisoned)?;
+            repo.inner.find_commit(oid).is_err()
+        } {
+            let parent_ino = self.get_parent_ino(cur)?;
+            oid = self.get_oid_from_db(parent_ino)?;
+            if oid == Oid::zero() {
+                return Err(FsError::NotFound {
+                    thing: "Parent commit not found".to_string(),
+                });
+            }
+            cur = parent_ino;
+        }
+        Ok((oid, self.get_name_from_db(cur)?))
     }
 
     fn is_in_live(&self, ino: u64) -> FsResult<bool> {
@@ -874,7 +1032,10 @@ impl GitFs {
             }
 
             let repos_dir = &self.repos_dir;
-            std::fs::create_dir_all(repos_dir)?;
+            std::fs::create_dir_all(repos_dir).map_err(|s| FsError::Io {
+                source: s,
+                my_backtrace: MyBacktrace::capture(),
+            })?;
         }
         Ok(())
     }
@@ -1013,34 +1174,6 @@ impl GitFs {
         };
         let mut conn = conn_arc.lock().map_err(|_| FsError::LockPoisoned)?;
         conn.write_inodes_to_db(nodes)
-    }
-
-    fn find_commit_in_gitdir(&self, ino: u64) -> FsResult<(Oid, String)> {
-        // Will return something: "repo_name/snapX_XXXXX/path/to/file"
-        let path = self.get_path_from_db(ino)?;
-        let snap_name = path
-            .components()
-            .find_map(|c| match c {
-                Component::Normal(s) if s.to_string_lossy().starts_with("snap") => {
-                    Some(s.to_os_string())
-                }
-                _ => None,
-            })
-            .ok_or_else(|| FsError::InvalidInput)?
-            .into_string()
-            .unwrap();
-        let repo_ino = self.get_repo_ino(ino)?;
-        let snap_ino = {
-            let repo = self.get_repo(ino)?;
-            let repo = repo.lock().map_err(|_| FsError::LockPoisoned)?;
-            repo.connection
-                .lock()
-                .unwrap()
-                .get_ino_from_db(repo_ino, &snap_name)?
-        };
-        let snap_oid = self.get_oid_from_db(snap_ino)?;
-
-        Ok((snap_oid, snap_name))
     }
 
     fn get_repo_ino(&self, ino: u64) -> FsResult<u64> {

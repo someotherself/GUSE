@@ -31,7 +31,7 @@ pub struct Remote {
 }
 
 impl GitRepo {
-    pub fn refresh_snapshots(&mut self, limit: usize) -> FsResult<()> {
+    pub fn refresh_snapshots(&mut self) -> FsResult<()> {
         let head = match self.inner.head() {
             Ok(h) => h,
             Err(_) => {
@@ -41,23 +41,42 @@ impl GitRepo {
                 return Ok(());
             }
         };
-        let head_commit = head.peel_to_commit()?;
+
+        let head_commit = head.peel_to_commit().map_err(|source| FsError::Git {
+            op: "Repository::open",
+            source,
+            my_backtrace: super::MyBacktrace::capture(),
+        })?;
         self.head = Some(head_commit.id());
 
-        let mut walk = self.inner.revwalk()?;
-        walk.set_sorting(git2::Sort::TOPOLOGICAL | git2::Sort::TIME)?;
-        walk.push(head_commit.id())?;
+        let mut walk = self.inner.revwalk().map_err(|source| FsError::Git {
+            op: "Repository::open",
+            source,
+            my_backtrace: super::MyBacktrace::capture(),
+        })?;
+        walk.set_sorting(git2::Sort::TOPOLOGICAL | git2::Sort::TIME)
+            .map_err(|source| FsError::Git {
+                op: "Repository::open",
+                source,
+                my_backtrace: super::MyBacktrace::capture(),
+            })?;
+        walk.push(head_commit.id()).map_err(|source| FsError::Git {
+            op: "Repository::open",
+            source,
+            my_backtrace: super::MyBacktrace::capture(),
+        })?;
 
         self.snapshots.clear();
 
-        for (i, oid_res) in walk.enumerate() {
-            if i >= limit {
-                break;
-            }
-            let oid = oid_res?;
-            let c = self.inner.find_commit(oid)?;
+        for oid_res in walk {
+            let oid = oid_res?; // keep as-is
+            let c = self.inner.find_commit(oid).map_err(|source| FsError::Git {
+                op: "Repository::open",
+                source,
+                my_backtrace: super::MyBacktrace::capture(),
+            })?;
             let t = c.time();
-            let secs = t.seconds(); // see “offset” note below
+            let secs = t.seconds();
             self.snapshots.entry(secs).or_default().push(oid);
         }
         Ok(())
@@ -89,23 +108,11 @@ impl GitRepo {
         buckets
     }
 
-    pub fn month_folders(&self, use_offset: bool) -> FsResult<Vec<ObjectAttr>> {
+    pub fn month_folders(&self) -> FsResult<Vec<ObjectAttr>> {
         let mut out = Vec::new();
 
-        for (secs, oids) in &self.snapshots {
-            let adj = if use_offset {
-                let t = self
-                    .inner
-                    .find_commit(oids[0])
-                    .ok()
-                    .map(|c| c.time().offset_minutes())
-                    .unwrap_or(0);
-                secs + (t as i64) * 60
-            } else {
-                *secs
-            };
-
-            let dt = chrono::DateTime::from_timestamp(adj, 0)
+        for secs in self.snapshots.keys() {
+            let dt = chrono::DateTime::from_timestamp(*secs, 0)
                 .unwrap_or_else(|| chrono::DateTime::from_timestamp(0, 0).unwrap());
             let folder_name = format!("{:04}-{:02}", dt.year(), dt.month());
 
@@ -116,7 +123,7 @@ impl GitRepo {
 
             out.push(ObjectAttr {
                 name: folder_name,
-                oid: git2::Oid::zero(),
+                oid: Oid::zero(),
                 kind: ObjectType::Tree,
                 filemode: 0o040000,
                 size: 0,
@@ -132,14 +139,19 @@ impl GitRepo {
         Some((y.parse().ok()?, m.parse().ok()?))
     }
 
-    /// Build *virtual* day folders for a given month (key "YYYY-MM"), newest → oldest.
-    /// Folder name format: "Snaps on Aug 6, 2025".
-    pub fn day_folders_newest_first(
-        &self,
-        month_key: &str,
-        use_offset: bool,
-    ) -> FsResult<Vec<ObjectAttr>> {
-        let (want_year, want_month) =
+    fn parse_day_key(key: &str) -> Option<(i32, u32, u32)> {
+        let mut comp = key.splitn(3, '-');
+        let y = comp.next()?;
+        let m = comp.next()?;
+        let d = comp.next()?;
+        Some((y.parse().ok()?, m.parse().ok()?, d.parse().ok()?))
+    }
+
+    // Takes a month kay -> "YYYY-MM".
+    // Returns a vec of commits whose commit_time match that day
+    // Folder name format: "Snaps on Aug 6, 2025".
+    pub fn day_folders(&self, month_key: &str) -> FsResult<Vec<ObjectAttr>> {
+        let (year, month) =
             Self::parse_month_key(month_key).ok_or_else(|| FsError::InvalidInput)?;
 
         let mut out: Vec<ObjectAttr> = Vec::new();
@@ -147,20 +159,12 @@ impl GitRepo {
 
         // self.snapshots: BTreeMap<i64 /*secs UTC*/, Vec<Oid>>; iterate newest -> oldest
         for (&secs_utc, oids) in self.snapshots.iter().rev() {
-            for &oid in oids {
-                let commit = self.inner.find_commit(oid)?;
-                let t = commit.time();
-                let secs_base = t.seconds();
-                let secs_adj = if use_offset {
-                    secs_base + (t.offset_minutes() as i64) * 60
-                } else {
-                    secs_base
-                };
-
-                let dt = DateTime::from_timestamp(secs_adj, 0)
+            for _ in oids {
+                // Do not handle the offset. Only UTC time.
+                let dt = DateTime::from_timestamp(secs_utc, 0)
                     .unwrap_or_else(|| DateTime::from_timestamp(0, 0).unwrap());
 
-                if dt.year() != want_year || dt.month() != want_month {
+                if dt.year() != year || dt.month() != month {
                     continue;
                 }
 
@@ -170,7 +174,7 @@ impl GitRepo {
                     continue;
                 }
 
-                let folder_name = format!("Snaps on {}", dt.format("%b %-d, %Y"));
+                let folder_name = format!("Snaps_on_{}", dt.format("%b.%-d.%Y"));
 
                 out.push(ObjectAttr {
                     name: folder_name,
@@ -178,7 +182,7 @@ impl GitRepo {
                     kind: ObjectType::Tree,
                     filemode: 0o040000,
                     size: 0,
-                    commit_time: git2::Time::new(secs_utc, t.offset_minutes()),
+                    commit_time: git2::Time::new(secs_utc, 0),
                 });
             }
         }
@@ -186,10 +190,46 @@ impl GitRepo {
         Ok(out)
     }
 
+    pub fn day_commits(&self, day_key: &str) -> FsResult<Vec<ObjectAttr>> {
+        let (year, month, day) =
+            Self::parse_day_key(day_key).ok_or_else(|| FsError::InvalidInput)?;
+
+        let mut out: Vec<ObjectAttr> = Vec::new();
+        let mut commit_num = 0;
+
+        for (&secs_utc, oids) in &self.snapshots {
+            for commit_oid in oids {
+                let dt = DateTime::from_timestamp(secs_utc, 0)
+                    .unwrap_or_else(|| DateTime::from_timestamp(0, 0).unwrap());
+
+                if dt.year() != year || dt.month() != month || dt.day() != day {
+                    continue;
+                }
+
+                commit_num += 1;
+                let folder_name = format!("Snap{commit_num:03}_{commit_oid:.7}");
+
+                out.push(ObjectAttr {
+                    name: folder_name,
+                    oid: *commit_oid,
+                    kind: ObjectType::Tree,
+                    filemode: 0o040000,
+                    size: 0,
+                    commit_time: git2::Time::new(secs_utc, 0),
+                });
+            }
+        }
+        Ok(out)
+    }
+
     pub fn fetch_anon(&self, url: &str) -> FsResult<()> {
         let repo = &self.inner;
         // Set up the anonymous remote and callbacks
-        let mut remote = repo.remote_anonymous(url)?;
+        let mut remote = repo.remote_anonymous(url).map_err(|source| FsError::Git {
+            op: "Repository::open",
+            source,
+            my_backtrace: super::MyBacktrace::capture(),
+        })?;
         let mut cbs = RemoteCallbacks::new();
         cbs.sideband_progress(|d| {
             print!("remote: {}", std::str::from_utf8(d).unwrap_or(""));
@@ -215,9 +255,19 @@ impl GitRepo {
         let mut fo = FetchOptions::new();
         fo.remote_callbacks(cbs);
 
-        remote.connect(Direction::Fetch)?;
+        remote
+            .connect(Direction::Fetch)
+            .map_err(|source| FsError::Git {
+                op: "Repository::open",
+                source,
+                my_backtrace: super::MyBacktrace::capture(),
+            })?;
         let default_branch = remote.default_branch().ok(); // Optional but nice
-        remote.disconnect()?;
+        remote.disconnect().map_err(|source| FsError::Git {
+            op: "Repository::open",
+            source,
+            my_backtrace: super::MyBacktrace::capture(),
+        })?;
 
         let mut refspecs = vec![
             "+refs/heads/*:refs/remotes/anon/*".to_string(),
@@ -246,12 +296,24 @@ impl GitRepo {
                     let target = format!("refs/remotes/anon/{short}");
                     // If that ref exists, point HEAD to it; else fall back to anon/HEAD
                     if repo.refname_to_id(&target).is_ok() {
-                        repo.set_head(&target)?;
+                        repo.set_head(&target).map_err(|source| FsError::Git {
+                            op: "Repository::open",
+                            source,
+                            my_backtrace: super::MyBacktrace::capture(),
+                        })?;
                     } else if let Ok(r) = repo.find_reference("refs/remotes/anon/HEAD") {
                         if let Some(sym) = r.symbolic_target() {
-                            repo.set_head(sym)?;
+                            repo.set_head(sym).map_err(|source| FsError::Git {
+                                op: "Repository::open",
+                                source,
+                                my_backtrace: super::MyBacktrace::capture(),
+                            })?;
                         } else if let Some(oid) = r.target() {
-                            repo.set_head_detached(oid)?;
+                            repo.set_head_detached(oid).map_err(|source| FsError::Git {
+                                op: "Repository::open",
+                                source,
+                                my_backtrace: super::MyBacktrace::capture(),
+                            })?;
                         }
                     }
                 }
@@ -259,17 +321,28 @@ impl GitRepo {
                 if let Some(sym) = r.symbolic_target() {
                     repo.set_head(sym)?;
                 } else if let Some(oid) = r.target() {
-                    repo.set_head_detached(oid)?;
+                    repo.set_head_detached(oid).map_err(|source| FsError::Git {
+                        op: "Repository::open",
+                        source,
+                        my_backtrace: super::MyBacktrace::capture(),
+                    })?;
                 }
             }
         }
-
         Ok(())
     }
 
     pub fn getattr<P: AsRef<Path>>(&self, path: P) -> FsResult<ObjectAttr> {
         // Get the commit the head points to
-        let commit = self.inner.head()?.peel_to_commit()?;
+        let commit = self
+            .inner
+            .head()?
+            .peel_to_commit()
+            .map_err(|source| FsError::Git {
+                op: "Repository::open",
+                source,
+                my_backtrace: super::MyBacktrace::capture(),
+            })?;
         let commit_time = commit.time();
         let mut tree = commit.tree()?;
         let last_comp = path
@@ -294,17 +367,38 @@ impl GitRepo {
                 if is_last_comp {
                     // Final component is a directory
                     last_name = Some(name.to_string());
-                    tree = self.inner.find_tree(entry.id())?;
+                    tree = self
+                        .inner
+                        .find_tree(entry.id())
+                        .map_err(|source| FsError::Git {
+                            op: "Repository::open",
+                            source,
+                            my_backtrace: super::MyBacktrace::capture(),
+                        })?;
                 } else {
                     // Descend into the sub-tree for next components
-                    tree = self.inner.find_tree(entry.id())?;
+                    tree = self
+                        .inner
+                        .find_tree(entry.id())
+                        .map_err(|source| FsError::Git {
+                            op: "Repository::open",
+                            source,
+                            my_backtrace: super::MyBacktrace::capture(),
+                        })?;
                 }
             } else {
                 // If it's the last component
                 if is_last_comp {
                     // and a blob. return the ObjectAttr
                     if entry.kind().unwrap() == git2::ObjectType::Blob {
-                        let blob = self.inner.find_blob(entry.id())?;
+                        let blob =
+                            self.inner
+                                .find_blob(entry.id())
+                                .map_err(|source| FsError::Git {
+                                    op: "Repository::open",
+                                    source,
+                                    my_backtrace: super::MyBacktrace::capture(),
+                                })?;
                         let size = blob.size() as u64;
                         // blob with mode 0o120000 will be a symlink
                         return Ok(ObjectAttr {
@@ -332,9 +426,18 @@ impl GitRepo {
         })
     }
 
-    // Read_dir
+    /// Read_dir
+    ///
+    /// Called with tree_oid: None if we are at the root of the commit
     pub fn list_tree(&self, commit: Oid, tree_oid: Option<Oid>) -> FsResult<Vec<ObjectAttr>> {
-        let commit = self.inner.find_commit(commit)?;
+        let commit = self
+            .inner
+            .find_commit(commit)
+            .map_err(|source| FsError::Git {
+                op: "Repository::open",
+                source,
+                my_backtrace: super::MyBacktrace::capture(),
+            })?;
         let mut entries = vec![];
         let tree = match tree_oid {
             Some(tree_oid) => self.inner.find_tree(tree_oid)?,
@@ -355,7 +458,14 @@ impl GitRepo {
     }
 
     pub fn find_by_name(&self, tree_oid: Oid, name: &str) -> FsResult<ObjectAttr> {
-        let tree = self.inner.find_tree(tree_oid)?;
+        let tree = self
+            .inner
+            .find_tree(tree_oid)
+            .map_err(|source| FsError::Git {
+                op: "Repository::open",
+                source,
+                my_backtrace: super::MyBacktrace::capture(),
+            })?;
 
         let entry = tree.get_name(name).ok_or_else(|| FsError::NotFound {
             thing: format!("{name} not found in tree {tree_oid}"),
@@ -369,7 +479,15 @@ impl GitRepo {
                 .size(),
             _ => 0,
         };
-        let commit = self.inner.head()?.peel_to_commit()?;
+        let commit = self
+            .inner
+            .head()?
+            .peel_to_commit()
+            .map_err(|source| FsError::Git {
+                op: "Repository::open",
+                source,
+                my_backtrace: super::MyBacktrace::capture(),
+            })?;
         let commit_time = commit.time();
         Ok(ObjectAttr {
             name: name.into(),
@@ -382,9 +500,20 @@ impl GitRepo {
     }
 
     pub fn find_in_commit(&self, commit_id: Oid, oid: Oid) -> FsResult<ObjectAttr> {
-        let commit_obj = self.inner.find_commit(commit_id)?;
+        let commit_obj = self
+            .inner
+            .find_commit(commit_id)
+            .map_err(|source| FsError::Git {
+                op: "Repository::open",
+                source,
+                my_backtrace: super::MyBacktrace::capture(),
+            })?;
         let commit_time = commit_obj.time();
-        let tree = commit_obj.tree()?;
+        let tree = commit_obj.tree().map_err(|source| FsError::Git {
+            op: "Repository::open",
+            source,
+            my_backtrace: super::MyBacktrace::capture(),
+        })?;
 
         // If they asked for the root tree itself
         if tree.id() == oid {
@@ -422,11 +551,10 @@ impl GitRepo {
             TreeWalkResult::Ok
         });
 
-        // Treat the intentional abort as success; propagate anything else
-        if let Err(e) = walk_res {
-            if !(e.class() == ErrorClass::Callback && e.code() == ErrorCode::User) {
-                return Err(e.into());
-            }
+        if let Err(e) = walk_res
+            && !(e.class() == ErrorClass::Callback && e.code() == ErrorCode::User)
+        {
+            return Err(e.into());
         }
         found.ok_or_else(|| FsError::NotFound {
             thing: format!("oid {} not found in commit {}", oid, commit_obj.id()),
@@ -437,17 +565,38 @@ impl GitRepo {
         let limit = 20;
         let head_commit = self.head_commit()?;
 
-        let mut walk = self.inner.revwalk()?;
-        walk.set_sorting(Sort::TOPOLOGICAL | Sort::TIME)?;
-        walk.push(head_commit.id())?;
+        let mut walk = self.inner.revwalk().map_err(|source| FsError::Git {
+            op: "Repository::open",
+            source,
+            my_backtrace: super::MyBacktrace::capture(),
+        })?;
+        walk.set_sorting(Sort::TOPOLOGICAL | Sort::TIME)
+            .map_err(|source| FsError::Git {
+                op: "Repository::open",
+                source,
+                my_backtrace: super::MyBacktrace::capture(),
+            })?;
+        walk.push(head_commit.id()).map_err(|source| FsError::Git {
+            op: "Repository::open",
+            source,
+            my_backtrace: super::MyBacktrace::capture(),
+        })?;
 
         let mut out = Vec::with_capacity(limit.min(256));
         for (i, oid_res) in walk.enumerate() {
             if out.len() >= limit {
                 break;
             }
-            let oid = oid_res?;
-            let commit = self.inner.find_commit(oid)?;
+            let oid = oid_res.map_err(|source| FsError::Git {
+                op: "Repository::open",
+                source,
+                my_backtrace: super::MyBacktrace::capture(),
+            })?;
+            let commit = self.inner.find_commit(oid).map_err(|source| FsError::Git {
+                op: "Repository::open",
+                source,
+                my_backtrace: super::MyBacktrace::capture(),
+            })?;
             let commit_name = format!("snap{}_{:.7}", i + 1, commit.id());
             out.push(ObjectAttr {
                 name: commit_name,
@@ -464,7 +613,11 @@ impl GitRepo {
     pub fn readdir_commit(&self) -> FsResult<Vec<ObjectAttr>> {
         let mut entries: Vec<ObjectAttr> = vec![];
         let commit = self.head_commit()?;
-        let root_tree = commit.tree()?;
+        let root_tree = commit.tree().map_err(|source| FsError::Git {
+            op: "Repository::open",
+            source,
+            my_backtrace: super::MyBacktrace::capture(),
+        })?;
         for entry in root_tree.iter() {
             let oid = entry.id();
             let kind = entry.kind().unwrap();
@@ -486,7 +639,14 @@ impl GitRepo {
     // The FileAttr for the snap folder will contain the commit id instead of tree
     // This makes walking and getting info for the Fileattr easier
     pub fn attr_from_snap(&self, commit_oid: Oid, name: &str) -> FsResult<ObjectAttr> {
-        let commit = self.inner.find_commit(commit_oid)?;
+        let commit = self
+            .inner
+            .find_commit(commit_oid)
+            .map_err(|source| FsError::Git {
+                op: "Repository::open",
+                source,
+                my_backtrace: super::MyBacktrace::capture(),
+            })?;
         let name = name.to_string();
         let oid = commit.id();
         let kind = ObjectType::Commit;
@@ -504,13 +664,28 @@ impl GitRepo {
         })
     }
 
-    fn head_commit(&self) -> FsResult<Commit> {
+    fn head_commit(&self) -> FsResult<Commit<'_>> {
         let repo = &self.inner;
-        Ok(repo.head()?.peel_to_commit()?)
+        repo.head()
+            .map_err(|source| FsError::Git {
+                op: "Repository::open",
+                source,
+                my_backtrace: super::MyBacktrace::capture(),
+            })?
+            .peel_to_commit()
+            .map_err(|source| FsError::Git {
+                op: "Repository::open",
+                source,
+                my_backtrace: super::MyBacktrace::capture(),
+            })
     }
 
-    fn head_tree(&self) -> FsResult<Tree> {
-        Ok(self.head_commit()?.tree()?)
+    fn head_tree(&self) -> FsResult<Tree<'_>> {
+        self.head_commit()?.tree().map_err(|source| FsError::Git {
+            op: "Repository::open",
+            source,
+            my_backtrace: super::MyBacktrace::capture(),
+        })
     }
 }
 

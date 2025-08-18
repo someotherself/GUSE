@@ -19,7 +19,7 @@ use std::{num::NonZeroU32, path::PathBuf};
 
 use crate::fs::fileattr::{CreateFileAttr, FileAttr, FileType};
 use crate::fs::ops::readdir::{DirectoryEntry, DirectoryEntryPlus};
-use crate::fs::{FsResult, GitFs, REPO_SHIFT, ROOT_INO, repo};
+use crate::fs::{FsError, FsResult, GitFs, MyBacktrace, REPO_SHIFT, ROOT_INO, repo};
 
 const TTL: Duration = Duration::from_secs(60);
 const FMODE_EXEC: i32 = 0x20;
@@ -60,7 +60,10 @@ pub fn mount_fuse(opts: MountPoint) -> FsResult<()> {
     } = opts;
 
     if !mountpoint.exists() {
-        std::fs::create_dir(&mountpoint)?;
+        std::fs::create_dir(&mountpoint).map_err(|s| FsError::Io {
+            source: s,
+            my_backtrace: MyBacktrace::capture(),
+        })?;
     }
 
     let mut options = vec![
@@ -71,7 +74,10 @@ pub fn mount_fuse(opts: MountPoint) -> FsResult<()> {
         options.push(MountOption::RO);
     }
     if allow_other {
-        fuse_allow_other_enabled()?;
+        fuse_allow_other_enabled().map_err(|s| FsError::Io {
+            source: s,
+            my_backtrace: MyBacktrace::capture(),
+        })?;
         options.push(MountOption::AllowOther);
     }
     if allow_root {
@@ -151,8 +157,7 @@ impl fuser::Filesystem for GitFsAdapter {
             }
         };
         let attr_result = fs.getattr(parent);
-        if attr_result.is_ok() {
-            let parent_attrs = attr_result.unwrap();
+        if let Ok(parent_attrs) = attr_result {
             if !check_access(
                 parent_attrs.uid,
                 parent_attrs.gid,
