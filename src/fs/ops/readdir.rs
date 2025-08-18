@@ -62,23 +62,31 @@ pub fn readdir_root_dir(fs: &GitFs) -> FsResult<Vec<DirectoryEntry>> {
 
 pub fn readdir_repo_dir(fs: &GitFs, ino: u64) -> FsResult<Vec<DirectoryEntry>> {
     let repo_id = (ino >> REPO_SHIFT) as u16;
-    if fs.repos_list.contains_key(&repo_id) {
-        let mut entries: Vec<DirectoryEntry> = vec![];
-        let live_ino = fs.get_ino_from_db(ino, "live")?;
-        let live_entry = DirectoryEntry::new(
-            live_ino,
-            Oid::zero(),
-            "live".to_string(),
-            FileType::Directory,
-            libc::S_IFDIR,
-        );
-        entries.push(live_entry);
 
-        let object_entries = {
-            let repo = fs.get_repo(ino)?;
-            let repo = repo.lock().map_err(|_| FsError::LockPoisoned)?;
-            repo.month_folders()?
-        };
+    if !fs.repos_list.contains_key(&repo_id) {
+        return Err(FsError::NotFound {
+            thing: "Repo is not found!".to_string(),
+        });
+    }
+
+    let mut entries: Vec<DirectoryEntry> = vec![];
+    let live_ino = fs.get_ino_from_db(ino, "live")?;
+    let live_entry = DirectoryEntry::new(
+        live_ino,
+        Oid::zero(),
+        "live".to_string(),
+        FileType::Directory,
+        libc::S_IFDIR,
+    );
+
+    entries.push(live_entry);
+    let object_entries = {
+        let repo = fs.get_repo(ino)?;
+        let repo = repo.lock().map_err(|_| FsError::LockPoisoned)?;
+        repo.month_folders()?
+    };
+
+    if !object_entries.is_empty() {
         let mut nodes: Vec<(u64, String, FileAttr)> = vec![];
         for month in object_entries {
             let entry_ino = fs.next_inode(ino)?;
@@ -95,12 +103,8 @@ pub fn readdir_repo_dir(fs: &GitFs, ino: u64) -> FsResult<Vec<DirectoryEntry>> {
             entries.push(entry);
         }
         fs.write_inodes_to_db(nodes)?;
-        Ok(entries)
-    } else {
-        Err(FsError::NotFound {
-            thing: "Repo is not found!".to_string(),
-        })
     }
+    Ok(entries)
 }
 
 pub fn readdir_live_dir(fs: &GitFs, ino: u64) -> FsResult<Vec<DirectoryEntry>> {

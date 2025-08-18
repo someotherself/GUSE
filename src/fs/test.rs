@@ -57,7 +57,6 @@ fn test_mkdir_fetch() -> FsResult<()> {
             assert_eq!(read_dir_repo.len(), 3);
             let snap_1_parent = &read_dir_repo[1];
             let snap_1_parent_name: &String = &snap_1_parent.name;
-            dbg!(&snap_1_parent_name);
             let parent_snap_attr = fs
                 .find_by_name(REPO_DIR_INO, snap_1_parent_name)
                 .unwrap()
@@ -137,52 +136,106 @@ fn test_mkdir_fetch() -> FsResult<()> {
     Ok(())
 }
 
-// #[test]
-// fn test_mkdir_normal() -> anyhow::Result<()> {
-//     run_test(
-//         TestSetup {
-//             key: "test_mkdir_normal",
-//             read_only: false,
-//         },
-//         |_| -> anyhow::Result<()> {
-//             let fs = get_fs();
-//             let mut fs = fs.lock().map_err(|e| anyhow::anyhow!("lock poisoned: {e}")).unwrap();
+#[test]
+fn test_mkdir_normal() -> FsResult<()> {
+    run_test(
+        TestSetup {
+            key: "test_mkdir_normal",
+            read_only: false,
+        },
+        |_| -> FsResult<()> {
+            let fs = get_fs();
+            let mut fs = fs.lock().unwrap();
 
-//             let create_attr = dir_attr();
-//             let name = OsStr::new("new_folder");
-//             fs.mkdir(ROOT_INO, name, create_attr).unwrap();
+            let create_attr = dir_attr();
+            let name = OsStr::new("new_folder");
+            fs.mkdir(ROOT_INO, name, create_attr).unwrap();
 
-//             let root_attr = fs.getattr(ROOT_INO).unwrap();
-//             assert_eq!(root_attr.inode, ROOT_INO);
+            let root_attr = fs.getattr(ROOT_INO).unwrap();
+            assert_eq!(root_attr.inode, ROOT_INO);
 
-//             let repo_attr = fs.getattr(REPO_DIR_INO).unwrap();
-//             assert_eq!(repo_attr.inode, REPO_DIR_INO);
+            let repo_attr = fs.getattr(REPO_DIR_INO).unwrap();
+            assert_eq!(repo_attr.inode, REPO_DIR_INO);
 
-//             // FIND BY NAME
-//             let live_attr = fs.find_by_name(REPO_DIR_INO, "live").unwrap();
-//             assert!(live_attr.is_some());
-//             let live_attr = live_attr.unwrap();
-//             assert_eq!(live_attr.inode, LIVE_DIR_INO);
+            // FIND BY NAME
+            let live_attr = fs.find_by_name(REPO_DIR_INO, "live").unwrap();
+            assert!(live_attr.is_some());
+            let live_attr = live_attr.unwrap();
+            assert_eq!(live_attr.inode, LIVE_DIR_INO);
 
-//             // READ DIR
-//             let read_dir = fs.readdir(ROOT_INO).unwrap();
-//             assert_eq!(read_dir.len(), 1);
+            // READ DIR
+            let read_dir = fs.readdir(ROOT_INO).unwrap();
+            assert_eq!(read_dir.len(), 1);
 
-//             assert_eq!(read_dir[0].name, "new_folder");
+            assert_eq!(read_dir[0].name, "new_folder");
+            let folder_attr = fs.find_by_name(ROOT_INO, "new_folder").unwrap().unwrap();
 
-//             let read_dir = fs.readdir(REPO_DIR_INO).unwrap();
-//             assert_eq!(read_dir.len(), 1);
+            let read_dir = fs.readdir(REPO_DIR_INO).unwrap();
+            assert_eq!(read_dir.len(), 1);
 
-//             assert_eq!(read_dir[0].name, "live");
+            assert_eq!(read_dir[0].name, "live");
 
-//             let create_attr = dir_attr();
-//             let dir_name1 = OsStr::new("dir_in_live_1");
-//             let dir1_attr = fs.mkdir(LIVE_DIR_INO, dir_name1, create_attr).unwrap();
+            let create_attr = dir_attr();
+            let dir_name1 = OsStr::new("dir_in_live_1");
+            let dir1_attr = fs.mkdir(LIVE_DIR_INO, dir_name1, create_attr).unwrap();
 
-//             let dir1_ino = LIVE_DIR_INO + 1;
-//             assert_eq!(dir1_attr.inode, dir1_ino);
-//             Ok(())
-//         },
-//     ).unwrap();
-//     Ok(())
-// }
+            let dir1_ino = LIVE_DIR_INO + 1;
+            assert_eq!(dir1_attr.inode, dir1_ino);
+            Ok(())
+        },
+    )
+    .unwrap();
+    Ok(())
+}
+
+#[test]
+fn test_mkdir_normal_1() -> FsResult<()> {
+    run_test(
+        TestSetup {
+            key: "test_mkdir_normal_1",
+            read_only: false,
+        },
+        |_| -> FsResult<()> {
+            let fs = get_fs();
+            let mut fs = fs.lock().unwrap();
+
+            let create_attr = dir_attr();
+            let name = OsStr::new("new_folder");
+            fs.mkdir(ROOT_INO, name, create_attr).unwrap();
+
+            let root_attr = fs.getattr(ROOT_INO).unwrap();
+            assert_eq!(root_attr.inode, ROOT_INO);
+
+            let repo_attr = fs.getattr(REPO_DIR_INO).unwrap();
+            assert_eq!(repo_attr.inode, REPO_DIR_INO);
+
+            // FIND BY NAME
+            let live_attr = fs.find_by_name(REPO_DIR_INO, "live").unwrap();
+            assert!(live_attr.is_some());
+            let live_attr = live_attr.unwrap();
+            assert_eq!(live_attr.inode, LIVE_DIR_INO);
+
+            // READ DIR
+            let read_dir = fs.readdir(ROOT_INO).unwrap();
+            assert_eq!(read_dir.len(), 1);
+
+            assert_eq!(read_dir[0].name, "new_folder");
+            let folder_attr = fs.find_by_name(ROOT_INO, "new_folder").unwrap().unwrap();
+
+            let read_dir = fs.readdir(REPO_DIR_INO).unwrap();
+            assert_eq!(read_dir.len(), 1);
+
+            assert_eq!(read_dir[0].name, "live");
+
+            let create_attr = dir_attr();
+            let dir_name1 = OsStr::new("dir_in_live_1");
+            let dir1_attr = fs.mkdir(LIVE_DIR_INO, dir_name1, create_attr).unwrap();
+
+            let dir1_ino = LIVE_DIR_INO + 1;
+            assert_eq!(dir1_attr.inode, dir1_ino);
+            Ok(())
+        },
+    )
+    .unwrap();
+    Ok(())
+}
