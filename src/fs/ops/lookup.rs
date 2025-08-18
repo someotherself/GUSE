@@ -43,12 +43,15 @@ pub fn lookup_repo(fs: &GitFs, parent: u64, name: &str) -> FsResult<Option<FileA
     } else {
         // It will always be a yyyy-mm fodler
         // Build blank attr for it
-        let child_ino = {
+        let child_ino = match {
             let repo = repo.lock().map_err(|_| FsError::LockPoisoned)?;
             repo.connection
                 .lock()
                 .unwrap()
-                .get_ino_from_db(parent, name)?
+                .get_ino_from_db(parent, name)
+        } {
+            Ok(ino) => ino,
+            Err(_) => return Ok(None)
         };
         let mut attr: FileAttr = dir_attr().into();
         attr.inode = child_ino;
