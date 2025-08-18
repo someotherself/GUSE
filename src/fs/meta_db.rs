@@ -72,6 +72,26 @@ impl MetaDb {
         }
     }
 
+    pub fn get_mode_from_db(&self, ino: u64) -> FsResult<u64> {
+        let mut stmt = self.conn.prepare(
+            "SELECT filemode
+           FROM inode_map
+          WHERE inode = ?1",
+        )?;
+
+        let filemode_opt: Option<i64> = stmt
+            .query_row(rusqlite::params![ino as i64], |row| row.get(0))
+            .optional()?;
+
+        if let Some(filemode) = filemode_opt {
+            Ok(filemode as u64)
+        } else {
+            Err(FsError::NotFound {
+                thing: format!("inode {ino}"),
+            })
+        }
+    }
+
     pub fn get_oid_from_db(&self, ino: u64) -> FsResult<Oid> {
         let mut stmt = self.conn.prepare(
             "SELECT oid
