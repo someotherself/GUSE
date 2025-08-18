@@ -534,7 +534,7 @@ pub fn parse_mkdir_url(name: &str) -> FsResult<Option<(String, String)>> {
         thing: "Error getting account from url".to_string(),
     })?;
     let repo = comp.next().ok_or_else(|| FsError::NotFound {
-        thing: "Error gettingrepo name from url".to_string(),
+        thing: "Error getting repo name from url".to_string(),
     })?;
     let git = comp.next().ok_or_else(|| FsError::NotFound {
         thing: "Error getting .git name from url".to_string(),

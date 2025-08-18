@@ -116,10 +116,7 @@ pub fn readdir_live_dir(fs: &GitFs, ino: u64) -> FsResult<Vec<DirectoryEntry>> {
             (FileType::Symlink, libc::S_IFLNK)
         };
         let attr = fs.find_by_name(ino, &node_name_str)?;
-        let attr = match attr {
-            Some(attr) => attr,
-            None => continue,
-        };
+        let Some(attr) = attr else { continue };
         let entry = DirectoryEntry::new(
             attr.inode,
             Oid::zero(),
