@@ -992,6 +992,16 @@ impl GitFs {
         conn.get_oid_from_db(ino)
     }
 
+    fn get_name_from_db(&self, ino: u64) -> FsResult<String> {
+        let conn_arc = {
+            let repo = &self.get_repo(ino)?;
+            let repo = repo.lock().map_err(|_| FsError::LockPoisoned)?;
+            std::sync::Arc::clone(&repo.connection)
+        };
+        let conn = conn_arc.lock().map_err(|_| FsError::LockPoisoned)?;
+        conn.get_name_from_db(ino)
+    }
+
     fn write_inodes_to_db(&self, nodes: Vec<(u64, String, FileAttr)>) -> FsResult<()> {
         if nodes.is_empty() {
             return Err(FsError::InvalidInput);
