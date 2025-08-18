@@ -22,7 +22,7 @@ pub struct GitRepo {
     pub head: Option<Oid>,
     // i64 -> commit_time -> seconds since EPOCH
     // Vec<Oid> -> Vec<commit_oid> -> In case commits are made at the same time
-    pub snapshots: BTreeMap<i64, Vec<Oid>>, //
+    pub snapshots: BTreeMap<i64, Vec<Oid>>,
 }
 
 // For customized fetch

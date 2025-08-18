@@ -16,6 +16,7 @@ use std::{
 use git2::{ObjectType, Oid, Repository};
 use rusqlite::{Connection, OptionalExtension, params};
 use thiserror::Error;
+use tracing::info;
 
 use crate::fs::fileattr::{
     CreateFileAttr, FileAttr, FileType, ObjectAttr, TimesFileAttr, build_attr_dir,
@@ -659,6 +660,7 @@ impl GitFs {
             return Err(FsError::ReadOnly);
         }
         if !self.exists(parent)? {
+            info!("Parent {} does not exist", parent);
             return Err(FsError::NotFound {
                 thing: "Parent does not exist!".to_string(),
             });
@@ -669,14 +671,20 @@ impl GitFs {
         let name = os_name.to_str().unwrap();
         let ctx = FsOperationContext::get_operation(self, parent, true);
         match ctx? {
-            FsOperationContext::Root => ops::mkdir::mkdir_root(self, ROOT_INO, name, create_attr),
+            FsOperationContext::Root => {
+                info!("mkdir_root called to create {} in parent {}", name, parent);
+                ops::mkdir::mkdir_root(self, ROOT_INO, name, create_attr)
+            }
             FsOperationContext::RepoDir { ino } => {
+                info!("mkdir_repo called to create {} in parent {}", name, parent);
                 ops::mkdir::mkdir_repo(self, ino, name, create_attr)
             }
             FsOperationContext::InsideLiveDir { ino } => {
+                info!("mkdir_live called to create {} in parent {}", name, parent);
                 ops::mkdir::mkdir_live(self, ino, name, create_attr)
             }
             FsOperationContext::InsideGitDir { ino } => {
+                info!("mkdir_git called to create {} in parent {}", name, parent);
                 ops::mkdir::mkdir_git(self, ino, name, create_attr)
             }
         }

@@ -66,7 +66,10 @@ pub fn lookup_live(fs: &GitFs, parent: u64, name: &str) -> FsResult<Option<FileA
         None => return Ok(None),
     };
     let path = fs.build_full_path(parent)?.join(name);
-    let mut attr = fs.attr_from_dir(path)?;
+    let mut attr = match fs.attr_from_dir(path) {
+        Ok(attr) => attr,
+        Err(_) => return Ok(None),
+    };
     let child_ino = fs.get_ino_from_db(parent, name)?;
     attr.inode = child_ino;
 
