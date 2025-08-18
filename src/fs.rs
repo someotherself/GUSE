@@ -62,7 +62,7 @@ enum FsOperationContext {
 }
 
 impl FsOperationContext {
-    fn get_operation(fs: &GitFs, ino: u64, _is_parent: bool) -> FsResult<Self> {
+    fn get_operation(fs: &GitFs, ino: u64) -> FsResult<Self> {
         let mask: u64 = (1u64 << 48) - 1;
         let repo_dir = GitFs::ino_to_repo_id(ino);
         if ino == ROOT_INO {
@@ -403,7 +403,7 @@ impl GitFs {
         if self.is_dir(ino)? {
             return Err(FsError::IsDirectory);
         }
-        let ctx = FsOperationContext::get_operation(self, ino, false);
+        let ctx = FsOperationContext::get_operation(self, ino);
         match ctx? {
             FsOperationContext::Root => Err(FsError::IsDirectory),
             FsOperationContext::RepoDir { ino: _ } => Err(FsError::IsDirectory),
@@ -638,7 +638,7 @@ impl GitFs {
         }
         let perms = 0o775;
         let st_mode = libc::S_IFDIR | perms;
-        let ctx = FsOperationContext::get_operation(self, inode, false);
+        let ctx = FsOperationContext::get_operation(self, inode);
         match ctx? {
             FsOperationContext::Root => Ok(build_attr_dir(ROOT_INO, st_mode)),
             FsOperationContext::RepoDir { ino } => Ok(build_attr_dir(ino, st_mode)),
@@ -669,29 +669,57 @@ impl GitFs {
             return Err(FsError::NotADirectory);
         }
         let name = os_name.to_str().unwrap();
-        let ctx = FsOperationContext::get_operation(self, parent, true);
+        let ctx = FsOperationContext::get_operation(self, parent);
         match ctx? {
-            FsOperationContext::Root => {
-                info!("mkdir_root called to create {} in parent {}", name, parent);
-                ops::mkdir::mkdir_root(self, ROOT_INO, name, create_attr)
-            }
+            FsOperationContext::Root => ops::mkdir::mkdir_root(self, ROOT_INO, name, create_attr),
             FsOperationContext::RepoDir { ino } => {
-                info!("mkdir_repo called to create {} in parent {}", name, parent);
                 ops::mkdir::mkdir_repo(self, ino, name, create_attr)
             }
             FsOperationContext::InsideLiveDir { ino } => {
-                info!("mkdir_live called to create {} in parent {}", name, parent);
                 ops::mkdir::mkdir_live(self, ino, name, create_attr)
             }
             FsOperationContext::InsideGitDir { ino } => {
-                info!("mkdir_git called to create {} in parent {}", name, parent);
                 ops::mkdir::mkdir_git(self, ino, name, create_attr)
             }
         }
     }
 
+    pub fn create(
+        &self,
+        parent: u64,
+        os_name: &OsStr,
+        read: bool,
+        write: bool,
+    ) -> FsResult<(FileAttr, u64)> {
+        if self.read_only {
+            return Err(FsError::ReadOnly);
+        }
+        if !self.exists(parent)? {
+            info!("Parent {} does not exist", parent);
+            return Err(FsError::NotFound {
+                thing: "Parent does not exist!".to_string(),
+            });
+        }
+        let name = os_name.to_str().unwrap();
+        let ctx = FsOperationContext::get_operation(self, parent);
+        match ctx? {
+            FsOperationContext::Root => {
+                Err(FsError::Internal("This directory is read only".to_string()))
+            }
+            FsOperationContext::RepoDir { ino: _ } => {
+                Err(FsError::Internal("This directory is read only".to_string()))
+            }
+            FsOperationContext::InsideLiveDir { ino } => {
+                ops::create::create_live(self, ino, name, read, write)
+            }
+            FsOperationContext::InsideGitDir { ino: _ } => {
+                Err(FsError::Internal("This directory is read only".to_string()))
+            }
+        }
+    }
+
     pub fn readdir(&self, parent: u64) -> FsResult<Vec<DirectoryEntry>> {
-        let ctx = FsOperationContext::get_operation(self, parent, true);
+        let ctx = FsOperationContext::get_operation(self, parent);
         match ctx? {
             FsOperationContext::Root => ops::readdir::readdir_root_dir(self),
             FsOperationContext::RepoDir { ino } => ops::readdir::readdir_repo_dir(self, ino),
@@ -701,7 +729,7 @@ impl GitFs {
     }
 
     pub fn readdirplus(&self, parent: u64) -> FsResult<Vec<DirectoryEntryPlus>> {
-        let ctx = FsOperationContext::get_operation(self, parent, true);
+        let ctx = FsOperationContext::get_operation(self, parent);
         match ctx? {
             FsOperationContext::Root => {
                 let mut entries: Vec<DirectoryEntryPlus> = vec![];
@@ -843,7 +871,7 @@ impl GitFs {
         if !self.is_dir(parent)? {
             return Err(FsError::NotADirectory);
         }
-        let ctx = FsOperationContext::get_operation(self, parent, true);
+        let ctx = FsOperationContext::get_operation(self, parent);
         match ctx? {
             FsOperationContext::Root => ops::lookup::lookup_root(self, name),
             FsOperationContext::RepoDir { ino } => ops::lookup::lookup_repo(self, ino, name),
