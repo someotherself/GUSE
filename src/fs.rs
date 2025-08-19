@@ -847,15 +847,13 @@ impl GitFs {
         }
         let ctx = FsOperationContext::get_operation(self, ino);
         match ctx? {
-            FsOperationContext::Root => return Ok(true),
+            FsOperationContext::Root => Ok(true),
             FsOperationContext::RepoDir { ino: _ } => Ok(true),
             FsOperationContext::InsideLiveDir { ino } => {
                 let path = self.build_full_path(ino)?;
                 Ok(path.exists())
-            },
-            FsOperationContext::InsideGitDir { ino } => {
-                Ok(self.build_full_path(ino).is_ok())
-            },
+            }
+            FsOperationContext::InsideGitDir { ino } => Ok(self.build_full_path(ino).is_ok()),
         }
     }
 
@@ -872,7 +870,7 @@ impl GitFs {
             return Ok(false);
         }
         let mode = self.get_mode_from_db(ino)?;
-        Ok(mode != FileMode::Tree || mode != FileMode::Commit)
+        Ok(mode == FileMode::Blob || mode == FileMode::BlobExecutable)
     }
 
     fn is_link(&self, ino: u64) -> anyhow::Result<bool> {
