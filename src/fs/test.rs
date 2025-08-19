@@ -178,9 +178,6 @@ fn test_mkdir_normal() -> anyhow::Result<()> {
             let getattr_dir1 = fs.getattr(find_dir1.inode)?;
             assert_eq!(getattr_dir1.inode, dir1_ino);
             assert_eq!(dir1_attr.inode, dir1_ino);
-
-            let file_name = OsStr::new("test.txt");
-            let (_file_attr, _fh) = fs.create(LIVE_DIR_INO, file_name, true, true)?;
             Ok(())
         },
     )?;

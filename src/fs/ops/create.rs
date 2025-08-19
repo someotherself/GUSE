@@ -31,6 +31,5 @@ pub fn create_live(
     fs.write_inodes_to_db(nodes)?;
 
     let fh = fs.open(ino, read, write)?;
-
     Ok((attr, fh))
 }

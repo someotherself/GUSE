@@ -1,7 +1,6 @@
 use std::collections::{BTreeMap, HashSet};
 use std::ffi::{OsStr, OsString};
-use std::fs::{File, OpenOptions};
-use std::io::{BufReader, BufWriter, Write};
+use std::fs::File;
 use std::os::unix::fs::{MetadataExt, PermissionsExt};
 use std::path::Path;
 use std::sync::{Arc, Mutex, RwLock};
@@ -17,9 +16,7 @@ use anyhow::{anyhow, bail};
 use git2::{ObjectType, Oid, Repository};
 use rusqlite::{Connection, OptionalExtension, params};
 
-use crate::fs::fileattr::{
-    CreateFileAttr, FileAttr, FileType, ObjectAttr, TimesFileAttr, build_attr_dir,
-};
+use crate::fs::fileattr::{CreateFileAttr, FileAttr, FileType, ObjectAttr, build_attr_dir};
 use crate::fs::meta_db::MetaDb;
 use crate::fs::ops::readdir::{DirectoryEntry, DirectoryEntryPlus};
 use crate::fs::repo::GitRepo;
@@ -36,18 +33,6 @@ mod test;
 const META_STORE: &str = "fs_meta.db";
 pub const REPO_SHIFT: u8 = 48;
 pub const ROOT_INO: u64 = 1;
-
-struct ReadHandleContext {
-    ino: u64,
-    attr: TimesFileAttr,
-    reader: Option<BufReader<File>>,
-}
-
-struct WriteHandleContext {
-    ino: u64,
-    attr: TimesFileAttr,
-    writer: Option<BufWriter<File>>,
-}
 
 enum FsOperationContext {
     // Is the root directory
@@ -119,11 +104,16 @@ pub struct GitFs {
     pub repos_list: BTreeMap<u16, Arc<Mutex<GitRepo>>>, // <repo_id, repo>
     next_inode: HashMap<u16, AtomicU64>,                // Each Repo has a set of inodes
     current_handle: AtomicU64,
-    read_handles: RwLock<HashMap<u64, Mutex<ReadHandleContext>>>, // ino
-    write_handles: RwLock<HashMap<u64, Mutex<WriteHandleContext>>>, // ino
-    opened_handes_for_read: RwLock<HashMap<u64, HashSet<u64>>>,   // (ino, fh)
-    opened_handes_for_write: RwLock<HashMap<u64, HashSet<u64>>>,  // (ino, fh)
+    handles: RwLock<HashMap<u64, Mutex<Handle>>>, // (ino, Handle)
+    open_handles: Arc<RwLock<HashMap<u64, HashSet<u64>>>>, // (ino, handles)
     read_only: bool,
+}
+
+struct Handle {
+    handle: u64,
+    file: File,
+    read: bool,
+    write: bool,
 }
 
 // gitfs_fuse_functions
@@ -133,11 +123,9 @@ impl GitFs {
             repos_dir,
             repos_list: BTreeMap::new(),
             read_only,
-            read_handles: RwLock::new(HashMap::new()),
-            write_handles: RwLock::new(HashMap::new()),
+            handles: RwLock::new(HashMap::new()),
             current_handle: AtomicU64::new(1),
-            opened_handes_for_read: RwLock::new(HashMap::new()),
-            opened_handes_for_write: RwLock::new(HashMap::new()),
+            open_handles: Arc::new(RwLock::new(HashMap::new())),
             next_inode: HashMap::new(),
         };
         fs.ensure_base_dirs_exist()?;
@@ -272,163 +260,48 @@ impl GitFs {
         match ctx? {
             FsOperationContext::Root => bail!("Target is a directory"),
             FsOperationContext::RepoDir { ino: _ } => bail!("Target is a directory"),
-            FsOperationContext::InsideLiveDir { ino } => {
-                let mut handle: Option<u64> = None;
-                if read {
-                    handle = Some(self.next_file_handle());
-                    self.register_read(ino, handle.unwrap())?;
-                }
-                if write {
-                    if handle.is_none() {
-                        handle = Some(self.next_file_handle());
-                    }
-                    self.register_write(ino, handle.unwrap())?;
-                }
-                Ok(handle.unwrap())
+            FsOperationContext::InsideLiveDir { ino: _ } => {
+                ops::open::open_live(self, ino, read, write)
             }
             FsOperationContext::InsideGitDir { ino: _ } => {
-                bail!("Not implemented");
+                ops::open::open_git(self, ino, read, write)
             }
         }
     }
 
-    fn register_read(&self, ino: u64, fh: u64) -> anyhow::Result<()> {
-        let attr = self.getattr(ino)?.into();
-        let path = self.build_full_path(ino)?;
-        let reader = std::io::BufReader::new(OpenOptions::new().read(true).open(&path)?);
-        let ctx = ReadHandleContext {
-            ino,
-            attr,
-            reader: Some(reader),
-        };
-        self.read_handles
-            .write()
-            .map_err(|_| anyhow!("Lock poisoned"))?
-            .insert(fh, Mutex::from(ctx));
-        self.opened_handes_for_read
-            .write()
-            .map_err(|_| anyhow!("Lock poisoned"))?
-            .entry(ino)
-            .or_default()
-            .insert(fh);
-        Ok(())
-    }
-
-    fn register_write(&self, ino: u64, fh: u64) -> anyhow::Result<()> {
-        let attr = self.getattr(ino)?.into();
-        let path = self.build_full_path(ino)?;
-        let writer =
-            std::io::BufWriter::new(OpenOptions::new().read(true).write(true).open(&path)?);
-        let ctx = WriteHandleContext {
-            ino,
-            attr,
-            writer: Some(writer),
-        };
-        self.write_handles
-            .write()
-            .map_err(|_| anyhow!("Lock poisoned"))?
-            .insert(fh, Mutex::from(ctx));
-        self.opened_handes_for_write
-            .write()
-            .map_err(|_| anyhow!("Lock poisoned"))?
-            .entry(ino)
-            .or_default()
-            .insert(fh);
-        Ok(())
-    }
-
-    pub fn release(&self, fh: u64) -> anyhow::Result<()> {
-        // TODO: Double check
-        if fh == 0 {
-            return Ok(());
-        }
-
-        let mut valid_fh = false;
-
-        let ctx = self.read_handles.write().unwrap().remove(&fh);
-        if let Some(ctx) = ctx {
-            let ctx = ctx.lock().map_err(|_| anyhow!("Lock poisoned"))?;
-            let mut opened_files_for_read = self.opened_handes_for_read.write().unwrap();
-            opened_files_for_read
-                .get_mut(&ctx.ino)
-                .ok_or_else(|| anyhow!("File handle is missing"))?
-                .remove(&fh);
-            if opened_files_for_read
-                .get(&ctx.ino)
-                .ok_or_else(|| anyhow!("File handle is missing"))?
-                .is_empty()
-            {
-                opened_files_for_read.remove(&ctx.ino);
+    pub fn read(&self, ino: u64, offset: u64, buf: &mut [u8], fh: u64) -> anyhow::Result<usize> {
+        let ctx = FsOperationContext::get_operation(self, ino);
+        match ctx? {
+            FsOperationContext::Root => bail!("Not allowed"),
+            FsOperationContext::RepoDir { ino: _ } => bail!("Not allowed"),
+            FsOperationContext::InsideLiveDir { ino } => {
+                ops::read::read_live(self, ino, offset, buf, fh)
             }
-            valid_fh = true;
-        }
-
-        let ctx = self.write_handles.write().unwrap().remove(&fh);
-        if let Some(ctx) = ctx {
-            let ctx = ctx.lock().map_err(|_| anyhow!("Lock poisoned"))?;
-            let mut opened_files_for_write = self.opened_handes_for_write.write().unwrap();
-            opened_files_for_write
-                .get_mut(&ctx.ino)
-                .ok_or_else(|| anyhow!("File handle is missing"))?
-                .remove(&fh);
-            if opened_files_for_write
-                .get(&ctx.ino)
-                .ok_or_else(|| anyhow!("File handle is missing"))?
-                .is_empty()
-            {
-                opened_files_for_write.remove(&ctx.ino);
+            FsOperationContext::InsideGitDir { ino } => {
+                ops::read::read_git(self, ino, offset, buf, fh)
             }
-            valid_fh = true;
         }
-        if !valid_fh {
-            bail!("Invalid file handle.")
-        }
-
-        // TODO
-        // Open file
-        // sync_all()
-
-        Ok(())
     }
 
-    pub fn flush(&self, fh: u64) -> anyhow::Result<()> {
-        // TODO: Double check
-        if self.read_only {
-            bail!("Filesystem is in read only");
+    pub fn write(&self, ino: u64, offset: u64, buf: &[u8], fh: u64) -> anyhow::Result<usize> {
+        let ctx = FsOperationContext::get_operation(self, ino);
+        match ctx? {
+            FsOperationContext::Root => bail!("Not allowed"),
+            FsOperationContext::RepoDir { ino: _ } => bail!("Not allowed"),
+            FsOperationContext::InsideLiveDir { ino } => {
+                ops::write::write_live(self, ino, offset, buf, fh)
+            }
+            FsOperationContext::InsideGitDir { ino } => {
+                ops::write::write_git(self, ino, offset, buf, fh)
+            }
         }
-        if fh == 0 {
-            return Ok(());
-        }
-        let read_lock = self
-            .read_handles
-            .read()
-            .map_err(|_| anyhow!("Lock poisoned"))?;
-        let mut valid_fh = read_lock.get(&fh).is_some();
-        let write_lock = self
-            .write_handles
-            .read()
-            .map_err(|_| anyhow!("Lock poisoned"))?;
-        if let Some(ctx) = write_lock.get(&fh) {
-            let mut ctx = ctx.lock().map_err(|_| anyhow!("Lock poisoned"))?;
-            // Read-write locks not implemented. Write operations not allowed yet.
-            ctx.writer
-                .as_mut()
-                .ok_or_else(|| anyhow!("Writer missing"))?
-                .flush()?;
-            let path = self.get_path_from_db(ctx.ino)?;
-            File::open(path)?.sync_all()?;
-            drop(ctx);
-            self.reset_handles()?;
-            valid_fh = true;
-        }
-
-        if !valid_fh {
-            bail!("Invalid file handle.");
-        }
-        Ok(())
     }
 
-    fn reset_handles(&self) -> anyhow::Result<()> {
+    pub fn release(&self, _fh: u64) -> anyhow::Result<()> {
+        todo!()
+    }
+
+    pub fn flush(&self, _fh: u64) -> anyhow::Result<()> {
         todo!()
     }
 
