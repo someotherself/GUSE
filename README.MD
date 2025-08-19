@@ -2,20 +2,19 @@
 
 # Work in progress
 
-### Inspired by [rencfs](https://github.com/xoriors/rencfs)
 
 ## Dependencies
 
-## libgit2 
+This project uses [libgit2](https://libgit2.org/) (via the `git2` crate) and
+[SQLite](https://sqlite.org/) (via the `rusqlite` crate).
 
-[libgit2.org](https://libgit2.org/docs/guides/build-and-link/)
+## OS
+This project has support for linux/macOS. On windows, consider using WSL2.
 
-## sqlite 
-
-[sqlite](https://www.sqlite.org/)
-
-
+## INFO
 GUSE is a learning project. It is built to allows user to interact with git directly from the filesystem, using commands such as cd, ls, mkdir, touch, cat etc
+
+Inspired by [rencfs](https://github.com/xoriors/rencfs)
 
 GUSE allows mounting of multiple 'repositories' and manage them independently
 ### The disk structure, as observed by the user is:
