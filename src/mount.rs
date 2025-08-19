@@ -474,7 +474,6 @@ impl fuser::Filesystem for GitFsAdapter {
         todo!()
     }
 
-    // TODO
     fn read(
         &mut self,
         _req: &fuser::Request<'_>,
@@ -502,7 +501,6 @@ impl fuser::Filesystem for GitFsAdapter {
         }
     }
 
-    // TODO
     fn write(
         &mut self,
         _req: &fuser::Request<'_>,
@@ -533,6 +531,42 @@ impl fuser::Filesystem for GitFsAdapter {
     // TODO
     fn statfs(&mut self, _req: &fuser::Request<'_>, _ino: u64, reply: fuser::ReplyStatfs) {
         todo!()
+    }
+
+    fn setattr(
+        &mut self,
+        _req: &fuser::Request<'_>,
+        ino: u64,
+        mode: Option<u32>,
+        uid: Option<u32>,
+        gid: Option<u32>,
+        size: Option<u64>,
+        _atime: Option<fuser::TimeOrNow>,
+        _mtime: Option<fuser::TimeOrNow>,
+        _ctime: Option<SystemTime>,
+        fh: Option<u64>,
+        _crtime: Option<SystemTime>,
+        _chgtime: Option<SystemTime>,
+        _bkuptime: Option<SystemTime>,
+        flags: Option<u32>,
+        reply: ReplyAttr,
+    ) {
+        let fs_arc = self.getfs();
+        let fs = match fs_arc.lock() {
+            Ok(fs) => fs,
+            Err(e) => {
+                eprintln!("fs mutex poisoned: {e}");
+                return reply.error(EIO);
+            }
+        };
+        let res = fs.getattr(ino);
+        match res {
+            Ok(mut attr) => {
+                fs.refresh_attr(&mut attr).unwrap();
+                reply.attr(&TTL, &attr.into());
+            }
+            Err(e) => reply.error(errno_from_anyhow(&e)),
+        }
     }
 
     fn release(

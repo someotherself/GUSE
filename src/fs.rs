@@ -610,7 +610,7 @@ impl GitFs {
 
 // gitfs_helpers
 impl GitFs {
-    fn refresh_attr(&self, attr: &mut FileAttr) -> anyhow::Result<FileAttr> {
+    pub fn refresh_attr(&self, attr: &mut FileAttr) -> anyhow::Result<FileAttr> {
         let path = self.build_full_path(attr.inode)?;
         let metadata = path.metadata()?;
         let std_type = metadata.file_type();
