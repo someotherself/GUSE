@@ -537,7 +537,18 @@ impl fuser::Filesystem for GitFsAdapter {
         lock_owner: u64,
         reply: fuser::ReplyEmpty,
     ) {
-        todo!()
+        let fs_arc = self.getfs();
+        let res = match fs_arc.lock() {
+            Ok(fs) => fs.flush(fh),
+            Err(e) => {
+                eprintln!("fs mutex poisoned: {e}");
+                return reply.error(EIO);
+            }
+        };
+        match res {
+            Ok(_) => reply.ok(),
+            Err(e) => reply.error(e.into()),
+        }
     }
 
     fn opendir(&mut self, req: &fuser::Request<'_>, ino: u64, flags: i32, reply: ReplyOpen) {
