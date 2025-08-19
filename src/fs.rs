@@ -13,7 +13,7 @@ use std::{
 };
 
 use anyhow::{anyhow, bail};
-use git2::{ObjectType, Oid, Repository};
+use git2::{FileMode, ObjectType, Oid, Repository};
 use rusqlite::{Connection, OptionalExtension, params};
 
 use crate::fs::fileattr::{CreateFileAttr, FileAttr, FileType, ObjectAttr, build_attr_dir};
@@ -859,41 +859,24 @@ impl GitFs {
         if ino == ROOT_INO {
             return Ok(true);
         }
-        if self.is_in_live(ino) {
-            let attr = self.getattr(ino)?;
-            return Ok(attr.kind == FileType::Directory);
-        }
-        let repo_id = GitFs::ino_to_repo_id(ino);
-        if self.repos_list.contains_key(&repo_id) {
-            return Ok(true);
-        }
-        let repo = self.get_repo(ino)?;
-        let path = self.get_path_from_db(ino)?;
-
-        let git_attr = repo.lock().unwrap().getattr(path)?;
-        Ok(git_attr.kind == ObjectType::Tree)
+        let mode = self.get_mode_from_db(ino)?;
+        Ok(mode == FileMode::Tree || mode == FileMode::Commit)
     }
 
     fn is_file(&self, ino: u64) -> anyhow::Result<bool> {
-        if self.is_in_live(ino) {
-            let attr = self.getattr(ino)?;
-            return Ok(attr.kind == FileType::RegularFile);
+        if ino == ROOT_INO {
+            return Ok(false);
         }
-        let git_attr = {
-            let path = self.get_path_from_db(ino)?;
-            let repo = self.get_repo(ino)?;
-            repo.lock().unwrap().getattr(path)?
-        };
-        Ok(git_attr.kind == ObjectType::Blob && git_attr.filemode != libc::S_IFLNK)
+        let mode = self.get_mode_from_db(ino)?;
+        Ok(mode != FileMode::Tree || mode != FileMode::Commit)
     }
 
-    fn is_link(&self, inode: u64) -> anyhow::Result<bool> {
-        let git_attr = {
-            let repo = self.get_repo(inode)?;
-            let path = self.get_path_from_db(inode)?;
-            repo.lock().unwrap().getattr(path)?
-        };
-        Ok(git_attr.kind == ObjectType::Blob && git_attr.filemode == libc::S_IFLNK)
+    fn is_link(&self, ino: u64) -> anyhow::Result<bool> {
+        if ino == ROOT_INO {
+            return Ok(false);
+        }
+        let mode = self.get_mode_from_db(ino)?;
+        Ok(mode == FileMode::Link)
     }
 
     fn get_ino_from_db(&self, parent: u64, name: &str) -> anyhow::Result<u64> {
