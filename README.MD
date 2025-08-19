@@ -1,5 +1,20 @@
 # GUSE (goo͞s) is a git based filesystem, written in rust and mouted with FUSE.
 
+# Work in progress
+
+### Inspired by [rencfs](https://github.com/xoriors/rencfs)
+
+## Dependencies
+
+## libgit2 
+
+[libgit2.org](https://libgit2.org/docs/guides/build-and-link/)
+
+## sqlite 
+
+[sqlite](https://www.sqlite.org/)
+
+
 GUSE is a learning project. It is built to allows user to interact with git directly from the filesystem, using commands such as cd, ls, mkdir, touch, cat etc
 
 GUSE allows mounting of multiple 'repositories' and manage them independently
