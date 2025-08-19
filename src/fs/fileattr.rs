@@ -2,8 +2,6 @@ use std::time::SystemTime;
 
 use git2::{ObjectType, Oid};
 
-use crate::fs::FsResult;
-
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct FileAttr {
     // Inode in the fuse fs
@@ -46,7 +44,7 @@ pub enum FileType {
 }
 
 impl FileType {
-    pub fn from_filemode(mode: ObjectType) -> FsResult<FileType> {
+    pub fn from_filemode(mode: ObjectType) -> anyhow::Result<FileType> {
         match mode {
             ObjectType::Blob => Ok(FileType::RegularFile),
             ObjectType::Tree => Ok(FileType::Directory),

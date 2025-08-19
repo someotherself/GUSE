@@ -19,7 +19,7 @@ use std::{num::NonZeroU32, path::PathBuf};
 
 use crate::fs::fileattr::{CreateFileAttr, FileAttr, FileType};
 use crate::fs::ops::readdir::{DirectoryEntry, DirectoryEntryPlus};
-use crate::fs::{FsError, FsResult, GitFs, MyBacktrace, REPO_SHIFT, ROOT_INO, repo};
+use crate::fs::{GitFs, REPO_SHIFT, ROOT_INO, repo};
 
 const TTL: Duration = Duration::from_secs(60);
 const FMODE_EXEC: i32 = 0x20;
@@ -50,7 +50,7 @@ impl MountPoint {
     }
 }
 
-pub fn mount_fuse(opts: MountPoint) -> FsResult<()> {
+pub fn mount_fuse(opts: MountPoint) -> anyhow::Result<()> {
     let MountPoint {
         mountpoint,
         repos_dir,
@@ -60,10 +60,7 @@ pub fn mount_fuse(opts: MountPoint) -> FsResult<()> {
     } = opts;
 
     if !mountpoint.exists() {
-        std::fs::create_dir(&mountpoint).map_err(|s| FsError::Io {
-            source: s,
-            my_backtrace: MyBacktrace::capture(),
-        })?;
+        std::fs::create_dir(&mountpoint)?;
     }
 
     let mut options = vec![
@@ -75,10 +72,7 @@ pub fn mount_fuse(opts: MountPoint) -> FsResult<()> {
         options.push(MountOption::RO);
     }
     if allow_other {
-        fuse_allow_other_enabled().map_err(|s| FsError::Io {
-            source: s,
-            my_backtrace: MyBacktrace::capture(),
-        })?;
+        fuse_allow_other_enabled()?;
         options.push(MountOption::AllowOther);
     }
     if allow_root {
@@ -126,7 +120,7 @@ struct GitFsAdapter {
 }
 
 impl GitFsAdapter {
-    fn new(repos_dir: PathBuf, read_only: bool) -> FsResult<Self> {
+    fn new(repos_dir: PathBuf, read_only: bool) -> anyhow::Result<Self> {
         let fs = GitFs::new(repos_dir, read_only)?;
         Ok(GitFsAdapter { inner: fs })
     }
@@ -536,7 +530,7 @@ impl fuser::Filesystem for GitFsAdapter {
             };
             match res {
                 Ok(_) => return reply.ok(),
-                Err(e) => return reply.error(e.into()),
+                Err(e) => return reply.error(errno_from_anyhow(&e)),
             }
         }
 
@@ -549,7 +543,7 @@ impl fuser::Filesystem for GitFsAdapter {
         };
         match res {
             Ok(_) => reply.ok(),
-            Err(e) => reply.error(e.into()),
+            Err(e) => reply.error(errno_from_anyhow(&e)),
         }
     }
 
@@ -572,7 +566,7 @@ impl fuser::Filesystem for GitFsAdapter {
         };
         match res {
             Ok(_) => reply.ok(),
-            Err(e) => reply.error(e.into()),
+            Err(e) => reply.error(errno_from_anyhow(&e)),
         }
     }
 
@@ -701,4 +695,24 @@ impl From<FileType> for fuser::FileType {
             FileType::Symlink => fuser::FileType::Symlink,
         }
     }
+}
+
+fn errno_from_anyhow(err: &anyhow::Error) -> i32 {
+    if let Some(ioe) = err.downcast_ref::<std::io::Error>() {
+        if let Some(code) = ioe.raw_os_error() {
+            return code;
+        }
+        // Map common kinds when there's no raw_os_error.
+        return match ioe.kind() {
+            std::io::ErrorKind::NotFound => libc::ENOENT,
+            std::io::ErrorKind::PermissionDenied => libc::EACCES,
+            std::io::ErrorKind::AlreadyExists => libc::EEXIST,
+            std::io::ErrorKind::InvalidInput => libc::EINVAL,
+            std::io::ErrorKind::TimedOut => libc::ETIMEDOUT,
+            std::io::ErrorKind::WouldBlock => libc::EAGAIN,
+            _ => EIO,
+        };
+    }
+
+    EIO
 }

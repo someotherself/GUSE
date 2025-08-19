@@ -1,9 +1,10 @@
 use std::sync::{Arc, Mutex};
 
+use anyhow::anyhow;
 use tempfile::TempDir;
 use thread_local::ThreadLocal;
 
-use crate::fs::{FsError, FsResult, GitFs};
+use crate::fs::GitFs;
 
 pub static SETUP_RESULT: ThreadLocal<Mutex<Option<SetupResult>>> = ThreadLocal::new();
 
@@ -36,19 +37,19 @@ fn setup(setup: TestSetup) -> SetupResult {
     }
 }
 
-pub fn run_test<T>(init: TestSetup, t: T) -> FsResult<()>
+pub fn run_test<T>(init: TestSetup, t: T) -> anyhow::Result<()>
 where
-    T: Fn(&Mutex<Option<SetupResult>>) -> FsResult<()>,
+    T: Fn(&Mutex<Option<SetupResult>>) -> anyhow::Result<()>,
 {
     let s = SETUP_RESULT.get_or(|| Mutex::new(None));
     {
-        let mut s = s.lock().map_err(|_| FsError::LockPoisoned)?;
+        let mut s = s.lock().map_err(|_| anyhow!("Lock poisoned"))?;
         *s = Some(setup(init));
     }
     t(s)?;
 
     {
-        let mut guard = s.lock().map_err(|_| FsError::LockPoisoned)?;
+        let mut guard = s.lock().map_err(|_| anyhow!("Lock poisoned"))?;
         *guard = None;
     }
 

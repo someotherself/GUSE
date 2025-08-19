@@ -1,7 +1,9 @@
 use std::{fs::File, os::unix::fs::PermissionsExt};
 
+use anyhow::bail;
+
 use crate::{
-    fs::{FsError, FsResult, GitFs, MyBacktrace, fileattr::FileAttr},
+    fs::{GitFs, fileattr::FileAttr},
     mount::file_attr,
 };
 
@@ -11,11 +13,9 @@ pub fn create_live(
     name: &str,
     read: bool,
     write: bool,
-) -> FsResult<(FileAttr, u64)> {
+) -> anyhow::Result<(FileAttr, u64)> {
     if !read && !write {
-        return Err(FsError::Internal(
-            "read and write cannot be false at the same time".to_string(),
-        ));
+        bail!("read and write cannot be false at the same time")
     };
     let ino = fs.next_inode(parent)?;
     let mut attr: FileAttr = file_attr().into();
@@ -23,12 +23,7 @@ pub fn create_live(
     let file_path = fs.build_path(parent, name)?;
 
     let file = std::fs::File::create_new(&file_path)?;
-    std::fs::set_permissions(&file_path, std::fs::Permissions::from_mode(0o775)).map_err(|s| {
-        FsError::Io {
-            source: s,
-            my_backtrace: MyBacktrace::capture(),
-        }
-    })?;
+    std::fs::set_permissions(&file_path, std::fs::Permissions::from_mode(0o775))?;
     file.sync_all()?;
     File::open(file_path.parent().unwrap())?.sync_all()?;
 

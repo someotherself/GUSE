@@ -4,9 +4,9 @@ use std::{path::PathBuf, thread};
 
 use clap::{Arg, ArgAction, ArgMatches, command, crate_authors, crate_version};
 
-use guse::{fs::FsResult, logging, mount, tui};
+use guse::{logging, mount, tui};
 
-fn main() -> FsResult<()> {
+fn main() -> anyhow::Result<()> {
     let matches = handle_cli_args();
 
     let log_level = matches.get_count("verbose") as u8;
@@ -16,7 +16,7 @@ fn main() -> FsResult<()> {
     Ok(())
 }
 
-fn start_app(matches: &ArgMatches) -> FsResult<()> {
+fn start_app(matches: &ArgMatches) -> anyhow::Result<()> {
     run_mount(matches)?;
     // setup_tui(matches)?;
     Ok(())
@@ -75,7 +75,7 @@ fn handle_cli_args() -> ArgMatches {
         .get_matches()
 }
 
-fn run_mount(matches: &ArgMatches) -> FsResult<()> {
+fn run_mount(matches: &ArgMatches) -> anyhow::Result<()> {
     let mountpoint = matches.get_one::<String>("mount-point").unwrap();
     let mountpoint = PathBuf::from(mountpoint);
     let repos_dir = matches.get_one::<String>("repos-dir").unwrap();
@@ -89,7 +89,7 @@ fn run_mount(matches: &ArgMatches) -> FsResult<()> {
     Ok(())
 }
 
-fn setup_tui(matches: &ArgMatches) -> FsResult<()> {
+fn setup_tui(matches: &ArgMatches) -> anyhow::Result<()> {
     let mountpoint = matches.get_one::<String>("mount-point").unwrap();
     let mountpoint = PathBuf::from(mountpoint);
     let repos_dir = matches.get_one::<String>("repos-dir").unwrap();

@@ -9,13 +9,11 @@ use ratatui::{
     widgets::Widget,
 };
 
-use crate::fs::{FsError, FsResult, MyBacktrace};
-
 struct App {
     exit: bool,
 }
 
-pub fn run_tui_app() -> FsResult<()> {
+pub fn run_tui_app() -> anyhow::Result<()> {
     let mut terminal = ratatui::init();
 
     let mut app = App { exit: false };
@@ -29,27 +27,19 @@ pub fn run_tui_app() -> FsResult<()> {
 
 impl App {
     #[allow(clippy::single_match)]
-    fn run(&mut self, terminal: &mut DefaultTerminal) -> FsResult<()> {
+    fn run(&mut self, terminal: &mut DefaultTerminal) -> anyhow::Result<()> {
         while !self.exit {
-            match crossterm::event::read().map_err(|s| FsError::Io {
-                source: s,
-                my_backtrace: MyBacktrace::capture(),
-            })? {
+            match crossterm::event::read()? {
                 crossterm::event::Event::Key(key_event) => self.handle_key_event(key_event)?,
                 _ => {}
             }
-            terminal
-                .draw(|frame| self.draw(frame))
-                .map_err(|s| FsError::Io {
-                    source: s,
-                    my_backtrace: MyBacktrace::capture(),
-                })?;
+            terminal.draw(|frame| self.draw(frame))?;
         }
 
         Ok(())
     }
 
-    fn handle_key_event(&mut self, key_event: KeyEvent) -> FsResult<()> {
+    fn handle_key_event(&mut self, key_event: KeyEvent) -> anyhow::Result<()> {
         if key_event.kind == KeyEventKind::Press && key_event.code == KeyCode::Char('q') {
             self.exit = true;
         }

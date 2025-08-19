@@ -1,9 +1,10 @@
 use std::ffi::OsString;
 
+use anyhow::{anyhow, bail};
 use chrono::{Datelike, NaiveDate};
 use git2::Oid;
 
-use crate::fs::{FileAttr, FsError, FsResult, GitFs, MyBacktrace, REPO_SHIFT, fileattr::FileType};
+use crate::fs::{FileAttr, GitFs, REPO_SHIFT, fileattr::FileType};
 
 pub struct DirectoryEntry {
     pub inode: u64,
@@ -41,11 +42,11 @@ enum DirCase {
     Commit { oid: Oid },
 }
 
-pub fn readdir_root_dir(fs: &GitFs) -> FsResult<Vec<DirectoryEntry>> {
+pub fn readdir_root_dir(fs: &GitFs) -> anyhow::Result<Vec<DirectoryEntry>> {
     let mut entries: Vec<DirectoryEntry> = vec![];
     for repo in fs.repos_list.values() {
         let (repo_dir, repo_ino) = {
-            let repo = repo.lock().map_err(|_| FsError::LockPoisoned)?;
+            let repo = repo.lock().map_err(|_| anyhow!("Lock poisoned"))?;
             (repo.repo_dir.clone(), GitFs::repo_id_to_ino(repo.repo_id))
         };
         let dir_entry = DirectoryEntry::new(
@@ -60,13 +61,11 @@ pub fn readdir_root_dir(fs: &GitFs) -> FsResult<Vec<DirectoryEntry>> {
     Ok(entries)
 }
 
-pub fn readdir_repo_dir(fs: &GitFs, ino: u64) -> FsResult<Vec<DirectoryEntry>> {
+pub fn readdir_repo_dir(fs: &GitFs, ino: u64) -> anyhow::Result<Vec<DirectoryEntry>> {
     let repo_id = (ino >> REPO_SHIFT) as u16;
 
     if !fs.repos_list.contains_key(&repo_id) {
-        return Err(FsError::NotFound {
-            thing: "Repo is not found!".to_string(),
-        });
+        bail!("Repo not found!")
     }
 
     let mut entries: Vec<DirectoryEntry> = vec![];
@@ -82,7 +81,7 @@ pub fn readdir_repo_dir(fs: &GitFs, ino: u64) -> FsResult<Vec<DirectoryEntry>> {
     entries.push(live_entry);
     let object_entries = {
         let repo = fs.get_repo(ino)?;
-        let repo = repo.lock().map_err(|_| FsError::LockPoisoned)?;
+        let repo = repo.lock().map_err(|_| anyhow!("Lock poisoned"))?;
         repo.month_folders()?
     };
 
@@ -107,40 +106,20 @@ pub fn readdir_repo_dir(fs: &GitFs, ino: u64) -> FsResult<Vec<DirectoryEntry>> {
     Ok(entries)
 }
 
-pub fn readdir_live_dir(fs: &GitFs, ino: u64) -> FsResult<Vec<DirectoryEntry>> {
+pub fn readdir_live_dir(fs: &GitFs, ino: u64) -> anyhow::Result<Vec<DirectoryEntry>> {
     let ignore_list = [OsString::from(".git"), OsString::from("fs_meta.db")];
     let path = fs.build_full_path(ino)?;
     let mut entries: Vec<DirectoryEntry> = vec![];
-    for node in path.read_dir().map_err(|s| FsError::Io {
-        source: s,
-        my_backtrace: MyBacktrace::capture(),
-    })? {
-        let node = node.map_err(|s| FsError::Io {
-            source: s,
-            my_backtrace: MyBacktrace::capture(),
-        })?;
+    for node in path.read_dir()? {
+        let node = node?;
         let node_name = node.file_name();
         let node_name_str = node_name.to_string_lossy();
         if ignore_list.contains(&node_name) {
             continue;
         }
-        let (kind, filemode) = if node
-            .file_type()
-            .map_err(|s| FsError::Io {
-                source: s,
-                my_backtrace: MyBacktrace::capture(),
-            })?
-            .is_dir()
-        {
+        let (kind, filemode) = if node.file_type()?.is_dir() {
             (FileType::Directory, libc::S_IFDIR)
-        } else if node
-            .file_type()
-            .map_err(|s| FsError::Io {
-                source: s,
-                my_backtrace: MyBacktrace::capture(),
-            })?
-            .is_file()
-        {
+        } else if node.file_type()?.is_file() {
             (FileType::RegularFile, libc::S_IFREG)
         } else {
             (FileType::Symlink, libc::S_IFLNK)
@@ -163,7 +142,7 @@ pub fn readdir_live_dir(fs: &GitFs, ino: u64) -> FsResult<Vec<DirectoryEntry>> {
 // 1 - ino is for a month folder -> show days folders
 // 2 - ino is for a day folder -> show commits
 // 3 - ino is for a commit or inside a commit -> show commit contents
-fn classify_inode(fs: &GitFs, ino: u64) -> FsResult<DirCase> {
+fn classify_inode(fs: &GitFs, ino: u64) -> anyhow::Result<DirCase> {
     let attr = fs.getattr(ino)?;
     let target_name = fs.get_name_from_db(ino)?;
 
@@ -192,7 +171,7 @@ fn classify_inode(fs: &GitFs, ino: u64) -> FsResult<DirCase> {
     Ok(DirCase::Commit { oid: attr.oid })
 }
 
-pub fn readdir_git_dir(fs: &GitFs, ino: u64) -> FsResult<Vec<DirectoryEntry>> {
+pub fn readdir_git_dir(fs: &GitFs, ino: u64) -> anyhow::Result<Vec<DirectoryEntry>> {
     let repo = fs.get_repo(ino)?;
 
     let git_objects = match classify_inode(fs, ino)? {
@@ -209,12 +188,12 @@ pub fn readdir_git_dir(fs: &GitFs, ino: u64) -> FsResult<Vec<DirectoryEntry>> {
             // The root of a commit will have the commit_id as attr.oid
             if commit_oid == oid {
                 // parent tree_oid is the commit.tree_oid()
-                let repo = repo.lock().map_err(|_| FsError::LockPoisoned)?;
+                let repo = repo.lock().map_err(|_| anyhow!("Lock poisoned"))?;
                 repo.list_tree(commit_oid, None)?
             } else {
                 // else, get parent oid from db
                 let tree_oid = oid;
-                let repo = repo.lock().map_err(|_| FsError::LockPoisoned)?;
+                let repo = repo.lock().map_err(|_| anyhow!("Lock poisoned"))?;
                 repo.list_tree(commit_oid, Some(tree_oid))?
             }
         }
