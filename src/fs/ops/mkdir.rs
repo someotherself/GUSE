@@ -1,3 +1,5 @@
+use std::os::unix::fs::PermissionsExt;
+
 use crate::fs::fileattr::FileAttr;
 use crate::fs::{CreateFileAttr, FsError, FsResult, GitFs, MyBacktrace, REPO_SHIFT, repo};
 
@@ -52,16 +54,17 @@ pub fn mkdir_live(
     name: &str,
     create_attr: CreateFileAttr,
 ) -> FsResult<FileAttr> {
-    if fs.exists_by_name(parent, name)? {
-        return Err(FsError::AlreadyExists);
-    }
-
     let dir_path = fs.build_path(parent, name)?;
-    std::fs::create_dir(dir_path).map_err(|s| FsError::Io {
+    std::fs::create_dir(&dir_path).map_err(|s| FsError::Io {
         source: s,
         my_backtrace: MyBacktrace::capture(),
     })?;
-
+    std::fs::set_permissions(dir_path, std::fs::Permissions::from_mode(0o775)).map_err(|s| {
+        FsError::Io {
+            source: s,
+            my_backtrace: MyBacktrace::capture(),
+        }
+    })?;
     let new_ino = fs.next_inode(parent)?;
 
     let mut attr: FileAttr = create_attr.into();

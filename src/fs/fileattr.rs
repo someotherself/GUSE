@@ -99,8 +99,8 @@ impl From<CreateFileAttr> for FileAttr {
             } else {
                 1
             },
-            uid: value.uid,
-            gid: value.gid,
+            uid: unsafe { libc::getuid() },
+            gid: unsafe { libc::getgid() },
             rdev: value.rdev,
             blksize: 0,
             flags: value.flags,

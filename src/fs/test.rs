@@ -177,7 +177,7 @@ fn test_mkdir_normal() -> FsResult<()> {
 
             let create_attr = dir_attr();
             let dir_name1 = OsStr::new("dir_in_live_1");
-            let dir1_attr = fs.mkdir(LIVE_DIR_INO, dir_name1, create_attr).unwrap();
+            let dir1_attr = fs.mkdir(live_attr.inode, dir_name1, create_attr).unwrap();
             let dir1_ino = LIVE_DIR_INO + 1;
 
             assert!(fs.exists(dir1_attr.inode).unwrap());
@@ -191,10 +191,8 @@ fn test_mkdir_normal() -> FsResult<()> {
             assert_eq!(getattr_dir1.inode, dir1_ino);
             assert_eq!(dir1_attr.inode, dir1_ino);
 
-            dbg!(LIVE_DIR_INO);
-            dbg!(dir1_attr.inode);
-            dbg!(find_dir1.inode);
-            dbg!(getattr_dir1.inode);
+            let file_name = OsStr::new("test.txt");
+            let (_file_attr, _fh) = fs.create(LIVE_DIR_INO, file_name, true, true)?;
             Ok(())
         },
     )

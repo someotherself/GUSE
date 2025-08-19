@@ -72,7 +72,7 @@ impl MetaDb {
         }
     }
 
-    pub fn get_mode_from_db(&self, ino: u64) -> FsResult<u64> {
+    pub fn get_mode_from_db(&self, ino: u64) -> FsResult<i64> {
         let mut stmt = self.conn.prepare(
             "SELECT filemode
            FROM inode_map
@@ -84,7 +84,7 @@ impl MetaDb {
             .optional()?;
 
         if let Some(filemode) = filemode_opt {
-            Ok(filemode as u64)
+            Ok(filemode)
         } else {
             Err(FsError::NotFound {
                 thing: format!("inode {ino}"),
@@ -108,7 +108,6 @@ impl MetaDb {
         })?;
         Ok(git2::Oid::from_str(&oid_str)?)
     }
-
     pub fn get_name_from_db(&self, ino: u64) -> FsResult<String> {
         let mut stmt = self.conn.prepare(
             "SELECT name

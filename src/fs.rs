@@ -140,11 +140,7 @@ impl std::fmt::Display for MyBacktrace {
 }
 impl std::fmt::Debug for MyBacktrace {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        if f.alternate() {
-            write!(f, "{}", self.0)
-        } else {
-            write!(f, "<bt>")
-        }
+        write!(f, "{}", self.0)
     }
 }
 
@@ -429,7 +425,7 @@ impl GitFs {
 
     fn register_read(&self, ino: u64, fh: u64) -> FsResult<()> {
         let attr = self.getattr(ino)?.into();
-        let path = self.get_path_from_db(ino)?;
+        let path = self.build_full_path(ino)?;
         let reader =
             std::io::BufReader::new(OpenOptions::new().read(true).open(&path).map_err(|s| {
                 FsError::Io {
@@ -457,7 +453,7 @@ impl GitFs {
 
     fn register_write(&self, ino: u64, fh: u64) -> FsResult<()> {
         let attr = self.getattr(ino)?.into();
-        let path = self.get_path_from_db(ino)?;
+        let path = self.build_full_path(ino)?;
         let writer = std::io::BufWriter::new(
             OpenOptions::new()
                 .read(true)
@@ -660,7 +656,6 @@ impl GitFs {
             return Err(FsError::ReadOnly);
         }
         if !self.exists(parent)? {
-            info!("Parent {} does not exist", parent);
             return Err(FsError::NotFound {
                 thing: "Parent does not exist!".to_string(),
             });
@@ -883,6 +878,56 @@ impl GitFs {
 
 // gitfs_helpers
 impl GitFs {
+    fn refresh_attr(&self, attr: &mut FileAttr) -> FsResult<FileAttr> {
+        let path = self.build_full_path(attr.inode)?;
+        let metadata = path.metadata().map_err(|s| FsError::Io {
+            source: s,
+            my_backtrace: MyBacktrace::capture(),
+        })?;
+        let std_type = metadata.file_type();
+        let actual = if std_type.is_dir() {
+            FileType::Directory
+        } else if std_type.is_file() {
+            FileType::RegularFile
+        } else if std_type.is_symlink() {
+            FileType::Symlink
+        } else {
+            return Err(FsError::InvalidInput);
+        };
+        if attr.kind != actual {
+            return Err(FsError::InvalidInput);
+        }
+
+        let atime: SystemTime = metadata.accessed().map_err(|s| FsError::Io {
+            source: s,
+            my_backtrace: MyBacktrace::capture(),
+        })?;
+        let mtime: SystemTime = metadata.modified().map_err(|s| FsError::Io {
+            source: s,
+            my_backtrace: MyBacktrace::capture(),
+        })?;
+        let crtime: SystemTime = metadata.created().map_err(|s| FsError::Io {
+            source: s,
+            my_backtrace: MyBacktrace::capture(),
+        })?;
+        let secs = metadata.ctime();
+        let nsecs = metadata.ctime_nsec() as u32;
+        let ctime: SystemTime = if secs >= 0 {
+            UNIX_EPOCH + Duration::new(secs as u64, nsecs)
+        } else {
+            UNIX_EPOCH - Duration::new((-secs) as u64, nsecs)
+        };
+
+        attr.atime = atime;
+        attr.mtime = mtime;
+        attr.crtime = crtime;
+        attr.ctime = ctime;
+        attr.uid = unsafe { libc::getuid() } as u32;
+        attr.gid = unsafe { libc::getgid() } as u32;
+
+        Ok(*attr)
+    }
+
     fn attr_from_dir(&self, path: PathBuf) -> FsResult<FileAttr> {
         let metadata = path.metadata().map_err(|s| FsError::Io {
             source: s,
@@ -925,8 +970,8 @@ impl GitFs {
             perm: 0o775,
             mode: st_mode,
             nlink: metadata.nlink() as u32,
-            uid: metadata.uid(),
-            gid: metadata.gid(),
+            uid: unsafe { libc::geteuid() },
+            gid: unsafe { libc::getgid() },
             rdev: metadata.rdev() as u32,
             blksize: metadata.blksize() as u32,
             flags: 0,
@@ -1111,6 +1156,10 @@ impl GitFs {
         if ino == ROOT_INO {
             return Ok(true);
         }
+        if self.is_in_live(ino)? {
+            let attr = self.getattr(ino)?;
+            return Ok(attr.kind == FileType::Directory);
+        }
         let repo_id = GitFs::ino_to_repo_id(ino);
         if self.repos_list.contains_key(&repo_id) {
             return Ok(true);
@@ -1122,10 +1171,14 @@ impl GitFs {
         Ok(git_attr.kind == ObjectType::Tree)
     }
 
-    fn is_file(&self, inode: u64) -> FsResult<bool> {
+    fn is_file(&self, ino: u64) -> FsResult<bool> {
+        if self.is_in_live(ino)? {
+            let attr = self.getattr(ino)?;
+            return Ok(attr.kind == FileType::RegularFile);
+        }
         let git_attr = {
-            let path = self.get_path_from_db(inode)?;
-            let repo = self.get_repo(inode)?;
+            let path = self.get_path_from_db(ino)?;
+            let repo = self.get_repo(ino)?;
             repo.lock().unwrap().getattr(path)?
         };
         Ok(git_attr.kind == ObjectType::Blob && git_attr.filemode != libc::S_IFLNK)
@@ -1187,6 +1240,17 @@ impl GitFs {
         };
         let conn = conn_arc.lock().map_err(|_| FsError::LockPoisoned)?;
         conn.get_oid_from_db(ino)
+    }
+
+    fn get_mode_from_db(&self, ino: u64) -> FsResult<git2::FileMode> {
+        let conn_arc = {
+            let repo = &self.get_repo(ino)?;
+            let repo = repo.lock().map_err(|_| FsError::LockPoisoned)?;
+            std::sync::Arc::clone(&repo.connection)
+        };
+        let conn = conn_arc.lock().map_err(|_| FsError::LockPoisoned)?;
+        let mode = conn.get_mode_from_db(ino)?;
+        repo::try_into_filemode(mode).ok_or_else(|| FsError::InvalidInput)
     }
 
     fn get_name_from_db(&self, ino: u64) -> FsResult<String> {

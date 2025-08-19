@@ -1,7 +1,7 @@
 use chrono::{DateTime, Datelike};
 use git2::{
-    Commit, Direction, ErrorClass, ErrorCode, FetchOptions, ObjectType, Oid, RemoteCallbacks,
-    Repository, Sort, Time, Tree, TreeWalkMode, TreeWalkResult,
+    Commit, Direction, ErrorClass, ErrorCode, FetchOptions, FileMode, ObjectType, Oid,
+    RemoteCallbacks, Repository, Sort, Time, Tree, TreeWalkMode, TreeWalkResult,
 };
 use std::{
     collections::{BTreeMap, HashSet},
@@ -722,5 +722,35 @@ pub fn parse_mkdir_url(name: &str) -> FsResult<Option<(String, String)>> {
 impl PartialEq for GitRepo {
     fn eq(&self, other: &Self) -> bool {
         self.repo_id == other.repo_id
+    }
+}
+
+pub fn try_into_filemode(mode: i64) -> Option<FileMode> {
+    let m = u32::try_from(mode).ok()?;
+    // Exact matches first
+    match m {
+        0o040000 => Some(FileMode::Tree),
+        0o100644 => Some(FileMode::Blob),
+        0o100755 => Some(FileMode::BlobExecutable),
+        0o120000 => Some(FileMode::Link),
+        0o160000 => Some(FileMode::Commit),
+        0 => Some(FileMode::Unreadable),
+        _ => {
+            // Normalize common stat-like modes if they sneak in
+            let typ = m & 0o170000;
+            match typ {
+                0o040000 => Some(FileMode::Tree),
+                0o120000 => Some(FileMode::Link),
+                0o160000 => Some(FileMode::Commit),
+                0o100000 => {
+                    if (m & 0o111) != 0 {
+                        Some(FileMode::BlobExecutable)
+                    } else {
+                        Some(FileMode::Blob)
+                    }
+                }
+                _ => None,
+            }
+        }
     }
 }

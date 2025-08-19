@@ -76,6 +76,7 @@ pub fn lookup_live(fs: &GitFs, parent: u64, name: &str) -> FsResult<Option<FileA
     };
     let child_ino = fs.get_ino_from_db(parent, name)?;
     attr.inode = child_ino;
+    attr.perm = 0o775;
 
     Ok(Some(attr))
 }
