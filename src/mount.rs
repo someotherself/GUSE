@@ -330,7 +330,9 @@ impl fuser::Filesystem for GitFsAdapter {
             }
         };
 
-        match fs.open(ino, read, write) {
+        let truncate = flags as u32 & libc::O_TRUNC as u32 != 0;
+
+        match fs.open(ino, read, write, truncate) {
             Ok(fh) => reply.opened(fh, 0),
             Err(e) => reply.error(libc::EIO),
         }

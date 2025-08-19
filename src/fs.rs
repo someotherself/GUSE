@@ -111,9 +111,14 @@ pub struct GitFs {
 
 struct Handle {
     handle: u64,
-    file: File,
+    file: SourceTypes,
     read: bool,
     write: bool,
+}
+
+enum SourceTypes {
+    RealFile(File),
+    RoBlob { oid: Oid, data: Arc<Vec<u8>> },
 }
 
 // gitfs_fuse_functions
@@ -246,7 +251,7 @@ impl GitFs {
         Ok(MetaDb { conn })
     }
 
-    pub fn open(&self, ino: u64, read: bool, write: bool) -> anyhow::Result<u64> {
+    pub fn open(&self, ino: u64, read: bool, write: bool, truncate: bool) -> anyhow::Result<u64> {
         if write && self.read_only {
             bail!("Filesystem is in read only");
         }
@@ -261,10 +266,10 @@ impl GitFs {
             FsOperationContext::Root => bail!("Target is a directory"),
             FsOperationContext::RepoDir { ino: _ } => bail!("Target is a directory"),
             FsOperationContext::InsideLiveDir { ino: _ } => {
-                ops::open::open_live(self, ino, read, write)
+                ops::open::open_live(self, ino, read, write, truncate)
             }
             FsOperationContext::InsideGitDir { ino: _ } => {
-                ops::open::open_git(self, ino, read, write)
+                ops::open::open_git(self, ino, read, write, truncate)
             }
         }
     }

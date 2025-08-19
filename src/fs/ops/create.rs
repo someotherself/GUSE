@@ -30,6 +30,6 @@ pub fn create_live(
     let nodes = vec![(parent, name.into(), attr)];
     fs.write_inodes_to_db(nodes)?;
 
-    let fh = fs.open(ino, read, write)?;
+    let fh = fs.open(ino, read, write, false)?;
     Ok((attr, fh))
 }
