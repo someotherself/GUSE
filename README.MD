@@ -10,15 +10,21 @@ data_dir (Root folder. Can be renamed)
             ├── live                    # working files and folders
                     ├── user_file1.md
                     └── user_file2.md
-            ├── snap_1_date             # a list of recent snapshots
-                    ├── user_file1.md   # previous versions of the live files. Read only versions
-                    └── user_file2.md
-            ├── snap_2_date
-                    ├── user_file1.md
-                    └── user_file2.md
-            ├── snap_3_date
-                    ├── user_file1.md
-                    └── user_file2.md
+            ├── YYYY-MM/                # a list of months where commits were made
+                    ├── Snaps_on_MM.DD.YYYY/   #  list of days where commits were made
+                    └── Snaps_on_MM.DD.YYYY/
+                        ├── user_file1.md   # previous versions of the live files. Read only versions
+                        └── user_file2.md
+            ├── YYYY-MM/               
+                    ├── Snaps_on_MM.DD.YYYY/
+                    └── Snaps_on_MM.DD.YYYY/
+                        ├── user_file1.md
+                        └── user_file2.md
+            ├── YYYY-MM/                
+                    ├── Snaps_on_MM.DD.YYYY/
+                    └── Snaps_on_MM.DD.YYYY/
+                        ├── user_file1.md
+                        └── user_file2.md
             ...
     ├── repository_2/
             ├── live

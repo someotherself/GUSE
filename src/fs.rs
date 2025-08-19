@@ -88,10 +88,16 @@ impl FsOperationContext {
 //
 // Perceived disk structure
 // repos/repo_dir1/
-//---------├── live/      <- everything in repo_dir1 except for .git and fs_meta.db
-//---------├── commit_1/  <- List of all the commits, served as folders
-//---------├── commit_2/  <-
-//---------└── commit_3/  <-
+//---------├── live/            <- everything in repo_dir1 except for .git and fs_meta.db
+//---------├── YYYY-MM/         <- List month groups where commits were made
+//---------------├── Snaps_on_MM.DD.YYYY/   <- List day  groups where commits were made
+//---------------└── Snaps_on_MM.DD.YYYY/   <-
+//---------------------├── Snap001_OID      <- Commit
+//---------------------├── Snap002_OID      <- Commit
+//---------------------└── Snap003_OID      <- Commit
+//---------├── YYYY-MM/  <-
+//---------├── YYYY-MM/  <-
+//---------└── YYYY-MM/  <-
 //
 // Structure of INODES
 // Each repo has a repo_id--<16bits repo-id>
