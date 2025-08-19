@@ -845,14 +845,18 @@ impl GitFs {
         if ino == ROOT_INO {
             return Ok(true);
         }
-        let repo_id = GitFs::ino_to_repo_id(ino);
-        if self.repos_list.contains_key(&repo_id) {
-            return Ok(true);
+        let ctx = FsOperationContext::get_operation(self, ino);
+        match ctx? {
+            FsOperationContext::Root => return Ok(true),
+            FsOperationContext::RepoDir { ino: _ } => Ok(true),
+            FsOperationContext::InsideLiveDir { ino } => {
+                let path = self.build_full_path(ino)?;
+                Ok(path.exists())
+            },
+            FsOperationContext::InsideGitDir { ino } => {
+                Ok(self.build_full_path(ino).is_ok())
+            },
         }
-        if ino == (repo_id as u64) + 1 {
-            return Ok(true);
-        }
-        Ok(self.get_path_from_db(ino).is_ok())
     }
 
     fn is_dir(&self, ino: u64) -> anyhow::Result<bool> {
