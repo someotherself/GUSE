@@ -519,13 +519,38 @@ impl fuser::Filesystem for GitFsAdapter {
         &mut self,
         _req: &fuser::Request<'_>,
         _ino: u64,
-        _fh: u64,
+        fh: u64,
         _flags: i32,
         _lock_owner: Option<u64>,
-        _flush: bool,
+        flush: bool,
         reply: fuser::ReplyEmpty,
     ) {
-        todo!()
+        let fs_arc = self.getfs();
+        if flush {
+            let res = match fs_arc.lock() {
+                Ok(fs) => fs.flush(fh),
+                Err(e) => {
+                    eprintln!("fs mutex poisoned: {e}");
+                    return reply.error(EIO);
+                }
+            };
+            match res {
+                Ok(_) => return reply.ok(),
+                Err(e) => return reply.error(e.into()),
+            }
+        }
+
+        let res = match fs_arc.lock() {
+            Ok(fs) => fs.release(fh),
+            Err(e) => {
+                eprintln!("fs mutex poisoned: {e}");
+                return reply.error(EIO);
+            }
+        };
+        match res {
+            Ok(_) => reply.ok(),
+            Err(e) => reply.error(e.into()),
+        }
     }
 
     // TODO
