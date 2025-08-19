@@ -1,7 +1,7 @@
 use std::collections::{BTreeMap, HashSet};
 use std::ffi::{OsStr, OsString};
 use std::fs::File;
-use std::os::unix::fs::{MetadataExt, PermissionsExt};
+use std::os::unix::fs::{FileExt, MetadataExt, PermissionsExt};
 use std::path::Path;
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::{Duration, UNIX_EPOCH};
@@ -119,6 +119,31 @@ struct Handle {
 enum SourceTypes {
     RealFile(File),
     RoBlob { oid: Oid, data: Arc<Vec<u8>> },
+}
+
+impl FileExt for SourceTypes {
+    fn read_at(&self, buf: &mut [u8], offset: u64) -> std::io::Result<usize> {
+        match self {
+            Self::RealFile(file) => file.read_at(buf, offset),
+            Self::RoBlob { oid: _, data } => {
+                let start = offset as usize;
+                if start >= data.len() {
+                    return Ok(0);
+                }
+                let end = (start + buf.len()).min(data.len());
+                let src = &data[start..end];
+                buf[..src.len()].copy_from_slice(src);
+                Ok(src.len())
+            }
+        }
+    }
+
+    fn write_at(&self, buf: &[u8], offset: u64) -> std::io::Result<usize> {
+        match self {
+            Self::RealFile(file) => file.write_at(buf, offset),
+            Self::RoBlob { oid: _, data: _ } => Err(std::io::Error::from_raw_os_error(libc::EROFS)),
+        }
+    }
 }
 
 // gitfs_fuse_functions
