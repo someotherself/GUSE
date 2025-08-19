@@ -510,7 +510,6 @@ impl fuser::Filesystem for GitFsAdapter {
         todo!()
     }
 
-    // TODO
     fn release(
         &mut self,
         _req: &fuser::Request<'_>,
@@ -522,19 +521,6 @@ impl fuser::Filesystem for GitFsAdapter {
         reply: fuser::ReplyEmpty,
     ) {
         let fs_arc = self.getfs();
-        if flush {
-            let res = match fs_arc.lock() {
-                Ok(fs) => fs.flush(fh),
-                Err(e) => {
-                    eprintln!("fs mutex poisoned: {e}");
-                    return reply.error(EIO);
-                }
-            };
-            match res {
-                Ok(_) => return reply.ok(),
-                Err(e) => return reply.error(errno_from_anyhow(&e)),
-            }
-        }
 
         let res = match fs_arc.lock() {
             Ok(fs) => fs.release(fh),
@@ -544,12 +530,12 @@ impl fuser::Filesystem for GitFsAdapter {
             }
         };
         match res {
-            Ok(_) => reply.ok(),
+            Ok(true) => reply.ok(),
+            Ok(false) => reply.error(libc::EBADF),
             Err(e) => reply.error(errno_from_anyhow(&e)),
         }
     }
 
-    // TODO
     fn flush(
         &mut self,
         _req: &fuser::Request<'_>,
@@ -558,18 +544,7 @@ impl fuser::Filesystem for GitFsAdapter {
         lock_owner: u64,
         reply: fuser::ReplyEmpty,
     ) {
-        let fs_arc = self.getfs();
-        let res = match fs_arc.lock() {
-            Ok(fs) => fs.flush(fh),
-            Err(e) => {
-                eprintln!("fs mutex poisoned: {e}");
-                return reply.error(EIO);
-            }
-        };
-        match res {
-            Ok(_) => reply.ok(),
-            Err(e) => reply.error(errno_from_anyhow(&e)),
-        }
+        reply.ok();
     }
 
     fn opendir(&mut self, req: &fuser::Request<'_>, ino: u64, flags: i32, reply: ReplyOpen) {

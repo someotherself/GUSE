@@ -337,12 +337,9 @@ impl GitFs {
         }
     }
 
-    pub fn release(&self, _fh: u64) -> anyhow::Result<()> {
-        todo!()
-    }
-
-    pub fn flush(&self, _fh: u64) -> anyhow::Result<()> {
-        todo!()
+    pub fn release(&self, fh: u64) -> anyhow::Result<bool> {
+        let mut guard = self.handles.write().map_err(|_| anyhow!("Lock poisoned"))?;
+        Ok(guard.remove(&fh).is_some())
     }
 
     fn object_to_file_attr(&self, inode: u64, git_attr: &ObjectAttr) -> anyhow::Result<FileAttr> {
