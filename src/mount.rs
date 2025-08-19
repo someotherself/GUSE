@@ -69,6 +69,7 @@ pub fn mount_fuse(opts: MountPoint) -> FsResult<()> {
     let mut options = vec![
         MountOption::FSName("GitFs".to_string()),
         MountOption::AutoUnmount,
+        MountOption::DefaultPermissions,
     ];
     if read_only {
         options.push(MountOption::RO);
@@ -158,18 +159,6 @@ impl fuser::Filesystem for GitFsAdapter {
         };
         let attr_result = fs.getattr(parent);
         if let Ok(parent_attrs) = attr_result {
-            if !check_access(
-                parent_attrs.uid,
-                parent_attrs.gid,
-                parent_attrs.perm,
-                req.uid(),
-                req.gid(),
-                libc::X_OK,
-            ) {
-                reply.error(libc::EACCES);
-                return;
-            }
-
             if name == OsStr::new(".") {
                 reply.entry(&TTL, &parent_attrs.into(), 0);
                 return;
@@ -267,26 +256,6 @@ impl fuser::Filesystem for GitFsAdapter {
                 return reply.error(EIO);
             }
         };
-        match fs.getattr(parent) {
-            Ok(attr) => {
-                if !check_access(
-                    attr.uid,
-                    attr.gid,
-                    attr.mode as u16,
-                    req.uid(),
-                    req.gid(),
-                    libc::W_OK,
-                ) {
-                    reply.error(libc::EACCES);
-                    return;
-                };
-            }
-            Err(e) => {
-                reply.error(libc::ENOENT);
-                return;
-            }
-        }
-
         let create_attr = dir_attr();
         match fs.mkdir(parent, name, create_attr) {
             Ok(attr) => reply.entry(&TTL, &attr.into(), 0),
@@ -366,26 +335,10 @@ impl fuser::Filesystem for GitFsAdapter {
                 return;
             }
         };
-        match fs.getattr(ino) {
-            Ok(attr) => {
-                if !check_access(
-                    attr.uid,
-                    attr.gid,
-                    attr.perm,
-                    req.uid(),
-                    req.gid(),
-                    access_mask,
-                ) {
-                    reply.error(libc::EACCES);
-                    return;
-                }
 
-                match fs.open(ino, read, write) {
-                    Ok(fh) => reply.opened(fh, 0),
-                    Err(e) => reply.error(libc::EIO),
-                }
-            }
-            Err(e) => reply.error(libc::ENOENT),
+        match fs.open(ino, read, write) {
+            Ok(fh) => reply.opened(fh, 0),
+            Err(e) => reply.error(libc::EIO),
         }
     }
 
@@ -609,15 +562,6 @@ impl fuser::Filesystem for GitFsAdapter {
             return reply.error(ENOTDIR);
         }
 
-        let mut access_mask = match flags & libc::O_ACCMODE {
-            libc::O_RDONLY => libc::R_OK,
-            libc::O_WRONLY => libc::W_OK,
-            libc::O_RDWR => libc::R_OK | libc::W_OK,
-            _ => return reply.error(libc::EINVAL),
-        };
-
-        access_mask |= libc::X_OK;
-
         if flags & O_DIRECTORY == 0 {
             return reply.error(ENOTDIR);
         }
@@ -627,24 +571,13 @@ impl fuser::Filesystem for GitFsAdapter {
             ino, attr.kind, attr.uid, attr.gid, attr.perm
         );
 
-        if check_access(
-            attr.uid,
-            attr.gid,
-            attr.perm,
-            req.uid(),
-            req.gid(),
-            access_mask,
-        ) {
-            reply.opened(0, 0)
-        } else {
-            reply.error(EACCES)
-        }
+        reply.opened(0, 0)
     }
 
     // TODO
     fn create(
         &mut self,
-        _req: &fuser::Request<'_>,
+        req: &fuser::Request<'_>,
         parent: u64,
         name: &OsStr,
         mode: u32,
@@ -652,43 +585,26 @@ impl fuser::Filesystem for GitFsAdapter {
         flags: i32,
         reply: fuser::ReplyCreate,
     ) {
-        reply.error(libc::EROFS);
-    }
-}
+        let fs_arc = self.getfs();
+        let fs = match fs_arc.lock() {
+            Ok(fs) => fs,
+            Err(e) => {
+                eprintln!("fs mutex poisoned: {e}");
+                return reply.error(EIO);
+            }
+        };
+        let (read, write) = match flags & libc::O_ACCMODE {
+            libc::O_RDONLY => (true, false),
+            libc::O_WRONLY => (false, true),
+            libc::O_RDWR => (true, true),
+            // Exactly one access mode flag must be specified
+            _ => return reply.error(libc::EINVAL),
+        };
 
-fn check_access(
-    file_uid: u32,
-    file_gid: u32,
-    file_mode: u16,
-    uid: u32,
-    gid: u32,
-    mut access_mask: i32,
-) -> bool {
-    // F_OK tests for existence of file
-    if access_mask == libc::F_OK {
-        return true;
-    }
-    let file_mode = i32::from(file_mode);
+        let (attr, fh) = fs.create(parent, name, read, write).unwrap();
 
-    // root is allowed to read & write anything
-    if uid == 0 {
-        // root only allowed to exec if one of the X bits is set
-        access_mask &= libc::X_OK;
-        access_mask -= access_mask & (file_mode >> 6);
-        access_mask -= access_mask & (file_mode >> 3);
-        access_mask -= access_mask & file_mode;
-        return access_mask == 0;
+        reply.created(&TTL, &attr.into(), 0, fh, flags as u32);
     }
-
-    if uid == file_uid {
-        access_mask -= access_mask & (file_mode >> 6);
-    } else if gid == file_gid {
-        access_mask -= access_mask & (file_mode >> 3);
-    } else {
-        access_mask -= access_mask & file_mode;
-    }
-
-    access_mask == 0
 }
 
 impl From<FileAttr> for fuser::FileAttr {
