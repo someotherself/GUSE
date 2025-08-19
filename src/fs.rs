@@ -104,7 +104,7 @@ pub struct GitFs {
     pub repos_list: BTreeMap<u16, Arc<Mutex<GitRepo>>>, // <repo_id, repo>
     next_inode: HashMap<u16, AtomicU64>,                // Each Repo has a set of inodes
     current_handle: AtomicU64,
-    handles: RwLock<HashMap<u64, Mutex<Handle>>>, // (ino, Handle)
+    handles: RwLock<HashMap<u64, Handle>>, // (ino, Handle)
     open_handles: Arc<RwLock<HashMap<u64, HashSet<u64>>>>, // (ino, handles)
     read_only: bool,
 }
@@ -119,6 +119,16 @@ struct Handle {
 enum SourceTypes {
     RealFile(File),
     RoBlob { oid: Oid, data: Arc<Vec<u8>> },
+}
+
+impl SourceTypes {
+    pub fn is_file(&self) -> bool {
+        matches!(self, SourceTypes::RealFile(_))
+    }
+
+    pub fn is_blob(&self) -> bool {
+        matches!(self, SourceTypes::RoBlob { oid: _, data: _ })
+    }
 }
 
 impl FileExt for SourceTypes {

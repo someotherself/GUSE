@@ -1,8 +1,5 @@
 #![allow(unused_variables)]
-use std::{
-    fs::OpenOptions,
-    sync::{Arc, Mutex},
-};
+use std::{fs::OpenOptions, sync::Arc};
 
 use anyhow::anyhow;
 
@@ -30,7 +27,7 @@ pub fn open_live(
     };
     {
         let mut guard = fs.handles.write().map_err(|_| anyhow!("Lock poisoned"))?;
-        guard.insert(ino, Mutex::new(handle));
+        guard.insert(ino, handle);
     }
     {
         let mut guard = fs
@@ -69,7 +66,7 @@ pub fn open_git(
     };
     {
         let mut guard = fs.handles.write().map_err(|_| anyhow!("Lock poisoned"))?;
-        guard.insert(ino, Mutex::new(handle));
+        guard.insert(ino, handle);
     }
     {
         let mut guard = fs
