@@ -21,19 +21,17 @@ pub fn write_live(
     if !ctx.file.is_file() {
         bail!("Invalid handle.")
     }
-    Ok(ctx.file.write_at(buf, offset)?)
+    let bytes_written = ctx.file.write_at(buf, offset)?;
+    // Look into syncing
+    Ok(bytes_written)
 }
 
-pub fn write_git(fs: &GitFs, _ino: u64, offset: u64, buf: &[u8], fh: u64) -> anyhow::Result<usize> {
-    let guard = fs.handles.read().map_err(|_| anyhow!("Lock poisoned."))?;
-    let ctx = guard
-        .get(&fh)
-        .ok_or_else(|| anyhow!("Handle does not exist"))?;
-    if !ctx.write {
-        bail!("Write not permitted")
-    };
-    if !ctx.file.is_blob() {
-        bail!("Invalid handle.")
-    }
-    Ok(ctx.file.write_at(buf, offset)?)
+pub fn write_git(
+    _fs: &GitFs,
+    _ino: u64,
+    _offset: u64,
+    _buf: &[u8],
+    _fh: u64,
+) -> anyhow::Result<usize> {
+    bail!("This folder is read only!")
 }
