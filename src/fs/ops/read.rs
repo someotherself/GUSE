@@ -44,5 +44,8 @@ pub fn read_git(
     if !ctx.file.is_blob() {
         bail!("Invalid handle.")
     }
+    if ctx.ino != ino {
+        bail!("Invalid filehandle")
+    }
     Ok(ctx.file.read_at(buf, offset)?)
 }
