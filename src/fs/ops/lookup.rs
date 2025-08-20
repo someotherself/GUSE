@@ -29,7 +29,6 @@ pub fn lookup_root(fs: &GitFs, name: &str) -> anyhow::Result<Option<FileAttr>> {
 }
 
 pub fn lookup_repo(fs: &GitFs, parent: u64, name: &str) -> anyhow::Result<Option<FileAttr>> {
-    // DOUBLE CHECK. Move code from GitDir. getattr
     let repo_id = GitFs::ino_to_repo_id(parent);
     let repo = match fs.repos_list.get(&repo_id) {
         Some(repo) => repo,
@@ -45,7 +44,7 @@ pub fn lookup_repo(fs: &GitFs, parent: u64, name: &str) -> anyhow::Result<Option
         attr.inode = live_ino;
         attr
     } else {
-        // It will always be a yyyy-mm fodler
+        // It will always be a yyyy-mm folder
         // Build blank attr for it
         let res = {
             let repo = repo.lock().map_err(|_| anyhow!("Lock poisoned"))?;
@@ -67,7 +66,6 @@ pub fn lookup_repo(fs: &GitFs, parent: u64, name: &str) -> anyhow::Result<Option
 }
 
 pub fn lookup_live(fs: &GitFs, parent: u64, name: &str) -> anyhow::Result<Option<FileAttr>> {
-    // TODO Handle case if target it live itself
     let repo_id = GitFs::ino_to_repo_id(parent);
     match fs.repos_list.get(&repo_id) {
         Some(_) => {}
