@@ -178,6 +178,23 @@ fn test_mkdir_normal() -> anyhow::Result<()> {
             let getattr_dir1 = fs.getattr(find_dir1.inode)?;
             assert_eq!(getattr_dir1.inode, dir1_ino);
             assert_eq!(dir1_attr.inode, dir1_ino);
+
+            let file1 = OsStr::new("txt.txt");
+            let (file1_attr, fh) = fs.create(LIVE_DIR_INO, file1, true, true)?;
+            dbg!(file1_attr.inode);
+            dbg!(fh);
+            fs.release(fh)?;
+            let fh = fs.open(file1_attr.inode, true, true, false)?;
+            dbg!(fh);
+            let write_buf = b"some text";
+            fs.write(file1_attr.inode, 0, write_buf, fh)?;
+            let mut buffer = [0u8; 100];
+            let bytes_read = fs.read(file1_attr.inode, 0, &mut buffer, fh)?;
+            dbg!(buffer.len());
+            let text = String::from_utf8(buffer[..bytes_read].to_vec()).unwrap();
+            println!("{}", text);
+            dbg!(text.len());
+            fs.release(fh)?;
             Ok(())
         },
     )?;
