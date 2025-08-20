@@ -1,9 +1,9 @@
 use git2::Oid;
 
-use anyhow::{anyhow, bail};
+use anyhow::anyhow;
 
 use crate::{
-    fs::{build_attr_dir, FileAttr, GitFs, REPO_SHIFT},
+    fs::{FileAttr, GitFs, REPO_SHIFT, build_attr_dir},
     mount::{dir_attr, file_attr},
 };
 
@@ -74,7 +74,7 @@ pub fn lookup_live(fs: &GitFs, parent: u64, name: &str) -> anyhow::Result<Option
     let res = fs.get_ino_from_db(parent, name);
     let child_ino = match res {
         Ok(i) => i,
-        Err(_) => return Ok(None)
+        Err(_) => return Ok(None),
     };
     let filemode = fs.get_mode_from_db(child_ino)?;
     let mut attr: FileAttr = match filemode {
@@ -85,7 +85,7 @@ pub fn lookup_live(fs: &GitFs, parent: u64, name: &str) -> anyhow::Result<Option
 
     let path = fs.build_full_path(parent)?.join(name);
     if !path.exists() {
-        return Ok(None)
+        return Ok(None);
     }
 
     attr.inode = child_ino;
