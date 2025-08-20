@@ -4,17 +4,14 @@ use anyhow::{anyhow, bail};
 
 use crate::fs::GitFs;
 
-pub fn write_live(
-    fs: &GitFs,
-    _ino: u64,
-    offset: u64,
-    buf: &[u8],
-    fh: u64,
-) -> anyhow::Result<usize> {
+pub fn write_live(fs: &GitFs, ino: u64, offset: u64, buf: &[u8], fh: u64) -> anyhow::Result<usize> {
     let guard = fs.handles.read().map_err(|_| anyhow!("Lock poisoned."))?;
     let ctx = guard
         .get(&fh)
-        .ok_or_else(|| anyhow!("Handle does not exist"))?;
+        .ok_or_else(|| anyhow!(format!("Handle {} for ino {} does not exist", fh, ino)))?;
+    if ctx.ino != ino {
+        bail!("Invalid filehandle")
+    }
     if !ctx.write {
         bail!("Write not permitted")
     };
