@@ -606,41 +606,35 @@ impl fuser::Filesystem for GitFsAdapter {
         reply.ok();
     }
 
-    fn opendir(&mut self, req: &fuser::Request<'_>, ino: u64, flags: i32, reply: ReplyOpen) {
+    fn opendir(&mut self, _req: &fuser::Request<'_>, ino: u64, _flags: i32, reply: ReplyOpen) {
         let fs_arc = self.getfs();
         let fs = match fs_arc.lock() {
-            Ok(fs) => fs,
+            Ok(g) => g,
             Err(e) => {
                 eprintln!("fs mutex poisoned: {e}");
-                return reply.error(EIO);
+                return reply.error(libc::EIO);
             }
         };
 
         let attr = match fs.getattr(ino) {
-            Ok(attr) => attr,
+            Ok(a) => a,
             Err(e) => {
                 error!("getattr({}) failed: {:?}", ino, e);
-                return reply.error(ENOENT);
+                return reply.error(libc::ENOENT);
             }
         };
 
         if fuser::FileType::Directory != attr.kind.into() {
-            return reply.error(ENOTDIR);
-        }
-
-        if flags & O_DIRECTORY == 0 {
-            return reply.error(ENOTDIR);
+            return reply.error(libc::ENOTDIR);
         }
 
         info!(
-            "opendir ino={} kind={:?} uid:{} gid:{} perm={:#o}",
-            ino, attr.kind, attr.uid, attr.gid, attr.perm
+            "opendir ino={} uid:{} gid:{} perm={:#o}",
+            ino, attr.uid, attr.gid, attr.perm
         );
-
-        reply.opened(0, 0)
+        reply.opened(0, 0);
     }
 
-    // TODO
     fn create(
         &mut self,
         req: &fuser::Request<'_>,
