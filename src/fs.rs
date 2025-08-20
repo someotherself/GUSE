@@ -642,6 +642,7 @@ impl GitFs {
         attr.ctime = ctime;
         attr.uid = unsafe { libc::getuid() } as u32;
         attr.gid = unsafe { libc::getgid() } as u32;
+        attr.size = metadata.size();
 
         Ok(*attr)
     }
