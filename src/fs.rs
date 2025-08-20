@@ -474,6 +474,50 @@ impl GitFs {
         }
     }
 
+    pub fn unlink(&self, parent: u64, os_name: &OsStr) -> anyhow::Result<()> {
+        if self.read_only {
+            bail!("Filesystem is in read only");
+        }
+        if !self.exists(parent)? {
+            bail!(format!("Parent {} does not exist", parent));
+        }
+        let name = os_name.to_str().unwrap();
+        let ctx = FsOperationContext::get_operation(self, parent);
+        match ctx? {
+            FsOperationContext::Root => {
+                bail!("This directory is read only")
+            }
+            FsOperationContext::RepoDir { ino: _ } => {
+                bail!("Not allowed")
+            }
+            FsOperationContext::InsideLiveDir { ino } => ops::unlink::unlink_live(self, ino, name),
+            FsOperationContext::InsideGitDir { ino: _ } => {
+                bail!("This directory is read only")
+            }
+        }
+    }
+
+    pub fn rmdir(&self, parent: u64, os_name: &OsStr) -> anyhow::Result<()> {
+        if self.read_only {
+            bail!("Filesystem is in read only");
+        }
+        if !self.exists(parent)? {
+            bail!(format!("Parent {} does not exist", parent));
+        }
+        let name = os_name.to_str().unwrap();
+        let ctx = FsOperationContext::get_operation(self, parent);
+        match ctx? {
+            FsOperationContext::Root => {
+                bail!("This directory is read only")
+            }
+            FsOperationContext::RepoDir { ino } => ops::rmdir::rmdir_repo(self, ino, name),
+            FsOperationContext::InsideLiveDir { ino } => ops::rmdir::rmdir_live(self, ino, name),
+            FsOperationContext::InsideGitDir { ino: _ } => {
+                bail!("This directory is read only")
+            }
+        }
+    }
+
     pub fn readdir(&self, parent: u64) -> anyhow::Result<Vec<DirectoryEntry>> {
         let ctx = FsOperationContext::get_operation(self, parent);
         match ctx? {
