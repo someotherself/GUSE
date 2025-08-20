@@ -450,7 +450,6 @@ impl fuser::Filesystem for GitFsAdapter {
     //     reply.ok();
     // }
 
-    // TODO
     fn fsyncdir(
         &mut self,
         _req: &fuser::Request<'_>,
@@ -459,10 +458,10 @@ impl fuser::Filesystem for GitFsAdapter {
         datasync: bool,
         reply: fuser::ReplyEmpty,
     ) {
-        todo!()
+        // TODO
+        reply.ok();
     }
 
-    // TODO
     fn fsync(
         &mut self,
         _req: &fuser::Request<'_>,
@@ -471,7 +470,8 @@ impl fuser::Filesystem for GitFsAdapter {
         datasync: bool,
         reply: fuser::ReplyEmpty,
     ) {
-        todo!()
+        // TODO
+        reply.ok();
     }
 
     fn read(
