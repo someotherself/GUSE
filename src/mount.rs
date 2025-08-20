@@ -21,7 +21,7 @@ use crate::fs::fileattr::{CreateFileAttr, FileAttr, FileType};
 use crate::fs::ops::readdir::{DirectoryEntry, DirectoryEntryPlus};
 use crate::fs::{GitFs, REPO_SHIFT, ROOT_INO, repo};
 
-const TTL: Duration = Duration::from_secs(60);
+const TTL: Duration = Duration::from_secs(1);
 const FMODE_EXEC: i32 = 0x20;
 
 pub struct MountPoint {
