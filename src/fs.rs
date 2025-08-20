@@ -128,6 +128,13 @@ impl SourceTypes {
     pub fn is_blob(&self) -> bool {
         matches!(self, SourceTypes::RoBlob { oid: _, data: _ })
     }
+
+    pub fn size(&self) -> anyhow::Result<u64> {
+        match self {
+            Self::RealFile(file) => Ok(file.metadata()?.size()),
+            Self::RoBlob { oid: _, data } => Ok(data.len() as u64),
+        }
+    }
 }
 
 impl FileExt for SourceTypes {
