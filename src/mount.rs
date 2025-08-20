@@ -260,7 +260,6 @@ impl fuser::Filesystem for GitFsAdapter {
         }
     }
 
-    // TODO
     fn unlink(
         &mut self,
         _req: &fuser::Request<'_>,
@@ -268,10 +267,24 @@ impl fuser::Filesystem for GitFsAdapter {
         name: &OsStr,
         reply: fuser::ReplyEmpty,
     ) {
-        reply.error(libc::EROFS);
+        let fs_arc = self.getfs();
+        let fs = match fs_arc.lock() {
+            Ok(fs) => fs,
+            Err(e) => {
+                eprintln!("fs mutex poisoned: {e}");
+                return reply.error(EIO);
+            }
+        };
+        let res = fs.unlink(parent, name);
+        match res {
+            Ok(_) => reply.ok(),
+            Err(e) => {
+                error!(e = %e);
+                reply.error(libc::EROFS)
+            }
+        }
     }
 
-    // TODO
     fn rmdir(
         &mut self,
         _req: &fuser::Request<'_>,
@@ -279,7 +292,22 @@ impl fuser::Filesystem for GitFsAdapter {
         name: &OsStr,
         reply: fuser::ReplyEmpty,
     ) {
-        reply.error(libc::EROFS);
+        let fs_arc = self.getfs();
+        let fs = match fs_arc.lock() {
+            Ok(fs) => fs,
+            Err(e) => {
+                eprintln!("fs mutex poisoned: {e}");
+                return reply.error(EIO);
+            }
+        };
+        let res = fs.rmdir(parent, name);
+        match res {
+            Ok(_) => reply.ok(),
+            Err(e) => {
+                error!(e = %e);
+                reply.error(libc::EROFS)
+            }
+        }
     }
 
     // TODO
