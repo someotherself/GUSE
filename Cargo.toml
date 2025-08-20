@@ -2,6 +2,11 @@
 name = "guse"
 version = "0.1.0"
 edition = "2024"
+license = "Apache-2.0"
+repository = "https://github.com/someotherself/GUSE"
+keywords = ["git", "fuse", "rust"]
+categories = ["git", "virtual-filesystem"]
+description = "Under development. A git-based virtual filesystem mounted with fuse. It allows mounting of multiple repositories independently. Either fetched repositories from github, or empty storing and versioning local files."
 
 [[bin]]
 name = "guse"
