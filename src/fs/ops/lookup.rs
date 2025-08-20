@@ -1,3 +1,5 @@
+use std::os::unix::fs::MetadataExt;
+
 use git2::Oid;
 
 use anyhow::anyhow;
@@ -84,12 +86,14 @@ pub fn lookup_live(fs: &GitFs, parent: u64, name: &str) -> anyhow::Result<Option
     };
 
     let path = fs.build_full_path(parent)?.join(name);
+    let size = path.metadata()?.size();
     if !path.exists() {
         return Ok(None);
     }
 
     attr.inode = child_ino;
     attr.perm = 0o775;
+    attr.size = size;
 
     Ok(Some(attr))
 }
