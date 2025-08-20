@@ -54,18 +54,6 @@ impl FileType {
     }
 }
 
-impl From<FileAttr> for TimesFileAttr {
-    fn from(value: FileAttr) -> Self {
-        Self {
-            atime: value.atime,
-            mtime: value.mtime,
-            ctime: value.ctime,
-            crtime: value.crtime,
-            size: value.size,
-        }
-    }
-}
-
 #[derive(Debug, Clone)]
 pub struct CreateFileAttr {
     pub kind: FileType,
@@ -104,15 +92,6 @@ impl From<CreateFileAttr> for FileAttr {
             flags: value.flags,
         }
     }
-}
-
-#[derive(Clone)]
-pub struct TimesFileAttr {
-    pub size: u64,
-    pub atime: SystemTime,
-    pub mtime: SystemTime,
-    pub ctime: SystemTime,
-    pub crtime: SystemTime,
 }
 
 fn build_attr_file(inode: u64, st_mode: u32) -> FileAttr {
