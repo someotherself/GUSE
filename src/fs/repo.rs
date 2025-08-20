@@ -9,8 +9,6 @@ use std::{
     sync::{Arc, Mutex},
 };
 
-use std::path::Path;
-
 use crate::fs::{ObjectAttr, meta_db::MetaDb};
 
 pub struct GitRepo {
@@ -280,71 +278,6 @@ impl GitRepo {
             }
         }
         Ok(())
-    }
-
-    pub fn getattr<P: AsRef<Path>>(&self, path: P) -> anyhow::Result<ObjectAttr> {
-        // Get the commit the head points to
-        let commit = self.inner.head()?.peel_to_commit()?;
-        let commit_time = commit.time();
-        let mut tree = commit.tree()?;
-        let last_comp = path
-            .as_ref()
-            .components()
-            .next_back()
-            .ok_or_else(|| anyhow!("Invalit input"))?;
-
-        let mut last_name = None;
-
-        for comp in path.as_ref().components() {
-            let name = comp.as_os_str().to_str().unwrap();
-            let is_last_comp = comp == last_comp;
-
-            // Lookup this name in the current tree
-            let entry = tree.clone();
-            let entry = entry
-                .get_name(name)
-                .ok_or_else(|| anyhow!(format!("{name} not found")))?;
-
-            if entry.kind() == Some(ObjectType::Tree) {
-                if is_last_comp {
-                    // Final component is a directory
-                    last_name = Some(name.to_string());
-                    tree = self.inner.find_tree(entry.id())?;
-                } else {
-                    // Descend into the sub-tree for next components
-                    tree = self.inner.find_tree(entry.id())?;
-                }
-            } else {
-                // If it's the last component
-                if is_last_comp {
-                    // and a blob. return the ObjectAttr
-                    if entry.kind().unwrap() == git2::ObjectType::Blob {
-                        let blob = self.inner.find_blob(entry.id())?;
-                        let size = blob.size() as u64;
-                        // blob with mode 0o120000 will be a symlink
-                        return Ok(ObjectAttr {
-                            name: entry.name().unwrap().into(),
-                            oid: entry.id(),
-                            kind: entry.kind().unwrap(),
-                            filemode: entry.filemode() as u32,
-                            size,
-                            commit_time,
-                        });
-                    }
-                // Not a final component and not a tree either. Something is wrong
-                } else {
-                    bail!("Not a directory")
-                }
-            }
-        }
-        Ok(ObjectAttr {
-            name: last_name.unwrap(),
-            oid: tree.id(),
-            kind: ObjectType::Tree,
-            filemode: libc::S_IFDIR,
-            size: 0,
-            commit_time,
-        })
     }
 
     /// Read_dir
