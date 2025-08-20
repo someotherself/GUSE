@@ -195,6 +195,18 @@ fn test_mkdir_normal() -> anyhow::Result<()> {
             println!("{}", text);
             dbg!(text.len());
             fs.release(fh)?;
+            let live_entries = fs.readdir(LIVE_DIR_INO)?;
+            for entry in live_entries {
+                dbg!("--------reading entries-------");
+                dbg!(entry.name);
+                dbg!(entry.filemode);
+                dbg!(entry.kind);
+                dbg!("--------getattr-------");
+                let attr = fs.getattr(entry.inode)?;
+                dbg!(attr.mode);
+                dbg!(attr.kind);
+            }
+            assert_eq!(text, "some text");
             Ok(())
         },
     )?;
