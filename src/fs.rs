@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, HashSet};
+use std::collections::BTreeMap;
 use std::ffi::{OsStr, OsString};
 use std::fs::File;
 use std::os::unix::fs::{FileExt, MetadataExt, PermissionsExt};
@@ -104,13 +104,12 @@ pub struct GitFs {
     pub repos_list: BTreeMap<u16, Arc<Mutex<GitRepo>>>, // <repo_id, repo>
     next_inode: HashMap<u16, AtomicU64>,                // Each Repo has a set of inodes
     current_handle: AtomicU64,
-    handles: RwLock<HashMap<u64, Handle>>, // (ino, Handle)
-    open_handles: Arc<RwLock<HashMap<u64, HashSet<u64>>>>, // (ino, handles)
+    handles: RwLock<HashMap<u64, Handle>>, // (fh, Handle)
     read_only: bool,
 }
 
 struct Handle {
-    handle: u64,
+    ino: u64,
     file: SourceTypes,
     read: bool,
     write: bool,
@@ -165,7 +164,6 @@ impl GitFs {
             read_only,
             handles: RwLock::new(HashMap::new()),
             current_handle: AtomicU64::new(1),
-            open_handles: Arc::new(RwLock::new(HashMap::new())),
             next_inode: HashMap::new(),
         };
         fs.ensure_base_dirs_exist()?;

@@ -20,21 +20,14 @@ pub fn open_live(
         .open(path)?;
     let fh = fs.next_file_handle();
     let handle = Handle {
-        handle: fh,
+        ino,
         file: SourceTypes::RealFile(file),
         read,
         write,
     };
     {
         let mut guard = fs.handles.write().map_err(|_| anyhow!("Lock poisoned"))?;
-        guard.insert(ino, handle);
-    }
-    {
-        let mut guard = fs
-            .open_handles
-            .write()
-            .map_err(|_| anyhow!("Lock poisoned"))?;
-        guard.entry(ino).or_default().insert(fh);
+        guard.insert(fh, handle);
     }
     Ok(fh)
 }
@@ -59,21 +52,14 @@ pub fn open_git(
     };
     let fh = fs.next_file_handle();
     let handle = Handle {
-        handle: fh,
+        ino,
         file: blob_file,
         read,
         write: false,
     };
     {
         let mut guard = fs.handles.write().map_err(|_| anyhow!("Lock poisoned"))?;
-        guard.insert(ino, handle);
-    }
-    {
-        let mut guard = fs
-            .open_handles
-            .write()
-            .map_err(|_| anyhow!("Lock poisoned"))?;
-        guard.entry(ino).or_default().insert(fh);
+        guard.insert(fh, handle);
     }
     Ok(fh)
 }

@@ -6,7 +6,7 @@ use crate::fs::GitFs;
 
 pub fn read_live(
     fs: &GitFs,
-    _ino: u64,
+    ino: u64,
     offset: u64,
     buf: &mut [u8],
     fh: u64,
@@ -14,19 +14,22 @@ pub fn read_live(
     let guard = fs.handles.read().map_err(|_| anyhow!("Lock poisoned."))?;
     let ctx = guard
         .get(&fh)
-        .ok_or_else(|| anyhow!("Handle does not exist"))?;
+        .ok_or_else(|| anyhow!(format!("Handle {} for ino {} does not exist", fh, ino)))?;
     if !ctx.write {
         bail!("Write not permitted")
     };
     if !ctx.file.is_file() {
         bail!("Invalid handle.")
     }
+    if ctx.ino != ino {
+        bail!("Invalid filehandle")
+    }
     Ok(ctx.file.read_at(buf, offset)?)
 }
 
 pub fn read_git(
     fs: &GitFs,
-    _ino: u64,
+    ino: u64,
     offset: u64,
     buf: &mut [u8],
     fh: u64,
