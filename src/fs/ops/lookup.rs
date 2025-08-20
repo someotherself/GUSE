@@ -1,10 +1,10 @@
 use git2::Oid;
 
-use anyhow::anyhow;
+use anyhow::{anyhow, bail};
 
 use crate::{
-    fs::{FileAttr, GitFs, REPO_SHIFT, build_attr_dir},
-    mount::dir_attr,
+    fs::{build_attr_dir, FileAttr, GitFs, REPO_SHIFT},
+    mount::{dir_attr, file_attr},
 };
 
 pub fn lookup_root(fs: &GitFs, name: &str) -> anyhow::Result<Option<FileAttr>> {
@@ -71,12 +71,23 @@ pub fn lookup_live(fs: &GitFs, parent: u64, name: &str) -> anyhow::Result<Option
         Some(_) => {}
         None => return Ok(None),
     };
-    let path = fs.build_full_path(parent)?.join(name);
-    let mut attr = match fs.attr_from_dir(path) {
-        Ok(attr) => attr,
-        Err(_) => return Ok(None),
+    let res = fs.get_ino_from_db(parent, name);
+    let child_ino = match res {
+        Ok(i) => i,
+        Err(_) => return Ok(None)
     };
-    let child_ino = fs.get_ino_from_db(parent, name)?;
+    let filemode = fs.get_mode_from_db(child_ino)?;
+    let mut attr: FileAttr = match filemode {
+        git2::FileMode::Tree => dir_attr().into(),
+        git2::FileMode::Commit => dir_attr().into(),
+        _ => file_attr().into(),
+    };
+
+    let path = fs.build_full_path(parent)?.join(name);
+    if !path.exists() {
+        return Ok(None)
+    }
+
     attr.inode = child_ino;
     attr.perm = 0o775;
 
