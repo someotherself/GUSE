@@ -121,6 +121,14 @@ impl MetaDb {
         Ok(name_str.to_string())
     }
 
+    pub fn remove_record_file(&self, ino: u64) -> anyhow::Result<()> {
+        self.conn.execute(
+            "DELETE FROM inode_map WHERE inode = ?1",
+            params![ino as i64],
+        )?;
+        Ok(())
+    }
+
     pub fn get_path_from_db(&self, ino: u64) -> anyhow::Result<PathBuf> {
         let mut stmt = self.conn.prepare(
             "SELECT parent_inode, name
