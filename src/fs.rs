@@ -947,14 +947,14 @@ impl GitFs {
         conn.get_ino_from_db(parent, name)
     }
 
-    fn remove_db_record_file(&self, ino: u64) -> anyhow::Result<()> {
+    fn remove_db_record(&self, ino: u64) -> anyhow::Result<()> {
         let conn_arc = {
             let repo = &self.get_repo(ino)?;
             let repo = repo.lock().map_err(|_| anyhow!("Lock poisoned"))?;
             std::sync::Arc::clone(&repo.connection)
         };
         let conn = conn_arc.lock().map_err(|_| anyhow!("Lock poisoned"))?;
-        conn.remove_record_file(ino)
+        conn.remove_db_record(ino)
     }
 
     fn build_full_path(&self, ino: u64) -> anyhow::Result<PathBuf> {

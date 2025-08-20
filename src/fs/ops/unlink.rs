@@ -12,6 +12,6 @@ pub fn unlink_live(fs: &GitFs, parent: u64, name: &str) -> anyhow::Result<()> {
     let path = fs.build_full_path(attr.inode)?;
     std::fs::remove_file(path)?;
 
-    fs.remove_db_record_file(attr.inode)?;
+    fs.remove_db_record(attr.inode)?;
     Ok(())
 }

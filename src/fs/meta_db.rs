@@ -121,7 +121,7 @@ impl MetaDb {
         Ok(name_str.to_string())
     }
 
-    pub fn remove_record_file(&self, ino: u64) -> anyhow::Result<()> {
+    pub fn remove_db_record(&self, ino: u64) -> anyhow::Result<()> {
         self.conn.execute(
             "DELETE FROM inode_map WHERE inode = ?1",
             params![ino as i64],
