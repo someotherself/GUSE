@@ -166,7 +166,7 @@ impl FileExt for SourceTypes {
 // gitfs_fuse_functions
 impl GitFs {
     pub fn new(repos_dir: PathBuf, read_only: bool) -> anyhow::Result<Arc<Mutex<Self>>> {
-        let fs = Self {
+        let mut fs = Self {
             repos_dir,
             repos_list: BTreeMap::new(),
             read_only,
@@ -175,7 +175,62 @@ impl GitFs {
             next_inode: HashMap::new(),
         };
         fs.ensure_base_dirs_exist()?;
+        for entry in fs.repos_dir.read_dir()? {
+            let entry = entry?;
+            let repo_name_os = entry.file_name();
+            let repo_name = repo_name_os.to_str().context("Not a valid UTF-8 name")?;
+            let repo_path = entry.path();
+            if !repo_path.join(META_STORE).exists() {
+                continue;
+            }
+            let repo = fs.load_repo(repo_name)?;
+            let repo_id = repo.lock().map_err(|_| anyhow!("Lock poisoned"))?.repo_id;
+            fs.repos_list.insert(repo_id, repo);
+            info!("Repo {repo_name} added with id {repo_id}");
+        }
         Ok(Arc::from(Mutex::new(fs)))
+    }
+
+    pub fn load_repo(&mut self, repo_name: &str) -> anyhow::Result<Arc<Mutex<GitRepo>>> {
+        let repo_path = self.repos_dir.join(repo_name);
+
+        let mut connection = self.init_meta_db(repo_name)?;
+
+        let repo_id = connection.get_repo_id()?;
+        let repo_ino = GitFs::repo_id_to_ino(repo_id);
+        self.next_inode
+            .insert(repo_id, AtomicU64::from(repo_ino + 1));
+        if self.repos_list.contains_key(&repo_id) {
+            info!("{repo_id} already exists");
+            connection.change_repo_id(repo_id)?;
+        }
+
+        let repo = git2::Repository::init(repo_path)?;
+        let res_inodes = connection.populate_res_inodes()?;
+
+        let mut git_repo = GitRepo {
+            connection: Arc::new(Mutex::new(connection)),
+            repo_dir: repo_name.to_owned(),
+            repo_id,
+            inner: repo,
+            head: None,
+            snapshots: BTreeMap::new(),
+            res_inodes,
+        };
+
+        {
+            let head_res = git_repo.inner.revparse_single("HEAD");
+            if head_res.is_ok() {
+                git_repo.head = Some(head_res?.id());
+            };
+        }
+        if git_repo.head.is_some() {
+            git_repo.refresh_snapshots()?;
+        }
+
+        let repo_rc = Arc::from(Mutex::from(git_repo));
+        self.repos_list.insert(repo_id, repo_rc.clone());
+        Ok(repo_rc)
     }
 
     pub fn new_repo(&mut self, repo_name: &str) -> anyhow::Result<Arc<Mutex<GitRepo>>> {
@@ -562,6 +617,7 @@ impl GitFs {
     }
 
     pub fn find_by_name(&self, parent: u64, name: &str) -> anyhow::Result<Option<FileAttr>> {
+        println!("Searching for {name} in {parent}");
         if !self.exists(parent)? {
             bail!(format!("Parent {} does not exist", parent));
         }
@@ -753,6 +809,7 @@ impl GitFs {
         self.current_handle.fetch_add(1, Ordering::SeqCst)
     }
 
+    // TODO: Check if not over 32767
     fn next_repo_id(&self) -> u16 {
         match self.repos_list.keys().next_back() {
             Some(&i) => i
