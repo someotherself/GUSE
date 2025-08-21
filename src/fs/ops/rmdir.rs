@@ -1,9 +1,21 @@
+use anyhow::{anyhow, bail};
+
 use crate::fs::GitFs;
 
-pub fn rmdir_repo(_fs: &GitFs, _parent: u64, _name: &str) -> anyhow::Result<()> {
-    todo!()
-}
+pub fn rmdir_live(fs: &GitFs, parent: u64, name: &str) -> anyhow::Result<()> {
+    let attr = fs
+        .find_by_name(parent, name)?
+        .ok_or_else(|| anyhow!(format!("{name} not found in parent {parent}")))?;
+    if !fs.is_dir(attr.inode)? {
+        bail!("Not a directory")
+    }
+    let entries = fs.readdir(parent)?;
+    if !entries.is_empty() {
+        bail!("Parent is not empty")
+    }
+    let path = fs.build_full_path(attr.inode)?;
+    std::fs::remove_dir(path)?;
 
-pub fn rmdir_live(_fs: &GitFs, _parent: u64, _name: &str) -> anyhow::Result<()> {
-    todo!()
+    fs.remove_db_record(attr.inode)?;
+    Ok(())
 }

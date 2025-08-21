@@ -516,7 +516,9 @@ impl GitFs {
             FsOperationContext::Root => {
                 bail!("This directory is read only")
             }
-            FsOperationContext::RepoDir { ino } => ops::rmdir::rmdir_repo(self, ino, name),
+            FsOperationContext::RepoDir { ino: _ } => {
+                bail!("This directory is read only")
+            }
             FsOperationContext::InsideLiveDir { ino } => ops::rmdir::rmdir_live(self, ino, name),
             FsOperationContext::InsideGitDir { ino: _ } => {
                 bail!("This directory is read only")
