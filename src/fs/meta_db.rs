@@ -1,8 +1,8 @@
 use std::{collections::HashSet, path::PathBuf};
 
-use anyhow::{anyhow, bail, Context};
+use anyhow::{anyhow, bail};
 use git2::Oid;
-use rusqlite::{Connection, OptionalExtension, params};
+use rusqlite::{Connection, OptionalExtension, Transaction, params};
 use tracing::info;
 
 use crate::fs::{FileAttr, GitFs, ROOT_INO};
@@ -19,25 +19,28 @@ impl MetaDb {
     //   oid          TEXT      NOT NULL,       -> the Git OID
     //   filemode     INTEGER   NOT NULL        -> the raw Git filemode
     // nodes: Vec<(parent inode, parent name, FileAttr)>
-    pub fn write_inodes_to_db(&mut self, nodes: (u64, String, FileAttr)) -> anyhow::Result<()> {
-        let parent_inode = nodes.0;
-        let name = nodes.1;
-        let attr = nodes.2;
-        let inode_i64  = i64::try_from(attr.inode)
-            .context("inode does not fit into SQLite INTEGER")?;
-        let parent_i64 = i64::try_from(parent_inode)
-            .context("parent_inode does not fit into SQLite INTEGER")?;
-
-        let tx = self.conn.transaction()?;
-        tx.execute(
-            "INSERT INTO inode_map (inode, parent_inode, name, oid, filemode)
+    pub fn write_inodes_to_db(
+        &mut self,
+        nodes: Vec<(u64, String, FileAttr)>,
+    ) -> anyhow::Result<()> {
+        let tx: Transaction<'_> = self.conn.transaction()?;
+        {
+            let mut stmt = tx.prepare(
+                "INSERT INTO inode_map
+            (inode, parent_inode, name, oid, filemode)
             VALUES (?1, ?2, ?3, ?4, ?5)",
-            params![inode_i64, parent_i64, name, attr.oid.to_string(), attr.mode as i64],
-        )
-        .with_context(|| format!(
-            "inserting inode={} parent={} name='{}'",
-            attr.inode, parent_inode, name
-        ))?;
+            )?;
+
+            for (parent_inode, name, fileattr) in nodes {
+                stmt.execute(params![
+                    fileattr.inode as i64,
+                    parent_inode as i64,
+                    name,
+                    fileattr.oid.to_string(),
+                    fileattr.mode as i64,
+                ])?;
+            }
+        }
         tx.commit()?;
         Ok(())
     }

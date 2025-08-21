@@ -59,14 +59,14 @@ pub fn mkdir_live(
     let dir_path = fs.build_path(parent, name)?;
     std::fs::create_dir(&dir_path)?;
     std::fs::set_permissions(dir_path, std::fs::Permissions::from_mode(0o775))?;
-    let new_ino = fs.next_inode_checked(parent, name)?;
+    let new_ino = fs.next_inode_checked(parent)?;
 
     let mut attr: FileAttr = create_attr.into();
 
     attr.inode = new_ino;
 
-    let node = (parent, name.into(), attr);
-    fs.write_inodes_to_db(node)?;
+    let nodes = vec![(parent, name.into(), attr)];
+    fs.write_inodes_to_db(nodes)?;
 
     Ok(attr)
 }

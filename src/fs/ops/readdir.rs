@@ -86,21 +86,31 @@ pub fn readdir_repo_dir(fs: &GitFs, ino: u64) -> anyhow::Result<Vec<DirectoryEnt
     };
 
     if !object_entries.is_empty() {
+        let mut nodes: Vec<(u64, String, FileAttr)> = vec![];
         for month in object_entries {
-            let entry_ino = fs.next_inode_checked(ino, &month.name)?;
-            let mut attr = fs.object_to_file_attr(entry_ino, &month)?;
-            attr.perm = 0o555;
-            let entry = DirectoryEntry::new(
-                entry_ino,
-                attr.oid,
-                month.name.clone(),
-                attr.kind,
-                attr.mode,
-            );
-            let node = (ino, month.name.clone(), attr);
-            fs.write_inodes_to_db(node)?;
-            entries.push(entry);
+            let dir_entry = match fs.exists_by_name(ino, &month.name)? {
+                Some(i) => {
+                    let mut attr = fs.object_to_file_attr(i, &month)?;
+                    attr.perm = 0o555;
+                    DirectoryEntry::new(i, attr.oid, month.name.clone(), attr.kind, attr.mode)
+                }
+                None => {
+                    let entry_ino = fs.next_inode_checked(ino)?;
+                    let mut attr = fs.object_to_file_attr(entry_ino, &month)?;
+                    attr.perm = 0o555;
+                    nodes.push((ino, month.name.clone(), attr));
+                    DirectoryEntry::new(
+                        entry_ino,
+                        attr.oid,
+                        month.name.clone(),
+                        attr.kind,
+                        attr.mode,
+                    )
+                }
+            };
+            entries.push(dir_entry);
         }
+        fs.write_inodes_to_db(nodes)?;
     }
     Ok(entries)
 }
@@ -198,25 +208,30 @@ pub fn readdir_git_dir(fs: &GitFs, ino: u64) -> anyhow::Result<Vec<DirectoryEntr
         }
     };
 
+    let mut nodes: Vec<(u64, String, FileAttr)> = vec![];
+
     let mut entries: Vec<DirectoryEntry> = vec![];
     for entry in git_objects {
-        let entry_ino = fs.next_inode_checked(ino, &entry.name)?;
-        let mut attr = fs.object_to_file_attr(entry_ino, &entry)?;
-        attr.inode = entry_ino;
-        if attr.kind == FileType::Directory {
-            attr.perm = 0o555;
-        }
-        let dir_entry = DirectoryEntry::new(
-            entry_ino,
-            entry.oid,
-            entry.name.clone(),
-            attr.kind,
-            entry.filemode,
-        );
-
-        let node = (ino, entry.name, attr);
-        fs.write_inodes_to_db(node)?;
+        let dir_entry = match fs.exists_by_name(ino, &entry.name)? {
+            Some(i) => {
+                let mut attr = fs.object_to_file_attr(i, &entry)?;
+                if attr.kind == FileType::Directory {
+                    attr.perm = 0o555;
+                }
+                DirectoryEntry::new(i, entry.oid, entry.name.clone(), attr.kind, entry.filemode)
+            }
+            None => {
+                let entry_ino = fs.next_inode_checked(ino)?;
+                let mut attr = fs.object_to_file_attr(entry_ino, &entry)?;
+                if attr.kind == FileType::Directory {
+                    attr.perm = 0o555;
+                }
+                nodes.push((ino, entry.name.clone(), attr));
+                DirectoryEntry::new(entry_ino, entry.oid, entry.name, attr.kind, entry.filemode)
+            }
+        };
         entries.push(dir_entry);
     }
+    fs.write_inodes_to_db(nodes)?;
     Ok(entries)
 }

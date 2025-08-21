@@ -12,9 +12,10 @@ use std::{
     time::SystemTime,
 };
 
-use anyhow::{anyhow, bail};
+use anyhow::{Context, anyhow, bail};
 use git2::{FileMode, ObjectType, Oid, Repository};
 use rusqlite::{Connection, OptionalExtension, params};
+use tracing::info;
 
 use crate::fs::fileattr::{CreateFileAttr, FileAttr, FileType, ObjectAttr, build_attr_dir};
 use crate::fs::meta_db::MetaDb;
@@ -207,8 +208,8 @@ impl GitFs {
         let st_mode = libc::S_IFDIR | perms;
         let live_attr = build_attr_dir(live_ino, st_mode);
 
-        let node = (repo_ino, live_name, live_attr);
-        connection.write_inodes_to_db(node)?;
+        nodes.push((repo_ino, live_name, live_attr));
+        connection.write_inodes_to_db(nodes)?;
 
         let connection = Arc::from(Mutex::from(connection));
 
@@ -949,14 +950,17 @@ impl GitFs {
         conn.get_name_from_db(ino)
     }
 
-    fn write_inodes_to_db(&self, node: (u64, String, FileAttr)) -> anyhow::Result<()> {
+    fn write_inodes_to_db(&self, nodes: Vec<(u64, String, FileAttr)>) -> anyhow::Result<()> {
+        if nodes.is_empty() {
+            return Ok(());
+        }
         let conn_arc = {
-            let repo = &self.get_repo(node.0)?;
+            let repo = &self.get_repo(nodes[0].0)?;
             let repo = repo.lock().map_err(|_| anyhow!("Lock poisoned"))?;
             std::sync::Arc::clone(&repo.connection)
         };
         let mut conn = conn_arc.lock().map_err(|_| anyhow!("Lock poisoned"))?;
-        conn.write_inodes_to_db(node)
+        conn.write_inodes_to_db(nodes)
     }
 
     fn get_repo_ino(&self, ino: u64) -> anyhow::Result<u64> {
