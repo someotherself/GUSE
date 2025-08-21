@@ -403,7 +403,14 @@ impl fuser::Filesystem for GitFsAdapter {
         for entry in parent_entries {
             entries.push(entry);
         }
-        let gitfs_entries = fs.readdir(ino).unwrap();
+        let res_entries = fs.readdir(ino);
+        let gitfs_entries = match res_entries {
+            Ok(ent) => ent,
+            Err(e) => {
+                error!(e = %e);
+                return reply.error(EIO);
+            }
+        };
         for entry in gitfs_entries {
             entries.push(entry);
         }
@@ -456,7 +463,14 @@ impl fuser::Filesystem for GitFsAdapter {
             };
             entries.push(entry_plus);
         }
-        let gitfs_entries = fs.readdirplus(ino).unwrap();
+        let res_entries = fs.readdirplus(ino);
+        let gitfs_entries = match res_entries {
+            Ok(ent) => ent,
+            Err(e) => {
+                error!(e = %e);
+                return reply.error(EIO);
+            }
+        };
         for entry in gitfs_entries {
             entries.push(entry);
         }
