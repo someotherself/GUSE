@@ -194,11 +194,9 @@ impl GitFs {
 
         let mut repo_attr: FileAttr = mount::dir_attr().into();
         repo_attr.inode = repo_ino;
+        let mut nodes: Vec<(u64, String, FileAttr)> = vec![(ROOT_INO, repo_name.into(), repo_attr)];
 
-        let live_ino = self.next_inode(repo_ino)?;
-        if self.check_ino_exists(live_ino).is_ok() {
-            println!("Live ino {live_ino} already exists");
-        }
+        let live_ino = self.next_inode_raw(repo_ino)?;
 
         let repo = git2::Repository::init(repo_path)?;
 
@@ -729,23 +727,19 @@ impl GitFs {
         }
     }
 
-    pub fn next_inode_checked(&self, parent: u64, name: &str) -> anyhow::Result<u64> {
-        let exists = self.exists_by_name(parent, name)?;
-        let new_ino = match exists {
-            Some(i) => i,
-            None => {
-                let mut new_ino = self.next_inode(parent)?;
-                while self.check_ino_exists(new_ino)? {
-                    new_ino = self.next_inode(parent)?;
-                }
-                new_ino
-            }
-        };
-        println!("{new_ino} for {name}");
-        Ok(new_ino)
+    fn next_inode_checked(&self, parent: u64) -> anyhow::Result<u64> {
+        let mut inode = self.next_inode_raw(parent)?;
+        let repo = self.get_repo(inode)?;
+        while {
+            let repo = repo.lock().map_err(|_| anyhow!("Lock poisoned"))?;
+            repo.res_inodes.contains(&inode)
+        } {
+            inode = self.next_inode_raw(parent)?;
+        }
+        Ok(inode)
     }
 
-    fn next_inode(&self, parent: u64) -> anyhow::Result<u64> {
+    fn next_inode_raw(&self, parent: u64) -> anyhow::Result<u64> {
         let repo_id = GitFs::ino_to_repo_id(parent);
         let inode = self
             .next_inode

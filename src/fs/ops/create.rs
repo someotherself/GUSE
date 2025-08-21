@@ -17,7 +17,7 @@ pub fn create_live(
     if !read && !write {
         bail!("read and write cannot be false at the same time")
     };
-    let ino = fs.next_inode(parent)?;
+    let ino = fs.next_inode_raw(parent)?;
     let mut attr: FileAttr = file_attr().into();
     attr.inode = ino;
     let file_path = fs.build_path(parent, name)?;
