@@ -829,16 +829,6 @@ impl GitFs {
         conn.exists_by_name(parent, name)
     }
 
-    fn check_ino_exists(&self, ino: u64) -> anyhow::Result<bool> {
-        let conn_arc = {
-            let repo = &self.get_repo(ino)?;
-            let repo = repo.lock().map_err(|_| anyhow!("Lock poisoned"))?;
-            std::sync::Arc::clone(&repo.connection)
-        };
-        let conn = conn_arc.lock().map_err(|_| anyhow!("Lock poisoned"))?;
-        conn.check_ino_exists(ino)
-    }
-
     pub fn exists(&self, ino: u64) -> anyhow::Result<bool> {
         if ino == ROOT_INO {
             return Ok(true);

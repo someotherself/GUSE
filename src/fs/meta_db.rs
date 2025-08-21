@@ -154,19 +154,6 @@ impl MetaDb {
         Ok((inode >> 48) as u16)
     }
 
-    pub fn check_ino_exists(&self, ino: u64) -> anyhow::Result<bool> {
-        let ino_i64 = i64::try_from(ino)
-            .map_err(|_| anyhow!("inode {} does not fit into SQLite INTEGER (i64)", ino))?;
-
-        let exists: i64 = self.conn.query_row(
-            "SELECT EXISTS(SELECT 1 FROM inode_map WHERE inode = ?1)",
-            params![ino_i64],
-            |row| row.get(0),
-        )?;
-
-        Ok(exists != 0)
-    }
-
     pub fn change_repo_id(&mut self, repo_id: u16) -> anyhow::Result<()> {
         let tx = self.conn.transaction()?;
         info!("4");
