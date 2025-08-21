@@ -88,7 +88,7 @@ pub fn readdir_repo_dir(fs: &GitFs, ino: u64) -> anyhow::Result<Vec<DirectoryEnt
     if !object_entries.is_empty() {
         let mut nodes: Vec<(u64, String, FileAttr)> = vec![];
         for month in object_entries {
-            let entry_ino = fs.next_inode(ino)?;
+            let entry_ino = fs.next_inode_checked(ino, &month.name)?;
             let mut attr = fs.object_to_file_attr(entry_ino, &month)?;
             attr.perm = 0o555;
             let entry = DirectoryEntry::new(
@@ -203,7 +203,7 @@ pub fn readdir_git_dir(fs: &GitFs, ino: u64) -> anyhow::Result<Vec<DirectoryEntr
 
     let mut entries: Vec<DirectoryEntry> = vec![];
     for entry in git_objects {
-        let entry_ino = fs.next_inode(ino)?;
+        let entry_ino = fs.next_inode_checked(ino, &entry.name)?;
         let mut attr = fs.object_to_file_attr(entry_ino, &entry)?;
         attr.inode = entry_ino;
         if attr.kind == FileType::Directory {

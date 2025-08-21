@@ -723,6 +723,21 @@ impl GitFs {
         }
     }
 
+    pub fn next_inode_checked(&self, parent: u64, name: &str) -> anyhow::Result<u64> {
+        let exists = self.exists_by_name(parent, &name)?;
+        let new_ino = match exists {
+            Some(i) => i,
+            None => {
+                let mut new_ino = self.next_inode(parent)?;
+                while self.check_ino_exists(new_ino)? {
+                    new_ino = self.next_inode(new_ino)?;
+                }
+                new_ino
+            }
+        };
+        Ok(new_ino)
+    }
+
     fn next_inode(&self, parent: u64) -> anyhow::Result<u64> {
         let repo_id = GitFs::ino_to_repo_id(parent);
         let inode = self
