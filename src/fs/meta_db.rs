@@ -232,8 +232,8 @@ impl MetaDb {
         Ok(components.iter().collect::<PathBuf>())
     }
 
-    pub fn exists_by_name(&self, parent: u64, name: &str) -> anyhow::Result<bool> {
-        let exists: i64 = self.conn.query_row(
+    pub fn exists_by_name(&self, parent: u64, name: &str) -> anyhow::Result<u64> {
+        let ino: u64 = self.conn.query_row(
             "SELECT EXISTS(
              SELECT 1 FROM inode_map
               WHERE parent_inode = ?1 AND name = ?2
@@ -241,6 +241,6 @@ impl MetaDb {
             params![parent as i64, name],
             |row| row.get(0),
         )?;
-        Ok(exists != 0)
+        Ok(ino)
     }
 }

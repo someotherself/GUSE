@@ -798,7 +798,7 @@ impl GitFs {
         repo_ino + 1
     }
 
-    fn exists_by_name(&self, parent: u64, name: &str) -> anyhow::Result<bool> {
+    fn exists_by_name(&self, parent: u64, name: &str) -> anyhow::Result<u64> {
         let conn_arc = {
             let repo = &self.get_repo(parent)?;
             let repo = repo.lock().map_err(|_| anyhow!("Lock poisoned"))?;
