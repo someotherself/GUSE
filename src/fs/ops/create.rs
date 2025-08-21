@@ -27,8 +27,8 @@ pub fn create_live(
     file.sync_all()?;
     File::open(file_path.parent().ok_or_else(|| anyhow!("No parent"))?)?.sync_all()?;
 
-    let nodes = vec![(parent, name.into(), attr)];
-    fs.write_inodes_to_db(nodes)?;
+    let node = (parent, name.into(), attr);
+    fs.write_inodes_to_db(node)?;
 
     let fh = fs.open(ino, read, write, false)?;
     Ok((attr, fh))

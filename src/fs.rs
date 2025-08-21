@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 use std::ffi::OsStr;
 use std::fs::File;
 use std::os::unix::fs::{FileExt, MetadataExt, PermissionsExt};
@@ -193,9 +193,11 @@ impl GitFs {
 
         let mut repo_attr: FileAttr = mount::dir_attr().into();
         repo_attr.inode = repo_ino;
-        let mut nodes: Vec<(u64, String, FileAttr)> = vec![(ROOT_INO, repo_name.into(), repo_attr)];
 
         let live_ino = self.next_inode(repo_ino)?;
+        if self.check_ino_exists(live_ino).is_ok() {
+            println!("Live ino {live_ino} already exists");
+        }
 
         let repo = git2::Repository::init(repo_path)?;
 
@@ -205,8 +207,8 @@ impl GitFs {
         let st_mode = libc::S_IFDIR | perms;
         let live_attr = build_attr_dir(live_ino, st_mode);
 
-        nodes.push((repo_ino, live_name, live_attr));
-        connection.write_inodes_to_db(nodes)?;
+        let node = (repo_ino, live_name, live_attr);
+        connection.write_inodes_to_db(node)?;
 
         let connection = Arc::from(Mutex::from(connection));
 
@@ -217,6 +219,7 @@ impl GitFs {
             inner: repo,
             head: None,
             snapshots: BTreeMap::new(),
+            res_inodes: HashSet::new(),
         };
 
         let repo_rc = Arc::from(Mutex::from(git_repo));
@@ -249,6 +252,8 @@ impl GitFs {
             inner: repo,
             head: Some(head),
             snapshots: BTreeMap::new(),
+            // TODO: Populate from Db
+            res_inodes: HashSet::new(),
         })
     }
 
@@ -724,17 +729,18 @@ impl GitFs {
     }
 
     pub fn next_inode_checked(&self, parent: u64, name: &str) -> anyhow::Result<u64> {
-        let exists = self.exists_by_name(parent, &name)?;
+        let exists = self.exists_by_name(parent, name)?;
         let new_ino = match exists {
             Some(i) => i,
             None => {
                 let mut new_ino = self.next_inode(parent)?;
                 while self.check_ino_exists(new_ino)? {
-                    new_ino = self.next_inode(new_ino)?;
+                    new_ino = self.next_inode(parent)?;
                 }
                 new_ino
             }
         };
+        println!("{new_ino} for {name}");
         Ok(new_ino)
     }
 
@@ -953,17 +959,14 @@ impl GitFs {
         conn.get_name_from_db(ino)
     }
 
-    fn write_inodes_to_db(&self, nodes: Vec<(u64, String, FileAttr)>) -> anyhow::Result<()> {
-        if nodes.is_empty() {
-            bail!("Invalid filemode")
-        }
+    fn write_inodes_to_db(&self, node: (u64, String, FileAttr)) -> anyhow::Result<()> {
         let conn_arc = {
-            let repo = &self.get_repo(nodes[0].0)?;
+            let repo = &self.get_repo(node.0)?;
             let repo = repo.lock().map_err(|_| anyhow!("Lock poisoned"))?;
             std::sync::Arc::clone(&repo.connection)
         };
         let mut conn = conn_arc.lock().map_err(|_| anyhow!("Lock poisoned"))?;
-        conn.write_inodes_to_db(nodes)
+        conn.write_inodes_to_db(node)
     }
 
     fn get_repo_ino(&self, ino: u64) -> anyhow::Result<u64> {

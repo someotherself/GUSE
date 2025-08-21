@@ -22,6 +22,7 @@ pub struct GitRepo {
     // i64 -> commit_time -> seconds since EPOCH
     // Vec<Oid> -> Vec<commit_oid> -> In case commits are made at the same time
     pub snapshots: BTreeMap<i64, Vec<Oid>>,
+    pub res_inodes: HashSet<u64>,
 }
 
 // For customized fetch

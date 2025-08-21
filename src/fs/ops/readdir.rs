@@ -86,7 +86,6 @@ pub fn readdir_repo_dir(fs: &GitFs, ino: u64) -> anyhow::Result<Vec<DirectoryEnt
     };
 
     if !object_entries.is_empty() {
-        let mut nodes: Vec<(u64, String, FileAttr)> = vec![];
         for month in object_entries {
             let entry_ino = fs.next_inode_checked(ino, &month.name)?;
             let mut attr = fs.object_to_file_attr(entry_ino, &month)?;
@@ -98,10 +97,10 @@ pub fn readdir_repo_dir(fs: &GitFs, ino: u64) -> anyhow::Result<Vec<DirectoryEnt
                 attr.kind,
                 attr.mode,
             );
-            nodes.push((ino, month.name.clone(), attr));
+            let node = (ino, month.name.clone(), attr);
+            fs.write_inodes_to_db(node)?;
             entries.push(entry);
         }
-        fs.write_inodes_to_db(nodes)?;
     }
     Ok(entries)
 }
@@ -199,8 +198,6 @@ pub fn readdir_git_dir(fs: &GitFs, ino: u64) -> anyhow::Result<Vec<DirectoryEntr
         }
     };
 
-    let mut nodes: Vec<(u64, String, FileAttr)> = vec![];
-
     let mut entries: Vec<DirectoryEntry> = vec![];
     for entry in git_objects {
         let entry_ino = fs.next_inode_checked(ino, &entry.name)?;
@@ -217,9 +214,9 @@ pub fn readdir_git_dir(fs: &GitFs, ino: u64) -> anyhow::Result<Vec<DirectoryEntr
             entry.filemode,
         );
 
-        nodes.push((ino, entry.name, attr));
+        let node = (ino, entry.name, attr);
+        fs.write_inodes_to_db(node)?;
         entries.push(dir_entry);
     }
-    fs.write_inodes_to_db(nodes)?;
     Ok(entries)
 }
