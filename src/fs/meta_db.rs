@@ -3,8 +3,9 @@ use std::path::PathBuf;
 use anyhow::{anyhow, bail};
 use git2::Oid;
 use rusqlite::{Connection, OptionalExtension, Transaction, params};
+use tracing::info;
 
-use crate::fs::{FileAttr, ROOT_INO};
+use crate::fs::{FileAttr, GitFs, ROOT_INO};
 
 pub struct MetaDb {
     pub conn: Connection,
@@ -119,6 +120,58 @@ impl MetaDb {
 
         let name_str = name_str.ok_or_else(|| anyhow!(format!("inode {ino} not found")))?;
         Ok(name_str.to_string())
+    }
+
+    pub fn get_repo_id(&self) -> anyhow::Result<u16> {
+        let low48_mask: i64 = 0x0000_FFFF_FFFF_FFFFu64 as i64;
+
+        // Find a "live" entry whose least-significant 48 bits == 1
+        let inode: u64 = self
+            .conn
+            .query_row(
+                r#"
+            SELECT inode
+            FROM inode_map
+            WHERE name = ?1
+              AND (inode & ?2) = 1
+            LIMIT 1
+            "#,
+                params!["live", low48_mask],
+                |row| row.get(0),
+            )
+            .optional()? // -> Option<u64>
+            .ok_or_else(|| anyhow!("No matching live entry found"))?;
+
+        // repo_id is the top 16 bits of the inode
+        Ok((inode >> 48) as u16)
+    }
+
+    pub fn change_repo_id(&mut self, repo_id: u16) -> anyhow::Result<()> {
+        let tx = self.conn.transaction()?;
+        info!("4");
+
+        let repo_ino = GitFs::repo_id_to_ino(repo_id);
+        let low48_mask: i64 = 0x0000_FFFF_FFFF_FFFFu64 as i64;
+
+        tx.execute(
+            r#"
+            UPDATE inode_map
+            SET inode = (?1 | (inode & ?2))
+            "#,
+            params![repo_ino, low48_mask],
+        )?;
+
+        tx.execute(
+            r#"
+            UPDATE inode_map
+            SET parent_inode = (?1 | (parent_inode & ?2))
+            WHERE parent_inode != 0
+            "#,
+            params![repo_ino, low48_mask],
+        )?;
+
+        tx.commit()?;
+        Ok(())
     }
 
     pub fn remove_db_record(&self, ino: u64) -> anyhow::Result<()> {
