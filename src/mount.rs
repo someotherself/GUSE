@@ -140,7 +140,7 @@ impl fuser::Filesystem for GitFsAdapter {
         Ok(())
     }
 
-    fn destroy(&mut self) {} // parent_attrs.mode
+    fn destroy(&mut self) {}
 
     fn lookup(&mut self, req: &fuser::Request<'_>, parent: u64, name: &OsStr, reply: ReplyEntry) {
         let fs_arc = self.getfs();
@@ -416,7 +416,6 @@ impl fuser::Filesystem for GitFsAdapter {
         reply.ok();
     }
 
-    // TODO
     fn readdirplus(
         &mut self,
         _req: &fuser::Request<'_>,
