@@ -514,7 +514,7 @@ impl GitFs {
         let ctx = FsOperationContext::get_operation(self, parent);
         match ctx? {
             FsOperationContext::Root => {
-                bail!("This directory is read only")
+                bail!("Not allowed")
             }
             FsOperationContext::RepoDir { ino: _ } => {
                 bail!("This directory is read only")
