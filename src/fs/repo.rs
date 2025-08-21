@@ -242,7 +242,9 @@ impl GitRepo {
                 refspecs.push(format!(
                     "+{}:refs/remotes/anon/{}",
                     src,
-                    src.rsplit('/').next().unwrap()
+                    src.rsplit('/')
+                        .next()
+                        .ok_or_else(|| anyhow!("Invalid ref"))?
                 ));
                 refspecs.push("+HEAD:refs/remotes/anon/HEAD".to_string());
             }
@@ -256,7 +258,10 @@ impl GitRepo {
         if repo.head().is_err() {
             if let Some(ref buf) = default_branch {
                 if let Ok(src) = std::str::from_utf8(buf.as_ref()) {
-                    let short = src.rsplit('/').next().unwrap();
+                    let short = src
+                        .rsplit('/')
+                        .next()
+                        .ok_or_else(|| anyhow!("Invalid ref"))?;
                     let target = format!("refs/remotes/anon/{short}");
                     // If that ref exists, point HEAD to it; else fall back to anon/HEAD
                     if repo.refname_to_id(&target).is_ok() {
@@ -295,7 +300,7 @@ impl GitRepo {
             entries.push(ObjectAttr {
                 name,
                 oid: entry.id(),
-                kind: entry.kind().unwrap(),
+                kind: entry.kind().ok_or_else(|| anyhow!("Invalid object"))?,
                 filemode: entry.filemode() as u32,
                 size: 0,
                 commit_time: Time::new(0, 0),
@@ -310,12 +315,12 @@ impl GitRepo {
         let entry = tree
             .get_name(name)
             .ok_or_else(|| anyhow!(format!("{name} not found in tree {tree_oid}")))?;
-        let size = match entry.kind().unwrap() {
+        let size = match entry.kind().ok_or_else(|| anyhow!("Invalid object"))? {
             ObjectType::Blob => entry
                 .to_object(&self.inner)
-                .unwrap()
+                .map_err(|_| anyhow!("Invalid object"))?
                 .into_blob()
-                .unwrap()
+                .map_err(|_| anyhow!("Invalid object"))?
                 .size(),
             _ => 0,
         };
@@ -324,7 +329,7 @@ impl GitRepo {
         Ok(ObjectAttr {
             name: name.into(),
             oid: entry.id(),
-            kind: entry.kind().unwrap(),
+            kind: entry.kind().ok_or_else(|| anyhow!("Invalid object"))?,
             filemode: entry.filemode() as u32,
             size: size as u64,
             commit_time,
@@ -420,9 +425,9 @@ impl GitRepo {
         let root_tree = commit.tree()?;
         for entry in root_tree.iter() {
             let oid = entry.id();
-            let kind = entry.kind().unwrap();
+            let kind = entry.kind().ok_or_else(|| anyhow!("Invalid object"))?;
             let filemode = entry.filemode() as u32;
-            let name = entry.name().unwrap().to_string();
+            let name = entry.name().unwrap_or("").to_string();
             let commit_time = commit.time();
             entries.push(ObjectAttr {
                 name,

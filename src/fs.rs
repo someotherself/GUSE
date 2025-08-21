@@ -427,7 +427,9 @@ impl GitFs {
         if !self.is_dir(parent)? {
             bail!(format!("Parent {} is not a directory", parent));
         }
-        let name = os_name.to_str().unwrap();
+        let name = os_name
+            .to_str()
+            .ok_or_else(|| anyhow!("Not a valid UTF-8 name"))?;
         let ctx = FsOperationContext::get_operation(self, parent);
         match ctx? {
             FsOperationContext::Root => ops::mkdir::mkdir_root(self, ROOT_INO, name, create_attr),
@@ -456,7 +458,9 @@ impl GitFs {
         if !self.exists(parent)? {
             bail!(format!("Parent {} does not exist", parent));
         }
-        let name = os_name.to_str().unwrap();
+        let name = os_name
+            .to_str()
+            .ok_or_else(|| anyhow!("Not a valid UTF-8 name"))?;
         let ctx = FsOperationContext::get_operation(self, parent);
         match ctx? {
             FsOperationContext::Root => {
@@ -481,7 +485,9 @@ impl GitFs {
         if !self.exists(parent)? {
             bail!(format!("Parent {} does not exist", parent));
         }
-        let name = os_name.to_str().unwrap();
+        let name = os_name
+            .to_str()
+            .ok_or_else(|| anyhow!("Not a valid UTF-8 name"))?;
         if name == "." || name == ".." {
             bail!("invalid name");
         }
@@ -507,7 +513,9 @@ impl GitFs {
         if !self.exists(parent)? {
             bail!(format!("Parent {} does not exist", parent));
         }
-        let name = os_name.to_str().unwrap();
+        let name = os_name
+            .to_str()
+            .ok_or_else(|| anyhow!("Not a valid UTF-8 name"))?;
         if name == "." || name == ".." {
             bail!("invalid name");
         }
@@ -871,7 +879,7 @@ impl GitFs {
             return Ok(path);
         }
         let db_path = &self.get_path_from_db(ino)?;
-        let filename = db_path.file_name().unwrap();
+        let filename = db_path.file_name().ok_or_else(|| anyhow!("No filename"))?;
         if filename == OsStr::new("live") {
             Ok(path)
         } else {
@@ -936,7 +944,7 @@ impl GitFs {
     fn get_repo_ino(&self, ino: u64) -> anyhow::Result<u64> {
         let repo_id = {
             let repo = self.get_repo(ino)?;
-            repo.lock().unwrap().repo_id
+            repo.lock().map_err(|_| anyhow!("Lock poisoned"))?.repo_id
         };
         Ok(GitFs::repo_id_to_ino(repo_id))
     }

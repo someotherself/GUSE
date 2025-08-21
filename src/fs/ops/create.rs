@@ -1,6 +1,6 @@
 use std::{fs::File, os::unix::fs::PermissionsExt};
 
-use anyhow::bail;
+use anyhow::{anyhow, bail};
 
 use crate::{
     fs::{GitFs, fileattr::FileAttr},
@@ -25,7 +25,7 @@ pub fn create_live(
     let file = std::fs::File::create_new(&file_path)?;
     std::fs::set_permissions(&file_path, std::fs::Permissions::from_mode(0o775))?;
     file.sync_all()?;
-    File::open(file_path.parent().unwrap())?.sync_all()?;
+    File::open(file_path.parent().ok_or_else(|| anyhow!("No parent"))?)?.sync_all()?;
 
     let nodes = vec![(parent, name.into(), attr)];
     fs.write_inodes_to_db(nodes)?;

@@ -176,11 +176,11 @@ pub fn readdir_git_dir(fs: &GitFs, ino: u64) -> anyhow::Result<Vec<DirectoryEntr
 
     let git_objects = match classify_inode(fs, ino)? {
         DirCase::Month { year, month } => {
-            let repo = repo.lock().unwrap();
+            let repo = repo.lock().map_err(|_| anyhow!("Lock poisoned"))?;
             repo.day_folders(&format!("{year:04}-{month:02}"))?
         }
         DirCase::Day { year, month, day } => {
-            let repo = repo.lock().unwrap();
+            let repo = repo.lock().map_err(|_| anyhow!("Lock poisoned"))?;
             repo.day_commits(&format!("{year:04}-{month:02}-{day:02}"))?
         }
         DirCase::Commit { oid } => {

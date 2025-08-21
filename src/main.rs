@@ -2,6 +2,7 @@
 
 use std::{path::PathBuf, thread};
 
+use anyhow::anyhow;
 use clap::{Arg, ArgAction, ArgMatches, command, crate_authors, crate_version};
 
 use guse::{logging, mount, tui};
@@ -76,9 +77,13 @@ fn handle_cli_args() -> ArgMatches {
 }
 
 fn run_mount(matches: &ArgMatches) -> anyhow::Result<()> {
-    let mountpoint = matches.get_one::<String>("mount-point").unwrap();
+    let mountpoint = matches
+        .get_one::<String>("mount-point")
+        .ok_or_else(|| anyhow!("Cannot parse argument"))?;
     let mountpoint = PathBuf::from(mountpoint);
-    let repos_dir = matches.get_one::<String>("repos-dir").unwrap();
+    let repos_dir = matches
+        .get_one::<String>("repos-dir")
+        .ok_or_else(|| anyhow!("Cannot parse argument"))?;
     let repos_dir = PathBuf::from(repos_dir);
     let read_only = matches.get_flag("read-only");
     let allow_other = matches.get_flag("allow-other");
@@ -90,20 +95,25 @@ fn run_mount(matches: &ArgMatches) -> anyhow::Result<()> {
 }
 
 fn setup_tui(matches: &ArgMatches) -> anyhow::Result<()> {
-    let mountpoint = matches.get_one::<String>("mount-point").unwrap();
+    let mountpoint = matches
+        .get_one::<String>("mount-point")
+        .ok_or_else(|| anyhow!("Cannot parse argument"))?;
     let mountpoint = PathBuf::from(mountpoint);
-    let repos_dir = matches.get_one::<String>("repos-dir").unwrap();
+    let repos_dir = matches
+        .get_one::<String>("repos-dir")
+        .ok_or_else(|| anyhow!("Cannot parse argument"))?;
     let repos_dir = PathBuf::from(repos_dir);
     let read_only = matches.get_flag("read-only");
     let allow_other = matches.get_flag("allow-other");
     let allow_root = matches.get_flag("allow-root");
     let mount_point =
         mount::MountPoint::new(mountpoint, repos_dir, read_only, allow_root, allow_other);
-    let handle = thread::spawn(move || {
-        tui::run_tui_app().unwrap();
+    let handle = thread::spawn(move || -> anyhow::Result<()> {
+        tui::run_tui_app()?;
+        Ok(())
     });
-    mount::mount_fuse(mount_point).unwrap();
+    mount::mount_fuse(mount_point)?;
 
-    handle.join().unwrap();
+    handle.join().unwrap()?;
     Ok(())
 }

@@ -50,7 +50,7 @@ pub fn lookup_repo(fs: &GitFs, parent: u64, name: &str) -> anyhow::Result<Option
             let repo = repo.lock().map_err(|_| anyhow!("Lock poisoned"))?;
             repo.connection
                 .lock()
-                .unwrap()
+                .map_err(|_| anyhow!("Lock poisoned"))?
                 .get_ino_from_db(parent, name)
         };
         let child_ino = match res {
@@ -104,7 +104,7 @@ pub fn lookup_git(fs: &GitFs, parent: u64, name: &str) -> anyhow::Result<Option<
         let repo = repo.lock().map_err(|_| anyhow!("Lock poisoned"))?;
         repo.connection
             .lock()
-            .unwrap()
+            .map_err(|_| anyhow!("Lock poisoned"))?
             .get_ino_from_db(parent, name)?
     };
 
