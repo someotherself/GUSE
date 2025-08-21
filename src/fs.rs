@@ -681,7 +681,7 @@ impl GitFs {
         let repo = self
             .repos_list
             .get(&repo_id)
-            .ok_or_else(|| anyhow!("No repo"))?;
+            .ok_or_else(|| anyhow!("No repo for {inode}"))?;
         Ok(repo.clone())
     }
 
@@ -724,11 +724,11 @@ impl GitFs {
     }
 
     fn next_inode(&self, parent: u64) -> anyhow::Result<u64> {
-        let repo_id = (parent >> REPO_SHIFT) as u16;
+        let repo_id = GitFs::ino_to_repo_id(parent);
         let inode = self
             .next_inode
             .get(&repo_id)
-            .ok_or_else(|| anyhow!("No repo"))?
+            .ok_or_else(|| anyhow!("No repo for id {repo_id}"))?
             .fetch_add(1, Ordering::SeqCst);
         Ok(inode)
     }
