@@ -579,17 +579,35 @@ impl GitFs {
             bail!(format!("Parent {} does not exist", parent));
         }
         if !self.exists(new_parent)? {
-            bail!(format!("New parent {} does not exist", parent));
+            bail!(format!("New parent {} does not exist", new_parent));
         }
         if !self.is_in_live(new_parent) {
-            bail!(format!("New parent {} not allowed", parent));
+            bail!(format!("New parent {} not allowed", new_parent));
         }
+
         let name = os_name
             .to_str()
             .ok_or_else(|| anyhow!("Not a valid UTF-8 name"))?;
         let new_name = os_new_name
             .to_str()
             .ok_or_else(|| anyhow!("Not a valid UTF-8 name"))?;
+
+        if self.find_by_name(parent, name).is_err() {
+            bail!(format!("Source {} does not exist", name));
+        }
+
+        if name == "." || name == ".." || new_name == "." || new_name == ".." {
+            bail!("invalid name");
+        }
+
+        if name.contains('/') || name.contains('\\') {
+            bail!(format!("Invalid name {}", name));
+        }
+
+        if new_name.contains('/') || new_name.contains('\\') {
+            bail!(format!("Invalid name {}", new_name));
+        }
+
         let ctx = FsOperationContext::get_operation(self, parent);
         match ctx? {
             FsOperationContext::Root => {
