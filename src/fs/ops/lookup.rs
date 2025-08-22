@@ -40,7 +40,7 @@ pub fn lookup_repo(fs: &GitFs, parent: u64, name: &str) -> anyhow::Result<Option
             let repo = repo.lock().map_err(|_| anyhow!("Lock poisoned"))?;
             fs.repos_dir.join(&repo.repo_dir)
         };
-        let mut attr = fs.attr_from_dir(path)?;
+        let mut attr = fs.attr_from_path(path)?;
         attr.inode = live_ino;
         attr
     } else {

@@ -717,7 +717,7 @@ impl GitFs {
         Ok(*attr)
     }
 
-    fn attr_from_dir(&self, path: PathBuf) -> anyhow::Result<FileAttr> {
+    fn attr_from_path(&self, path: PathBuf) -> anyhow::Result<FileAttr> {
         let metadata = path.metadata()?;
         let atime: SystemTime = metadata.accessed()?;
         let mtime: SystemTime = metadata.modified()?;
@@ -731,8 +731,16 @@ impl GitFs {
             UNIX_EPOCH - Duration::new((-secs) as u64, nsecs)
         };
 
+        let (kind, mode) = if metadata.is_dir() {
+            (FileType::Directory, libc::S_IFDIR)
+        } else if metadata.is_file() {
+            (FileType::RegularFile, libc::S_IFREG)
+        } else {
+            (FileType::Symlink, libc::S_IFLNK)
+        };
+
         let perms = 0o775;
-        let st_mode = libc::S_IFDIR | perms;
+        let st_mode = mode | perms;
 
         Ok(FileAttr {
             inode: 0,
@@ -743,7 +751,7 @@ impl GitFs {
             mtime,
             ctime,
             crtime,
-            kind: FileType::Directory,
+            kind,
             perm: 0o775,
             mode: st_mode,
             nlink: metadata.nlink() as u32,
