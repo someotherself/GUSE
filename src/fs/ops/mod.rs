@@ -5,6 +5,7 @@ pub mod mkdir;
 pub mod open;
 pub mod read;
 pub mod readdir;
+pub mod rename;
 pub mod rmdir;
 pub mod unlink;
 pub mod write;
