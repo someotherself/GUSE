@@ -219,18 +219,24 @@ impl fuser::Filesystem for GitFsAdapter {
         }
     }
 
-    // TODO
     fn mknod(
         &mut self,
         _req: &fuser::Request<'_>,
-        parent: u64,
-        name: &OsStr,
+        _parent: u64,
+        _name: &OsStr,
         mode: u32,
-        umask: u32,
-        rdev: u32,
+        _umask: u32,
+        _rdev: u32,
         reply: ReplyEntry,
     ) {
-        todo!()
+        let ftype = mode & libc::S_IFMT;
+        match ftype {
+            libc::S_IFREG => reply.error(libc::EOPNOTSUPP),
+            libc::S_IFIFO | libc::S_IFCHR | libc::S_IFBLK | libc::S_IFSOCK => {
+                reply.error(libc::EPERM)
+            }
+            _ => reply.error(libc::EINVAL),
+        }
     }
 
     fn mkdir(
