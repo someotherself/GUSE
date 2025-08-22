@@ -565,6 +565,48 @@ impl GitFs {
         }
     }
 
+    pub fn rename(
+        &self,
+        parent: u64,
+        os_name: &OsStr,
+        new_parent: u64,
+        os_new_name: &OsStr,
+    ) -> anyhow::Result<()> {
+        if self.read_only {
+            bail!("Filesystem is in read only");
+        }
+        if !self.exists(parent)? {
+            bail!(format!("Parent {} does not exist", parent));
+        }
+        if !self.exists(new_parent)? {
+            bail!(format!("New parent {} does not exist", parent));
+        }
+        if !self.is_in_live(new_parent) {
+            bail!(format!("New parent {} not allowed", parent));
+        }
+        let name = os_name
+            .to_str()
+            .ok_or_else(|| anyhow!("Not a valid UTF-8 name"))?;
+        let new_name = os_new_name
+            .to_str()
+            .ok_or_else(|| anyhow!("Not a valid UTF-8 name"))?;
+        let ctx = FsOperationContext::get_operation(self, parent);
+        match ctx? {
+            FsOperationContext::Root => {
+                bail!("This directory is read only")
+            }
+            FsOperationContext::RepoDir { ino: _ } => {
+                bail!("Not allowed")
+            }
+            FsOperationContext::InsideLiveDir { ino } => {
+                ops::rename::rename_live(self, ino, name, new_parent, new_name)
+            }
+            FsOperationContext::InsideGitDir { ino: _ } => {
+                bail!("This directory is read only")
+            }
+        }
+    }
+
     pub fn rmdir(&self, parent: u64, os_name: &OsStr) -> anyhow::Result<()> {
         if self.read_only {
             bail!("Filesystem is in read only");
