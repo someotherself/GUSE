@@ -310,7 +310,6 @@ impl fuser::Filesystem for GitFsAdapter {
         }
     }
 
-    // TODO
     fn rename(
         &mut self,
         _req: &fuser::Request<'_>,
@@ -321,7 +320,22 @@ impl fuser::Filesystem for GitFsAdapter {
         flags: u32,
         reply: fuser::ReplyEmpty,
     ) {
-        reply.error(libc::EROFS);
+        let fs_arc = self.getfs();
+        let fs = match fs_arc.lock() {
+            Ok(fs) => fs,
+            Err(e) => {
+                eprintln!("fs mutex poisoned: {e}");
+                return reply.error(EIO);
+            }
+        };
+        let res = fs.rename(parent, name, newparent, newname);
+        match res {
+            Ok(_) => reply.ok(),
+            Err(e) => {
+                error!(e = %e);
+                reply.error(ENOENT)
+            }
+        }
     }
 
     fn open(&mut self, req: &fuser::Request<'_>, ino: u64, flags: i32, reply: ReplyOpen) {
