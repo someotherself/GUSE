@@ -786,6 +786,7 @@ impl From<FileType> for fuser::FileType {
             FileType::Directory => fuser::FileType::Directory,
             FileType::RegularFile => fuser::FileType::RegularFile,
             FileType::Symlink => fuser::FileType::Symlink,
+            FileType::VirtualDir { ino: _ } => fuser::FileType::Directory,
         }
     }
 }
