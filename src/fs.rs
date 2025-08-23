@@ -1074,6 +1074,7 @@ impl GitFs {
         conn.get_name_from_db(ino)
     }
 
+    /// nodes = Vec<entry inode, entry name, entry attr>
     fn write_inodes_to_db(&self, nodes: Vec<(u64, String, FileAttr)>) -> anyhow::Result<()> {
         if nodes.is_empty() {
             return Ok(());
