@@ -357,21 +357,16 @@ impl fuser::Filesystem for GitFsAdapter {
             reply.error(EISDIR);
             return;
         };
-        let (access_mask, read, write) = match flags & libc::O_ACCMODE {
+        let (read, write) = match flags & libc::O_ACCMODE {
             libc::O_RDONLY => {
                 if flags & libc::O_TRUNC != 0 {
-                    reply.error(libc::EACCES);
-                    return;
-                }
-                if flags & FMODE_EXEC != 0 {
-                    // Open is from internal exec syscall
-                    (libc::X_OK, true, false)
+                    return reply.error(libc::EACCES);
                 } else {
-                    (libc::R_OK, true, false)
+                    (true, false)
                 }
             }
-            libc::O_WRONLY => (libc::W_OK, false, true),
-            libc::O_RDWR => (libc::R_OK | libc::W_OK, true, true),
+            libc::O_WRONLY => (false, true),
+            libc::O_RDWR => (true, true),
             _ => {
                 reply.error(libc::EINVAL);
                 return;
@@ -796,7 +791,6 @@ fn errno_from_anyhow(err: &anyhow::Error) -> i32 {
         if let Some(code) = ioe.raw_os_error() {
             return code;
         }
-        // Map common kinds when there's no raw_os_error.
         return match ioe.kind() {
             std::io::ErrorKind::NotFound => libc::ENOENT,
             std::io::ErrorKind::PermissionDenied => libc::EACCES,
