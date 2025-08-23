@@ -227,7 +227,13 @@ pub fn readdir_git_dir(fs: &GitFs, ino: u64) -> anyhow::Result<Vec<DirectoryEntr
                     attr.perm = 0o555;
                 }
                 nodes.push((ino, entry.name.clone(), attr));
-                DirectoryEntry::new(entry_ino, entry.oid, entry.name, attr.kind, entry.filemode)
+                DirectoryEntry::new(
+                    entry_ino,
+                    entry.oid,
+                    entry.name.clone(),
+                    attr.kind,
+                    entry.filemode,
+                )
             }
         };
         entries.push(dir_entry);
