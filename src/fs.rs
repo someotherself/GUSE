@@ -722,6 +722,7 @@ impl GitFs {
                 new_attr.perm = 0o555;
                 new_attr.size = 0;
                 new_attr.kind = FileType::Directory;
+                new_attr.nlink = 2;
                 return Ok(new_attr);
             }
         }
@@ -749,6 +750,7 @@ impl GitFs {
             new_attr.kind = FileType::Directory;
             new_attr.perm = 0o555;
             new_attr.size = 0;
+            new_attr.nlink = 2;
 
             Ok(new_attr)
         }

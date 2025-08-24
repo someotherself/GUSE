@@ -109,7 +109,7 @@ fn build_attr_file(inode: u64, st_mode: u32) -> FileAttr {
         kind: FileType::RegularFile,
         perm: 0o655,
         mode: st_mode,
-        nlink: 2,
+        nlink: 1,
         uid: unsafe { libc::getuid() } as u32,
         gid: unsafe { libc::getgid() } as u32,
         rdev: 0,
