@@ -467,12 +467,39 @@ impl GitFs {
         }
         let perms = 0o775;
         let st_mode = libc::S_IFDIR | perms;
+
+        let (is_vdir, inode) = if inode != ROOT_INO {
+            let repo = self.get_repo(inode)?;
+            let repo = repo.lock().map_err(|_| anyhow!("Lock poisoned"))?;
+            if let Some(real_ino) = repo.vdir_map.get(&inode) {
+                (true, *real_ino)
+            } else {
+                (false, inode)
+            }
+        } else {
+            (false, inode)
+        };
+
         let ctx = FsOperationContext::get_operation(self, inode);
         match ctx? {
             FsOperationContext::Root => Ok(build_attr_dir(ROOT_INO, st_mode)),
             FsOperationContext::RepoDir { ino } => Ok(build_attr_dir(ino, st_mode)),
-            FsOperationContext::InsideLiveDir { ino } => ops::getattr::getattr_live_dir(self, ino),
-            FsOperationContext::InsideGitDir { ino } => ops::getattr::getattr_git_dir(self, ino),
+            FsOperationContext::InsideLiveDir { ino } => {
+                let attr = ops::getattr::getattr_live_dir(self, ino)?;
+                if !is_vdir {
+                    return Ok(attr);
+                }
+
+                self.prepare_virtual_folder(attr)
+            }
+            FsOperationContext::InsideGitDir { ino } => {
+                let attr = ops::getattr::getattr_git_dir(self, ino)?;
+                if !is_vdir {
+                    return Ok(attr);
+                }
+
+                self.prepare_virtual_folder(attr)
+            }
         }
     }
 
@@ -691,12 +718,33 @@ impl GitFs {
         if !self.is_dir(parent)? {
             bail!(format!("Parent {} is not a directory", parent));
         }
+
+        let spec = NameSpec::parse(name);
+
         let ctx = FsOperationContext::get_operation(self, parent);
         match ctx? {
             FsOperationContext::Root => ops::lookup::lookup_root(self, name),
             FsOperationContext::RepoDir { ino } => ops::lookup::lookup_repo(self, ino, name),
-            FsOperationContext::InsideLiveDir { ino } => ops::lookup::lookup_live(self, ino, name),
-            FsOperationContext::InsideGitDir { ino } => ops::lookup::lookup_git(self, ino, name),
+            FsOperationContext::InsideLiveDir { ino } => {
+                let attr = match ops::lookup::lookup_live(self, ino, name)? {
+                    Some(attr) => attr,
+                    None => return Ok(None),
+                };
+                if !spec.is_virtual() {
+                    return Ok(Some(attr));
+                }
+                Ok(Some(self.prepare_virtual_folder(attr)?))
+            }
+            FsOperationContext::InsideGitDir { ino } => {
+                let attr = match ops::lookup::lookup_git(self, ino, name)? {
+                    Some(attr) => attr,
+                    None => return Ok(None),
+                };
+                if !spec.is_virtual() {
+                    return Ok(Some(attr));
+                }
+                Ok(Some(self.prepare_virtual_folder(attr)?))
+            }
         }
     }
 
