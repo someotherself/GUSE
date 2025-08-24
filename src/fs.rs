@@ -1,3 +1,4 @@
+use std::collections::btree_map::Entry;
 use std::collections::{BTreeMap, HashSet};
 use std::ffi::OsStr;
 use std::fs::File;
@@ -20,8 +21,9 @@ use tracing::info;
 use crate::fs::fileattr::{CreateFileAttr, FileAttr, FileType, ObjectAttr, build_attr_dir};
 use crate::fs::meta_db::MetaDb;
 use crate::fs::ops::readdir::{DirectoryEntry, DirectoryEntryPlus};
-use crate::fs::repo::GitRepo;
+use crate::fs::repo::{GitRepo, VirtualNode};
 use crate::mount;
+use crate::namespec::NameSpec;
 
 pub mod fileattr;
 pub mod meta_db;
@@ -692,6 +694,63 @@ impl GitFs {
             FsOperationContext::RepoDir { ino } => ops::lookup::lookup_repo(self, ino, name),
             FsOperationContext::InsideLiveDir { ino } => ops::lookup::lookup_live(self, ino, name),
             FsOperationContext::InsideGitDir { ino } => ops::lookup::lookup_git(self, ino, name),
+        }
+    }
+
+    pub fn name_selection(&self, attr: FileAttr, spec: NameSpec) -> anyhow::Result<FileAttr> {
+        if attr.oid == Oid::zero() && attr.kind != FileType::RegularFile {
+            return Ok(attr);
+        }
+
+        match spec.line {
+            Some(Some(_)) => {
+                todo!()
+            }
+            Some(None) => self.prepare_virtual_folder(attr),
+            None => Ok(attr),
+        }
+    }
+
+    pub fn prepare_virtual_folder(&self, attr: FileAttr) -> anyhow::Result<FileAttr> {
+        let repo_arc = self.get_repo(attr.inode)?;
+        let mut new_attr = attr;
+
+        {
+            let repo = repo_arc.lock().map_err(|_| anyhow!("Lock poisoned"))?;
+            if let Some(e) = repo.vdir_cache.get(&attr.inode) {
+                new_attr.inode = e.inode;
+                new_attr.perm = 0o555;
+                new_attr.size = 0;
+                new_attr.kind = FileType::Directory;
+                return Ok(new_attr);
+            }
+        }
+
+        let v_ino = self.next_inode_checked(attr.inode)?;
+
+        {
+            let mut repo = repo_arc.lock().map_err(|_| anyhow!("Lock poisoned"))?;
+            match repo.vdir_cache.entry(attr.inode) {
+                Entry::Occupied(e) => {
+                    // Another thread alread inserted an entry
+                    let v = e.get();
+                    new_attr.inode = v.inode;
+                }
+                Entry::Vacant(slot) => {
+                    let v_node = VirtualNode {
+                        inode: v_ino,
+                        oid: attr.oid,
+                        log: vec![],
+                    };
+                    slot.insert(v_node);
+                    new_attr.inode = v_ino;
+                }
+            };
+            new_attr.kind = FileType::Directory;
+            new_attr.perm = 0o555;
+            new_attr.size = 0;
+
+            Ok(new_attr)
         }
     }
 }

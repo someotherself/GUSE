@@ -9,13 +9,13 @@
 ///
 /// cd name@10 will run git blame -L 10 name
 pub struct NameSpec<'a> {
-    name: &'a str,
+    pub name: &'a str,
     /// None if @ is not present
     ///
     /// Ok(None) if no line number present
     ///
     /// Ok(usize) if line or range present
-    line: Option<Option<usize>>,
+    pub line: Option<Option<usize>>,
 }
 
 impl<'a> NameSpec<'a> {

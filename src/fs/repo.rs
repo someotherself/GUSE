@@ -24,16 +24,19 @@ pub struct GitRepo {
     pub snapshots: BTreeMap<i64, Vec<Oid>>,
     pub res_inodes: HashSet<u64>,
     /// u64: inode of the real file
-    pub vdir_cache: BTreeMap<u64, Option<VirtualNode>>,
+    pub vdir_cache: BTreeMap<u64, VirtualNode>,
 }
 
+/// Insert/get a node during getattr/lookup
+///
+/// Fill log during readdir
 pub struct VirtualNode {
     /// Inode of the virtual directory
-    inode: u64,
+    pub inode: u64,
     /// Oid of the file
-    oid: Oid,
+    pub oid: Oid,
     /// Oids of the file history (if any)
-    log: Vec<Oid>,
+    pub log: Vec<Oid>,
 }
 
 // For customized fetch
