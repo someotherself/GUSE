@@ -120,7 +120,6 @@ fn test_mkdir_fetch() -> anyhow::Result<()> {
             // READ DIR LIVE
             let read_dir_live = fs.readdir(LIVE_DIR_INO)?;
             assert_eq!(read_dir_live.len(), 0);
-
             Ok(())
         },
     )?;
@@ -195,18 +194,26 @@ fn test_mkdir_normal() -> anyhow::Result<()> {
             println!("{}", text);
             dbg!(text.len());
             fs.release(fh)?;
-            let live_entries = fs.readdir(LIVE_DIR_INO)?;
-            for entry in live_entries {
-                dbg!("--------reading entries-------");
-                dbg!(entry.name);
-                dbg!(entry.filemode);
-                dbg!(entry.kind);
-                dbg!("--------getattr-------");
-                let attr = fs.getattr(entry.inode)?;
-                dbg!(attr.mode);
-                dbg!(attr.kind);
-            }
             assert_eq!(text, "some text");
+
+            let test_file1 = OsStr::new("new_file_1");
+            fs.create(LIVE_DIR_INO, test_file1, true, true)?;
+            let attr_real_file = fs.find_by_name(LIVE_DIR_INO, "new_file_1")?;
+            assert!(attr_real_file.is_some());
+            let attr_vdir = fs.find_by_name(LIVE_DIR_INO, "new_file_1@");
+            assert!(attr_vdir.is_ok());
+            let attr_vdir = attr_vdir?;
+            let attr_vdir = attr_vdir.unwrap();
+
+            dbg!(attr_real_file.unwrap().inode);
+            dbg!(attr_vdir.inode);
+
+            dbg!(attr_real_file.unwrap().kind);
+            dbg!(attr_vdir.kind);
+
+            let attr_vdir_getattr = fs.getattr(attr_vdir.inode)?;
+            assert_eq!(attr_vdir_getattr.inode, attr_vdir.inode);
+
             Ok(())
         },
     )?;
