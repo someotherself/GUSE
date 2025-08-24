@@ -216,6 +216,7 @@ impl GitFs {
             head: None,
             snapshots: BTreeMap::new(),
             res_inodes,
+            vdir_cache: BTreeMap::new(),
         };
 
         {
@@ -274,6 +275,7 @@ impl GitFs {
             head: None,
             snapshots: BTreeMap::new(),
             res_inodes: HashSet::new(),
+            vdir_cache: BTreeMap::new(),
         };
 
         let repo_rc = Arc::from(Mutex::from(git_repo));
@@ -308,6 +310,7 @@ impl GitFs {
             snapshots: BTreeMap::new(),
             // TODO: Populate from Db
             res_inodes: HashSet::new(),
+            vdir_cache: BTreeMap::new(),
         })
     }
 
