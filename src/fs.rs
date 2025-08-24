@@ -677,7 +677,6 @@ impl GitFs {
     }
 
     pub fn find_by_name(&self, parent: u64, name: &str) -> anyhow::Result<Option<FileAttr>> {
-        println!("Searching for {name} in {parent}");
         if !self.exists(parent)? {
             bail!(format!("Parent {} does not exist", parent));
         }
