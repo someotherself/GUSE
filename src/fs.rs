@@ -719,6 +719,7 @@ impl GitFs {
         }
 
         let spec = NameSpec::parse(name);
+        let name = if spec.is_virtual() { spec.name } else { name };
 
         let ctx = FsOperationContext::get_operation(self, parent);
         match ctx? {
