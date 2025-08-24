@@ -219,6 +219,7 @@ impl GitFs {
             snapshots: BTreeMap::new(),
             res_inodes,
             vdir_cache: BTreeMap::new(),
+            vdir_map: BTreeMap::new(),
         };
 
         {
@@ -278,6 +279,7 @@ impl GitFs {
             snapshots: BTreeMap::new(),
             res_inodes: HashSet::new(),
             vdir_cache: BTreeMap::new(),
+            vdir_map: BTreeMap::new(),
         };
 
         let repo_rc = Arc::from(Mutex::from(git_repo));
@@ -313,6 +315,7 @@ impl GitFs {
             // TODO: Populate from Db
             res_inodes: HashSet::new(),
             vdir_cache: BTreeMap::new(),
+            vdir_map: BTreeMap::new(),
         })
     }
 
@@ -739,12 +742,14 @@ impl GitFs {
                 }
                 Entry::Vacant(slot) => {
                     let v_node = VirtualNode {
+                        real: attr.inode,
                         inode: v_ino,
                         oid: attr.oid,
                         log: vec![],
                     };
                     slot.insert(v_node);
                     new_attr.inode = v_ino;
+                    repo.vdir_map.insert(v_ino, attr.inode);
                 }
             };
             new_attr.kind = FileType::Directory;

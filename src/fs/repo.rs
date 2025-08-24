@@ -23,15 +23,19 @@ pub struct GitRepo {
     // Vec<Oid> -> Vec<commit_oid> -> In case commits are made at the same time
     pub snapshots: BTreeMap<i64, Vec<Oid>>,
     pub res_inodes: HashSet<u64>,
-    /// u64: inode of the real file
+    /// key: inode of the real file
     pub vdir_cache: BTreeMap<u64, VirtualNode>,
+    /// <inode virtual directory, inode real file>
+    pub vdir_map: BTreeMap<u64, u64>,
 }
 
 /// Insert/get a node during getattr/lookup
 ///
 /// Fill log during readdir
 pub struct VirtualNode {
-    /// Inode of the virtual directory
+    /// Inode of the real file
+    pub real: u64,
+    /// Inode of the real file
     pub inode: u64,
     /// Oid of the file
     pub oid: Oid,
