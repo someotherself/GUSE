@@ -620,7 +620,10 @@ impl fuser::Filesystem for GitFsAdapter {
         let res = fs.getattr(ino);
         match res {
             Ok(mut attr) => {
-                fs.refresh_attr(&mut attr).unwrap();
+                match fs.refresh_attr(&mut attr) {
+                    Ok(a) => a,
+                    Err(e) => return reply.error(errno_from_anyhow(&e)),
+                };
                 reply.attr(&TTL, &attr.into());
             }
             Err(e) => reply.error(errno_from_anyhow(&e)),
