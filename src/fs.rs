@@ -312,7 +312,6 @@ impl GitFs {
             inner: repo,
             head: Some(head),
             snapshots: BTreeMap::new(),
-            // TODO: Populate from Db
             res_inodes: HashSet::new(),
             vdir_cache: BTreeMap::new(),
             vdir_map: BTreeMap::new(),
