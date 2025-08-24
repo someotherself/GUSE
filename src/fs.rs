@@ -794,7 +794,7 @@ impl GitFs {
                         real: attr.inode,
                         inode: v_ino,
                         oid: attr.oid,
-                        log: vec![],
+                        log: HashSet::new(),
                     };
                     slot.insert(v_node);
                     new_attr.inode = v_ino;
