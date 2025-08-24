@@ -43,11 +43,6 @@ pub struct VirtualNode {
     pub log: Vec<Oid>,
 }
 
-// For customized fetch
-pub struct Remote {
-    arg_remote: Option<String>,
-}
-
 impl GitRepo {
     pub fn refresh_snapshots(&mut self) -> anyhow::Result<()> {
         let head = match self.inner.head() {
