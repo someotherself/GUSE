@@ -461,9 +461,6 @@ impl GitFs {
     }
 
     pub fn getattr(&self, inode: u64) -> anyhow::Result<FileAttr> {
-        if !self.exists(inode)? {
-            bail!(format!("Inode {} does not exist", inode));
-        }
         let perms = 0o775;
         let st_mode = libc::S_IFDIR | perms;
 
@@ -478,6 +475,10 @@ impl GitFs {
         } else {
             (false, inode)
         };
+
+        if !self.exists(inode)? {
+            bail!(format!("Inode {} does not exist", inode));
+        }
 
         let ctx = FsOperationContext::get_operation(self, inode);
         match ctx? {
