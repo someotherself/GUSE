@@ -1090,7 +1090,6 @@ impl GitFs {
         if ino == GitFs::repo_id_to_ino(repo_id) {
             return Ok(true);
         }
-        println!("Searching for ino {ino}");
         let mode = self.get_mode_from_db(ino)?;
         Ok(mode == FileMode::Tree || mode == FileMode::Commit)
     }
