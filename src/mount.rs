@@ -21,7 +21,7 @@ use crate::fs::fileattr::{CreateFileAttr, FileAttr, FileType};
 use crate::fs::ops::readdir::{DirectoryEntry, DirectoryEntryPlus};
 use crate::fs::{GitFs, REPO_SHIFT, ROOT_INO, repo};
 
-const TTL: Duration = Duration::from_millis(100);
+const TTL: Duration = Duration::from_secs(1);
 const FMODE_EXEC: i32 = 0x20;
 
 pub struct MountPoint {
@@ -689,10 +689,6 @@ impl fuser::Filesystem for GitFsAdapter {
             return reply.error(libc::ENOTDIR);
         }
 
-        info!(
-            "opendir ino={} uid:{} gid:{} perm={:#o}",
-            ino, attr.uid, attr.gid, attr.perm
-        );
         reply.opened(0, 0);
     }
 
