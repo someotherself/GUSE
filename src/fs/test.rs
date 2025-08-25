@@ -1,6 +1,7 @@
 use std::ffi::OsStr;
 
 use anyhow::anyhow;
+use git2::Oid;
 
 use crate::{
     fs::{FileType, REPO_SHIFT},
@@ -88,6 +89,14 @@ fn test_mkdir_fetch() -> anyhow::Result<()> {
                                         .find_by_name(b_attr.inode, &c.name)?
                                         .ok_or_else(|| anyhow!("Invalid input"))?;
                                     assert_eq!(c.inode, c_attr.inode);
+                                }
+                                dbg!("startig v_dir search");
+                                if c.oid != Oid::zero() && c.kind == FileType::RegularFile {
+                                    let name = format!("{}@", c.name);
+                                    let v_dir_attr = fs.find_by_name(b_attr.inode, &name)?.unwrap();
+                                    dbg!(v_dir_attr.inode);
+                                    let v_dir_entries = fs.readdir(v_dir_attr.inode)?;
+                                    dbg!(v_dir_entries.len());
                                 }
                             }
                         }
