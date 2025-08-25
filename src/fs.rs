@@ -689,12 +689,88 @@ impl GitFs {
     }
 
     pub fn readdir(&self, parent: u64) -> anyhow::Result<Vec<DirectoryEntry>> {
+        let (is_vdir, parent) = if parent != ROOT_INO {
+            let repo = self.get_repo(parent)?;
+            let repo = repo.lock().map_err(|_| anyhow!("Lock poisoned"))?;
+            if let Some(real_ino) = repo.vdir_map.get(&parent) {
+                (true, *real_ino)
+            } else {
+                (false, parent)
+            }
+        } else {
+            (false, parent)
+        };
+
         let ctx = FsOperationContext::get_operation(self, parent);
         match ctx? {
             FsOperationContext::Root => ops::readdir::readdir_root_dir(self),
             FsOperationContext::RepoDir { ino } => ops::readdir::readdir_repo_dir(self, ino),
-            FsOperationContext::InsideLiveDir { ino } => ops::readdir::readdir_live_dir(self, ino),
-            FsOperationContext::InsideGitDir { ino } => ops::readdir::readdir_git_dir(self, ino),
+            FsOperationContext::InsideLiveDir { ino } => {
+                if !is_vdir {
+                    ops::readdir::readdir_live_dir(self, ino)
+                } else {
+                    let repo = self.get_repo(ino)?;
+                    let mut repo = repo.lock().map_err(|_| anyhow!("Lock poisoned"))?;
+                    let mut v_node = match repo.vdir_cache.remove(&ino) {
+                        Some(o) => o,
+                        None => bail!("Oid missing"),
+                    };
+                    let origin_oid = v_node.oid;
+                    let git_objects = if v_node.log.is_empty() {
+                        let entries = repo.get_object_log(origin_oid)?;
+                        v_node.log.append(&mut entries.clone());
+                        repo.vdir_cache.insert(ino, v_node);
+                        &repo.vdir_cache.get(&ino).unwrap().log
+                    } else {
+                        &v_node.log
+                    };
+                    let mut dir_entries = vec![];
+                    for git_attr in git_objects {
+                        let entry_ino = self.next_inode_checked(ino)?;
+                        dir_entries.push(DirectoryEntry::new(
+                            entry_ino,
+                            git_attr.oid,
+                            git_attr.name.clone(),
+                            FileType::RegularFile,
+                            git_attr.filemode,
+                        ));
+                    }
+                    Ok(dir_entries)
+                }
+            }
+            FsOperationContext::InsideGitDir { ino } => {
+                if !is_vdir {
+                    ops::readdir::readdir_git_dir(self, ino)
+                } else {
+                    let repo = self.get_repo(ino)?;
+                    let mut repo = repo.lock().map_err(|_| anyhow!("Lock poisoned"))?;
+                    let mut v_node = match repo.vdir_cache.remove(&ino) {
+                        Some(o) => o,
+                        None => bail!("Oid missing"),
+                    };
+                    let origin_oid = v_node.oid;
+                    let git_objects = if v_node.log.is_empty() {
+                        let entries = repo.get_object_log(origin_oid)?;
+                        v_node.log.append(&mut entries.clone());
+                        repo.vdir_cache.insert(ino, v_node);
+                        &repo.vdir_cache.get(&ino).unwrap().log
+                    } else {
+                        &v_node.log
+                    };
+                    let mut dir_entries = vec![];
+                    for git_attr in git_objects {
+                        let entry_ino = self.next_inode_checked(ino)?;
+                        dir_entries.push(DirectoryEntry::new(
+                            entry_ino,
+                            git_attr.oid,
+                            git_attr.name.clone(),
+                            FileType::RegularFile,
+                            git_attr.filemode,
+                        ));
+                    }
+                    Ok(dir_entries)
+                }
+            }
         }
     }
 
@@ -794,7 +870,7 @@ impl GitFs {
                         real: attr.inode,
                         inode: v_ino,
                         oid: attr.oid,
-                        log: HashSet::new(),
+                        log: Vec::new(),
                     };
                     slot.insert(v_node);
                     new_attr.inode = v_ino;
