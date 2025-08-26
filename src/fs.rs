@@ -1103,11 +1103,6 @@ impl GitFs {
         conn.get_parent_ino(self.clear_vdir_bit(ino))
     }
 
-    // TODO: remove?
-    fn pack_inode(repo_id: u16, sub_ino: u64) -> u64 {
-        ((repo_id as u64) << REPO_SHIFT) | (sub_ino & ((1 << REPO_SHIFT) - 1))
-    }
-
     fn repo_id_to_ino(repo_id: u16) -> u64 {
         (repo_id as u64) << REPO_SHIFT
     }
