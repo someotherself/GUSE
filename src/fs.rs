@@ -970,6 +970,7 @@ impl GitFs {
     }
 
     fn build_path(&self, parent: u64, name: &str) -> anyhow::Result<PathBuf> {
+        let parent = self.clear_vdir_bit(parent);
         let repo_name = {
             let repo = &self.get_repo(parent)?;
             let repo = repo.lock().map_err(|_| anyhow!("Lock poisoned"))?;
@@ -1002,6 +1003,7 @@ impl GitFs {
     }
 
     pub fn get_parent_commit(&self, ino: u64) -> anyhow::Result<(Oid, String)> {
+        let ino = self.clear_vdir_bit(ino);
         let repo_arc = self.get_repo(ino)?;
 
         let mut cur = ino;
@@ -1021,6 +1023,7 @@ impl GitFs {
     }
 
     fn is_in_live(&self, ino: u64) -> bool {
+        let ino = self.clear_vdir_bit(ino);
         let live_ino = self.get_live_ino(ino);
         if live_ino == ino {
             return true;
@@ -1085,9 +1088,10 @@ impl GitFs {
             std::sync::Arc::clone(&repo.connection)
         };
         let conn = conn_arc.lock().map_err(|_| anyhow!("Lock poisoned"))?;
-        conn.get_parent_ino(ino)
+        conn.get_parent_ino(self.clear_vdir_bit(ino))
     }
 
+    // TODO: remove?
     fn pack_inode(repo_id: u16, sub_ino: u64) -> u64 {
         ((repo_id as u64) << REPO_SHIFT) | (sub_ino & ((1 << REPO_SHIFT) - 1))
     }
@@ -1137,10 +1141,11 @@ impl GitFs {
             std::sync::Arc::clone(&repo.connection)
         };
         let conn = conn_arc.lock().map_err(|_| anyhow!("Lock poisoned"))?;
-        conn.exists_by_name(parent, name)
+        conn.exists_by_name(self.clear_vdir_bit(parent), name)
     }
 
     pub fn exists(&self, ino: u64) -> anyhow::Result<bool> {
+        let ino = self.clear_vdir_bit(ino);
         if ino == ROOT_INO {
             return Ok(true);
         }
@@ -1157,6 +1162,7 @@ impl GitFs {
     }
 
     fn is_dir(&self, ino: u64) -> anyhow::Result<bool> {
+        let ino = self.clear_vdir_bit(ino);
         if ino == ROOT_INO {
             return Ok(true);
         }
@@ -1169,6 +1175,7 @@ impl GitFs {
     }
 
     fn is_file(&self, ino: u64) -> anyhow::Result<bool> {
+        let ino = self.clear_vdir_bit(ino);
         if ino == ROOT_INO {
             return Ok(false);
         }
@@ -1177,6 +1184,7 @@ impl GitFs {
     }
 
     fn is_link(&self, ino: u64) -> anyhow::Result<bool> {
+        let ino = self.clear_vdir_bit(ino);
         if ino == ROOT_INO {
             return Ok(false);
         }
@@ -1189,6 +1197,7 @@ impl GitFs {
     }
 
     fn get_ino_from_db(&self, parent: u64, name: &str) -> anyhow::Result<u64> {
+        let parent = self.clear_vdir_bit(parent);
         let conn_arc = {
             let repo = &self.get_repo(parent)?;
             let repo = repo.lock().map_err(|_| anyhow!("Lock poisoned"))?;
@@ -1205,10 +1214,11 @@ impl GitFs {
             std::sync::Arc::clone(&repo.connection)
         };
         let conn = conn_arc.lock().map_err(|_| anyhow!("Lock poisoned"))?;
-        conn.remove_db_record(ino)
+        conn.remove_db_record(self.clear_vdir_bit(ino))
     }
 
     fn build_full_path(&self, ino: u64) -> anyhow::Result<PathBuf> {
+        let ino = self.clear_vdir_bit(ino);
         let repo_ino = {
             let repo = self.get_repo(ino)?;
             let repo = repo.lock().map_err(|_| anyhow!("Lock poisoned"))?;
@@ -1234,7 +1244,7 @@ impl GitFs {
             std::sync::Arc::clone(&repo.connection)
         };
         let conn = conn_arc.lock().map_err(|_| anyhow!("Lock poisoned"))?;
-        conn.get_path_from_db(ino)
+        conn.get_path_from_db(self.clear_vdir_bit(ino))
     }
 
     fn get_oid_from_db(&self, ino: u64) -> anyhow::Result<Oid> {
@@ -1244,7 +1254,7 @@ impl GitFs {
             std::sync::Arc::clone(&repo.connection)
         };
         let conn = conn_arc.lock().map_err(|_| anyhow!("Lock poisoned"))?;
-        conn.get_oid_from_db(ino)
+        conn.get_oid_from_db(self.clear_vdir_bit(ino))
     }
 
     fn get_mode_from_db(&self, ino: u64) -> anyhow::Result<git2::FileMode> {
@@ -1254,7 +1264,7 @@ impl GitFs {
             std::sync::Arc::clone(&repo.connection)
         };
         let conn = conn_arc.lock().map_err(|_| anyhow!("Lock poisoned"))?;
-        let mode = conn.get_mode_from_db(ino)?;
+        let mode = conn.get_mode_from_db(self.clear_vdir_bit(ino))?;
         repo::try_into_filemode(mode).ok_or_else(|| anyhow!("Invalid filemode"))
     }
 
@@ -1265,7 +1275,7 @@ impl GitFs {
             std::sync::Arc::clone(&repo.connection)
         };
         let conn = conn_arc.lock().map_err(|_| anyhow!("Lock poisoned"))?;
-        conn.get_name_from_db(ino)
+        conn.get_name_from_db(self.clear_vdir_bit(ino))
     }
 
     /// nodes = Vec<parent inode, entry name, entry attr>
