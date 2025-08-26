@@ -486,6 +486,7 @@ impl GitRepo {
 
         const MAX_STEPS: usize = 200_000;
         let mut steps = 0usize;
+        let mut blob_count = 1usize;
         let mut out = Vec::new();
         let mut last_pushed_oid: Option<Oid> = None;
 
@@ -497,11 +498,12 @@ impl GitRepo {
                 );
             }
             let tree = commit.tree()?;
-            if let Some(attr) =
-                self.object_attr_for_path_in_tree(repo, &tree, &current_path, commit.time())?
-            {
+            if let Some(attr) = {
+                self.object_attr_for_path_in_tree(repo, &tree, &current_path, &commit, blob_count)?
+            } {
                 if last_pushed_oid != Some(attr.oid) {
                     last_pushed_oid = Some(attr.oid);
+                    blob_count += 1;
                     out.push(attr);
                 }
             } else {
@@ -563,7 +565,8 @@ impl GitRepo {
         repo: &Repository,
         tree: &Tree,
         path: &str,
-        commit_time: Time,
+        commit: &Commit,
+        count: usize,
     ) -> anyhow::Result<Option<ObjectAttr>> {
         let entry = match tree.get_path(std::path::Path::new(path)) {
             Ok(e) => e,
@@ -575,11 +578,8 @@ impl GitRepo {
         let oid = entry.id();
         let blob = repo.find_blob(oid)?;
         let filemode = entry.filemode() as u32;
-        let name = std::path::Path::new(path)
-            .file_name()
-            .and_then(|s| s.to_str())
-            .unwrap_or("")
-            .to_string();
+        let commit_time = commit.time();
+        let name = format!("{count:04}_{}", commit.id());
 
         Ok(Some(ObjectAttr {
             name,
