@@ -705,20 +705,25 @@ impl GitFs {
                     };
                     let origin_oid = v_node.oid;
                     let git_objects = if v_node.log.is_empty() {
+                        drop(repo);
+                        let entry_ino = self.next_inode_checked(ino)?;
+                        let repo = self.get_repo(ino)?;
+                        let mut repo = repo.lock().map_err(|_| anyhow!("Lock poisoned"))?;
                         let entries = repo.blob_history_objects(origin_oid)?;
                         for entry in entries {
-                            v_node.log.insert(entry.name.clone(), entry);
+                            v_node.log.insert(entry.name.clone(), (entry_ino, entry));
                         }
                         repo.vdir_cache.insert(ino, v_node);
-                        &repo.vdir_cache.get(&ino).unwrap().log
+                        let node = repo.vdir_cache.get(&ino).unwrap().log.clone();
+                        drop(repo);
+                        node
                     } else {
-                        &v_node.log
+                        v_node.log
                     };
                     let mut dir_entries = vec![];
-                    for git_attr in git_objects.values() {
-                        let entry_ino = self.next_inode_checked(ino)?;
+                    for (entry_ino, git_attr) in git_objects.values() {
                         dir_entries.push(DirectoryEntry::new(
-                            entry_ino,
+                            *entry_ino,
                             git_attr.oid,
                             git_attr.name.clone(),
                             FileType::RegularFile,
@@ -740,21 +745,25 @@ impl GitFs {
                     };
                     let origin_oid = v_node.oid;
                     let git_objects = if v_node.log.is_empty() {
+                        drop(repo);
+                        let entry_ino = self.next_inode_checked(ino)?;
+                        let repo = self.get_repo(ino)?;
+                        let mut repo = repo.lock().map_err(|_| anyhow!("Lock poisoned"))?;
                         let entries = repo.blob_history_objects(origin_oid)?;
                         for entry in entries {
-                            v_node.log.insert(entry.name.clone(), entry);
+                            v_node.log.insert(entry.name.clone(), (entry_ino, entry));
                         }
                         repo.vdir_cache.insert(ino, v_node);
-                        &repo.vdir_cache.get(&ino).unwrap().log.clone()
+                        let node = repo.vdir_cache.get(&ino).unwrap().log.clone();
+                        drop(repo);
+                        node
                     } else {
-                        &v_node.log
+                        v_node.log
                     };
-                    drop(repo);
                     let mut dir_entries = vec![];
-                    for git_attr in git_objects.values() {
-                        let entry_ino = self.next_inode_checked(ino)?;
+                    for (entry_ino, git_attr) in git_objects.values() {
                         dir_entries.push(DirectoryEntry::new(
-                            entry_ino,
+                            *entry_ino,
                             git_attr.oid,
                             git_attr.name.clone(),
                             FileType::RegularFile,
