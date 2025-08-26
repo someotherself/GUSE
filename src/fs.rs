@@ -990,9 +990,8 @@ impl GitFs {
     }
 
     fn is_in_live(&self, ino: u64) -> bool {
-        let ino = self.clear_vdir_bit(ino);
         let live_ino = self.get_live_ino(ino);
-        if live_ino == ino {
+        if live_ino == ino || self.is_virtual(ino) {
             return true;
         }
         let mut target_ino = ino;
