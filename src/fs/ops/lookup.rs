@@ -133,3 +133,20 @@ pub fn lookup_git(fs: &GitFs, parent: u64, name: &str) -> anyhow::Result<Option<
     attr.perm = 0o555;
     Ok(Some(attr))
 }
+
+pub fn lookup_vdir(fs: &GitFs, parent: u64, name: &str) -> anyhow::Result<Option<FileAttr>> {
+    let repo = fs.get_repo(parent)?;
+    let Ok(repo) = repo.lock() else {
+        return Ok(None);
+    };
+
+    let Some(v_node) = repo.vdir_cache.get(&parent) else {
+        return Ok(None);
+    };
+    let Some((entry_ino, object)) = v_node.log.get(name) else {
+        return Ok(None);
+    };
+    let mut attr = fs.object_to_file_attr(*entry_ino, object)?;
+    attr.perm = 0o555;
+    Ok(Some(attr))
+}

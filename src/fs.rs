@@ -749,23 +749,7 @@ impl GitFs {
             FsOperationContext::RepoDir { ino } => ops::lookup::lookup_repo(self, ino, name),
             FsOperationContext::InsideLiveDir { ino } => {
                 if par_is_vdir {
-                    let repo = self.get_repo(ino)?;
-                    let Ok(repo) = repo.lock() else {
-                        return Ok(None);
-                    };
-
-                    let Some(oid) = name.rsplit('_').next() else {
-                        return Ok(None);
-                    };
-                    let Some(v_node) = repo.vdir_cache.get(&parent) else {
-                        return Ok(None);
-                    };
-                    let Some((entry_ino, object)) = v_node.log.get(oid) else {
-                        return Ok(None);
-                    };
-                    let mut attr = self.object_to_file_attr(*entry_ino, object)?;
-                    attr.perm = 0o555;
-                    return Ok(Some(attr));
+                    return ops::lookup::lookup_vdir(self, parent, name);
                 };
 
                 let attr = match ops::lookup::lookup_live(self, ino, name)? {
@@ -780,27 +764,13 @@ impl GitFs {
             }
             FsOperationContext::InsideGitDir { ino } => {
                 if par_is_vdir {
-                    let repo = self.get_repo(ino)?;
-                    let Ok(repo) = repo.lock() else {
-                        return Ok(None);
-                    };
-
-                    let Some(oid) = name.rsplit('_').next() else {
-                        return Ok(None);
-                    };
-                    let Some(v_node) = repo.vdir_cache.get(&parent) else {
-                        return Ok(None);
-                    };
-                    let Some((entry_ino, object)) = v_node.log.get(oid) else {
-                        return Ok(None);
-                    };
-                    let mut attr = self.object_to_file_attr(*entry_ino, object)?;
-                    attr.perm = 0o555;
-                    return Ok(Some(attr));
+                    return ops::lookup::lookup_vdir(self, parent, name);
                 };
                 let attr = match ops::lookup::lookup_git(self, ino, name)? {
                     Some(attr) => attr,
-                    None => return Ok(None),
+                    None => {
+                        return Ok(None);
+                    }
                 };
                 if !spec.is_virtual() {
                     return Ok(Some(attr));
