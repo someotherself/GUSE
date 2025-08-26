@@ -890,13 +890,13 @@ impl GitFs {
 
 // gitfs_helpers
 impl GitFs {
-pub fn set_vdir_bit(&self, ino: u64) -> u64 {
-    ino | VDIR_BIT
-}
+    pub fn set_vdir_bit(&self, ino: u64) -> u64 {
+        ino | VDIR_BIT
+    }
 
-pub fn clear_vdir_bit(&self, ino: u64) -> u64 {
-    ino & !VDIR_BIT
-}
+    pub fn clear_vdir_bit(&self, ino: u64) -> u64 {
+        ino & !VDIR_BIT
+    }
 
     pub fn refresh_attr(&self, attr: &mut FileAttr) -> anyhow::Result<FileAttr> {
         let path = self.build_full_path(attr.inode)?;
@@ -1198,9 +1198,9 @@ pub fn clear_vdir_bit(&self, ino: u64) -> u64 {
         Ok(mode == FileMode::Link)
     }
 
-pub fn is_virtual(&self, ino: u64) -> bool {
-    (ino & VDIR_BIT) != 0
-}
+    pub fn is_virtual(&self, ino: u64) -> bool {
+        (ino & VDIR_BIT) != 0
+    }
 
     fn get_ino_from_db(&self, parent: u64, name: &str) -> anyhow::Result<u64> {
         let conn_arc = {
