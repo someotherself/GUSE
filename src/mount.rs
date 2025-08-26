@@ -182,6 +182,7 @@ impl fuser::Filesystem for GitFsAdapter {
             }
             Err(e) => {
                 // Other internal error
+                error!(e = %e);
                 reply.error(EIO);
             }
         };
