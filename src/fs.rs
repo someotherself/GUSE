@@ -706,14 +706,16 @@ impl GitFs {
                     let origin_oid = v_node.oid;
                     let git_objects = if v_node.log.is_empty() {
                         let entries = repo.blob_history_objects(origin_oid)?;
-                        v_node.log.append(&mut entries.clone());
+                        for entry in entries {
+                            v_node.log.insert(entry.name.clone(), entry);
+                        }
                         repo.vdir_cache.insert(ino, v_node);
                         &repo.vdir_cache.get(&ino).unwrap().log
                     } else {
                         &v_node.log
                     };
                     let mut dir_entries = vec![];
-                    for git_attr in git_objects {
+                    for git_attr in git_objects.values() {
                         let entry_ino = self.next_inode_checked(ino)?;
                         dir_entries.push(DirectoryEntry::new(
                             entry_ino,
@@ -739,7 +741,9 @@ impl GitFs {
                     let origin_oid = v_node.oid;
                     let git_objects = if v_node.log.is_empty() {
                         let entries = repo.blob_history_objects(origin_oid)?;
-                        v_node.log.append(&mut entries.clone());
+                        for entry in entries {
+                            v_node.log.insert(entry.name.clone(), entry);
+                        }
                         repo.vdir_cache.insert(ino, v_node);
                         &repo.vdir_cache.get(&ino).unwrap().log.clone()
                     } else {
@@ -747,7 +751,7 @@ impl GitFs {
                     };
                     drop(repo);
                     let mut dir_entries = vec![];
-                    for git_attr in git_objects {
+                    for git_attr in git_objects.values() {
                         let entry_ino = self.next_inode_checked(ino)?;
                         dir_entries.push(DirectoryEntry::new(
                             entry_ino,
@@ -866,7 +870,7 @@ impl GitFs {
                         real: attr.inode,
                         inode: v_ino,
                         oid: attr.oid,
-                        log: Vec::new(),
+                        log: HashMap::new(),
                     };
                     slot.insert(v_node);
                     new_attr.inode = v_ino;

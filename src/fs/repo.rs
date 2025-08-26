@@ -39,7 +39,7 @@ pub struct VirtualNode {
     /// Oid of the file
     pub oid: Oid,
     /// Oids of the file history (if any)
-    pub log: Vec<ObjectAttr>,
+    pub log: HashMap<String, ObjectAttr>,
 }
 
 impl GitRepo {
