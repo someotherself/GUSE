@@ -255,6 +255,7 @@ pub fn read_virtual_dir(fs: &GitFs, ino: u64) -> anyhow::Result<Vec<DirectoryEnt
     } else {
         v_node.log
     };
+    let mut nodes: Vec<(u64, String, FileAttr)> = vec![];
     let mut dir_entries = vec![];
     for (entry_ino, git_attr) in git_objects.values() {
         dir_entries.push(DirectoryEntry::new(
@@ -264,6 +265,10 @@ pub fn read_virtual_dir(fs: &GitFs, ino: u64) -> anyhow::Result<Vec<DirectoryEnt
             FileType::RegularFile,
             git_attr.filemode,
         ));
+        let mut attr = fs.object_to_file_attr(*entry_ino, git_attr)?;
+        attr.perm = 0o555;
+        nodes.push((fs.clear_vdir_bit(ino), git_attr.name.clone(), attr));
     }
+    fs.write_inodes_to_db(nodes)?;
     Ok(dir_entries)
 }
