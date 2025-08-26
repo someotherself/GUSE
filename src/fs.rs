@@ -1178,6 +1178,9 @@ impl GitFs {
     }
 
     fn is_dir(&self, ino: u64) -> anyhow::Result<bool> {
+        if self.is_virtual(ino) {
+            return Ok(true);
+        };
         let ino = self.clear_vdir_bit(ino);
         if ino == ROOT_INO {
             return Ok(true);
