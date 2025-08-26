@@ -811,12 +811,8 @@ impl GitFs {
 
         let ctx = FsOperationContext::get_operation(self, parent);
         match ctx? {
-            FsOperationContext::Root => {
-                ops::lookup::lookup_root(self, name)
-            }
-            FsOperationContext::RepoDir { ino } => {
-                ops::lookup::lookup_repo(self, ino, name)
-            }
+            FsOperationContext::Root => ops::lookup::lookup_root(self, name),
+            FsOperationContext::RepoDir { ino } => ops::lookup::lookup_repo(self, ino, name),
             FsOperationContext::InsideLiveDir { ino } => {
                 if par_is_vdir {
                     let repo = self.get_repo(ino)?;
