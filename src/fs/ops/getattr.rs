@@ -46,8 +46,7 @@ pub fn getattr_git_dir(fs: &GitFs, ino: u64) -> anyhow::Result<FileAttr> {
                 let repo = repo.lock().map_err(|_| anyhow!("Lock poisoned"))?;
                 repo.find_in_commit(gitdir_commit_id, oid)?
             };
-            let mut attr = fs.object_to_file_attr(ino, &git_attr)?;
-            attr.inode = ino;
+            let attr = fs.object_to_file_attr(ino, &git_attr)?;
 
             Ok(attr)
         }
