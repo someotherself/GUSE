@@ -794,34 +794,87 @@ impl GitFs {
             bail!(format!("Parent {} does not exist", parent));
         }
         if !self.is_dir(parent)? {
+            info!("Not a dir -2 ");
             bail!(format!("Parent {} is not a directory", parent));
         }
 
+        // If the target a virtual directory
         let spec = NameSpec::parse(name);
         let name = if spec.is_virtual() { spec.name } else { name };
 
-        let is_vdir = self.is_virtual(parent);
-        let parent = if is_vdir {
-            self.clear_vdir_bit(parent)
-        } else {
-            parent
-        };
+        // If the parent a virtual directory
+        let par_is_vdir = self.is_virtual(parent);
+
+        // Both should never be true at the same time
+        if par_is_vdir && spec.is_virtual() {
+            return Ok(None);
+        }
 
         let ctx = FsOperationContext::get_operation(self, parent);
         match ctx? {
-            FsOperationContext::Root => ops::lookup::lookup_root(self, name),
-            FsOperationContext::RepoDir { ino } => ops::lookup::lookup_repo(self, ino, name),
+            FsOperationContext::Root => {
+                info!("V_dir is in root");
+                ops::lookup::lookup_root(self, name)
+            }
+            FsOperationContext::RepoDir { ino } => {
+                info!("V_dir is in repo");
+                ops::lookup::lookup_repo(self, ino, name)
+            }
             FsOperationContext::InsideLiveDir { ino } => {
+                if par_is_vdir {
+                    info!("live_dir_Parent is a v_dir");
+                    let repo = self.get_repo(ino)?;
+                    let Ok(repo) = repo.lock() else {
+                        return Ok(None);
+                    };
+
+                    let Some(oid) = name.rsplit('_').next() else {
+                        return Ok(None);
+                    };
+                    let Some(v_node) = repo.vdir_cache.get(&parent) else {
+                        return Ok(None);
+                    };
+                    let Some((entry_ino, object)) = v_node.log.get(oid) else {
+                        return Ok(None);
+                    };
+                    let mut attr = self.object_to_file_attr(*entry_ino, object)?;
+                    attr.perm = 0o555;
+                    return Ok(Some(attr));
+                };
+                info!("live_dir_Parent not a v_dir");
+
                 let attr = match ops::lookup::lookup_live(self, ino, name)? {
                     Some(attr) => attr,
                     None => return Ok(None),
                 };
+
                 if !spec.is_virtual() {
                     return Ok(Some(attr));
                 }
                 Ok(Some(self.prepare_virtual_folder(attr)?))
             }
             FsOperationContext::InsideGitDir { ino } => {
+                if par_is_vdir {
+                    info!("git_dir_Parent is a v_dir");
+                    let repo = self.get_repo(ino)?;
+                    let Ok(repo) = repo.lock() else {
+                        return Ok(None);
+                    };
+
+                    let Some(oid) = name.rsplit('_').next() else {
+                        return Ok(None);
+                    };
+                    let Some(v_node) = repo.vdir_cache.get(&parent) else {
+                        return Ok(None);
+                    };
+                    let Some((entry_ino, object)) = v_node.log.get(oid) else {
+                        return Ok(None);
+                    };
+                    let mut attr = self.object_to_file_attr(*entry_ino, object)?;
+                    attr.perm = 0o555;
+                    return Ok(Some(attr));
+                };
+                info!("git_dir_Parent not a v_dir");
                 let attr = match ops::lookup::lookup_git(self, ino, name)? {
                     Some(attr) => attr,
                     None => return Ok(None),
