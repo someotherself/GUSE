@@ -1,7 +1,6 @@
 use std::ffi::OsString;
 
 use anyhow::{anyhow, bail};
-use chrono::{Datelike, NaiveDate};
 use git2::Oid;
 
 use crate::fs::{FileAttr, GitFs, REPO_SHIFT, fileattr::FileType};
@@ -38,7 +37,7 @@ pub struct DirectoryEntryPlus {
 #[derive(Debug)]
 enum DirCase {
     Month { year: i32, month: u32 },
-    Day { year: i32, month: u32, day: u32 },
+    // Day { year: i32, month: u32, day: u32 },
     Commit { oid: Oid },
 }
 
@@ -147,10 +146,9 @@ pub fn readdir_live_dir(fs: &GitFs, ino: u64) -> anyhow::Result<Vec<DirectoryEnt
     Ok(entries)
 }
 
-// Three branches
+// Two branches
 // 1 - ino is for a month folder -> show days folders
-// 2 - ino is for a day folder -> show commits
-// 3 - ino is for a commit or inside a commit -> show commit contents
+// 2 - ino is for a commit or inside a commit -> show commit contents
 fn classify_inode(fs: &GitFs, ino: u64) -> anyhow::Result<DirCase> {
     let attr = fs.getattr(ino)?;
     let target_name = fs.get_name_from_db(ino)?;
@@ -161,16 +159,6 @@ fn classify_inode(fs: &GitFs, ino: u64) -> anyhow::Result<DirCase> {
             && let (Ok(year), Ok(month)) = (y.parse::<i32>(), m.parse::<u32>())
         {
             return Ok(DirCase::Month { year, month });
-        }
-        // Branch 1
-        if let Some(day) = target_name.strip_prefix("Snaps_on_")
-            && let Ok(d) = NaiveDate::parse_from_str(day, "%b.%-d.%Y")
-        {
-            return Ok(DirCase::Day {
-                year: d.year(),
-                month: d.month(),
-                day: d.day(),
-            });
         }
     }
 
@@ -186,11 +174,7 @@ pub fn readdir_git_dir(fs: &GitFs, ino: u64) -> anyhow::Result<Vec<DirectoryEntr
     let git_objects = match classify_inode(fs, ino)? {
         DirCase::Month { year, month } => {
             let repo = repo.lock().map_err(|_| anyhow!("Lock poisoned"))?;
-            repo.day_folders(&format!("{year:04}-{month:02}"))?
-        }
-        DirCase::Day { year, month, day } => {
-            let repo = repo.lock().map_err(|_| anyhow!("Lock poisoned"))?;
-            repo.day_commits(&format!("{year:04}-{month:02}-{day:02}"))?
+            repo.month_commits(&format!("{year:04}-{month:02}"))?
         }
         DirCase::Commit { oid } => {
             let (commit_oid, _) = fs.get_parent_commit(ino)?;

@@ -6,7 +6,7 @@ use git2::{
     TreeWalkResult,
 };
 use std::{
-    collections::{BTreeMap, HashSet},
+    collections::{BTreeMap, HashMap, HashSet},
     sync::{Arc, Mutex},
 };
 
@@ -130,60 +130,11 @@ impl GitRepo {
         Some((y.parse().ok()?, m.parse().ok()?))
     }
 
-    fn parse_day_key(key: &str) -> Option<(i32, u32, u32)> {
-        let mut comp = key.splitn(3, '-');
-        let y = comp.next()?;
-        let m = comp.next()?;
-        let d = comp.next()?;
-        Some((y.parse().ok()?, m.parse().ok()?, d.parse().ok()?))
-    }
-
-    // Takes a month kay -> "YYYY-MM".
-    // Returns a vec of commits whose commit_time match that day
-    // Folder name format: "Snaps on Aug 6, 2025".
-    pub fn day_folders(&self, month_key: &str) -> anyhow::Result<Vec<ObjectAttr>> {
+    pub fn month_commits(&self, month_key: &str) -> anyhow::Result<Vec<ObjectAttr>> {
+        // let (year, month, day) =
+        //     Self::parse_day_key(day_key).ok_or_else(|| anyhow!("Invalid input"))?;
         let (year, month) =
             Self::parse_month_key(month_key).ok_or_else(|| anyhow!("Invalid input"))?;
-
-        let mut out: Vec<ObjectAttr> = Vec::new();
-        let mut seen_days: HashSet<(i32, u32, u32)> = HashSet::new();
-
-        // self.snapshots: BTreeMap<i64 /*secs UTC*/, Vec<Oid>>; iterate newest -> oldest
-        for (&secs_utc, oids) in self.snapshots.iter().rev() {
-            for _ in oids {
-                // Do not handle the offset. Only UTC time.
-                let dt = DateTime::from_timestamp(secs_utc, 0)
-                    .unwrap_or_else(|| DateTime::from_timestamp(0, 0).unwrap());
-
-                if dt.year() != year || dt.month() != month {
-                    continue;
-                }
-
-                let day_key = (dt.year(), dt.month(), dt.day());
-                // No duplicates
-                if !seen_days.insert(day_key) {
-                    continue;
-                }
-
-                let folder_name = format!("Snaps_on_{}", dt.format("%b.%-d.%Y"));
-
-                out.push(ObjectAttr {
-                    name: folder_name,
-                    oid: git2::Oid::zero(),
-                    kind: ObjectType::Tree,
-                    filemode: 0o040000,
-                    size: 0,
-                    commit_time: git2::Time::new(secs_utc, 0),
-                });
-            }
-        }
-
-        Ok(out)
-    }
-
-    pub fn day_commits(&self, day_key: &str) -> anyhow::Result<Vec<ObjectAttr>> {
-        let (year, month, day) =
-            Self::parse_day_key(day_key).ok_or_else(|| anyhow!("Invalid input"))?;
 
         let mut out: Vec<ObjectAttr> = Vec::new();
         let mut commit_num = 0;
@@ -193,7 +144,7 @@ impl GitRepo {
                 let dt = DateTime::from_timestamp(secs_utc, 0)
                     .unwrap_or_else(|| DateTime::from_timestamp(0, 0).unwrap());
 
-                if dt.year() != year || dt.month() != month || dt.day() != day {
+                if dt.year() != year || dt.month() != month {
                     continue;
                 }
 
