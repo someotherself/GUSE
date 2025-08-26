@@ -39,6 +39,8 @@ pub struct VirtualNode {
     /// Oid of the file
     pub oid: Oid,
     /// Oids of the file history (if any)
+    ///
+    /// key: full file name, values: <entry_ino, ObjectAttr>
     pub log: HashMap<String, (u64, ObjectAttr)>,
 }
 

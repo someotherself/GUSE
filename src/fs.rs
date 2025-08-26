@@ -697,80 +697,14 @@ impl GitFs {
                 if !is_vdir {
                     ops::readdir::readdir_live_dir(self, ino)
                 } else {
-                    let repo = self.get_repo(ino)?;
-                    let mut repo = repo.lock().map_err(|_| anyhow!("Lock poisoned"))?;
-                    let mut v_node = match repo.vdir_cache.remove(&ino) {
-                        Some(o) => o,
-                        None => bail!("Oid missing"),
-                    };
-                    let origin_oid = v_node.oid;
-                    let git_objects = if v_node.log.is_empty() {
-                        drop(repo);
-                        let entry_ino = self.next_inode_checked(ino)?;
-                        let repo = self.get_repo(ino)?;
-                        let mut repo = repo.lock().map_err(|_| anyhow!("Lock poisoned"))?;
-                        let entries = repo.blob_history_objects(origin_oid)?;
-                        for entry in entries {
-                            v_node.log.insert(entry.name.clone(), (entry_ino, entry));
-                        }
-                        repo.vdir_cache.insert(ino, v_node);
-                        let node = repo.vdir_cache.get(&ino).unwrap().log.clone();
-                        drop(repo);
-                        node
-                    } else {
-                        v_node.log
-                    };
-                    let mut dir_entries = vec![];
-                    for (entry_ino, git_attr) in git_objects.values() {
-                        dir_entries.push(DirectoryEntry::new(
-                            *entry_ino,
-                            git_attr.oid,
-                            git_attr.name.clone(),
-                            FileType::RegularFile,
-                            git_attr.filemode,
-                        ));
-                    }
-                    Ok(dir_entries)
+                    ops::readdir::read_virtual_dir(self, ino)
                 }
             }
             FsOperationContext::InsideGitDir { ino } => {
                 if !is_vdir {
                     ops::readdir::readdir_git_dir(self, ino)
                 } else {
-                    let repo = self.get_repo(ino)?;
-                    let mut repo = repo.lock().map_err(|_| anyhow!("Lock poisoned"))?;
-                    let mut v_node = match repo.vdir_cache.remove(&ino) {
-                        Some(o) => o,
-                        None => bail!("Oid missing"),
-                    };
-                    let origin_oid = v_node.oid;
-                    let git_objects = if v_node.log.is_empty() {
-                        drop(repo);
-                        let entry_ino = self.next_inode_checked(ino)?;
-                        let repo = self.get_repo(ino)?;
-                        let mut repo = repo.lock().map_err(|_| anyhow!("Lock poisoned"))?;
-                        let entries = repo.blob_history_objects(origin_oid)?;
-                        for entry in entries {
-                            v_node.log.insert(entry.name.clone(), (entry_ino, entry));
-                        }
-                        repo.vdir_cache.insert(ino, v_node);
-                        let node = repo.vdir_cache.get(&ino).unwrap().log.clone();
-                        drop(repo);
-                        node
-                    } else {
-                        v_node.log
-                    };
-                    let mut dir_entries = vec![];
-                    for (entry_ino, git_attr) in git_objects.values() {
-                        dir_entries.push(DirectoryEntry::new(
-                            *entry_ino,
-                            git_attr.oid,
-                            git_attr.name.clone(),
-                            FileType::RegularFile,
-                            git_attr.filemode,
-                        ));
-                    }
-                    Ok(dir_entries)
+                    ops::readdir::read_virtual_dir(self, ino)
                 }
             }
         }

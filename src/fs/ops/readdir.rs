@@ -3,7 +3,7 @@ use std::ffi::OsString;
 use anyhow::{anyhow, bail};
 use git2::Oid;
 
-use crate::fs::{FileAttr, GitFs, REPO_SHIFT, fileattr::FileType};
+use crate::fs::{fileattr::{FileType}, FileAttr, GitFs, REPO_SHIFT};
 
 pub struct DirectoryEntry {
     pub inode: u64,
@@ -224,4 +224,46 @@ pub fn readdir_git_dir(fs: &GitFs, ino: u64) -> anyhow::Result<Vec<DirectoryEntr
     }
     fs.write_inodes_to_db(nodes)?;
     Ok(entries)
+}
+
+pub fn read_virtual_dir(fs: &GitFs, ino: u64) -> anyhow::Result<Vec<DirectoryEntry>> {
+    let repo = fs.get_repo(ino)?;
+    let mut repo = repo.lock().map_err(|_| anyhow!("Lock poisoned"))?;
+    let mut v_node = match repo.vdir_cache.remove(&ino) {
+        Some(o) => o,
+        None => bail!("Oid missing"),
+    };
+    let origin_oid = v_node.oid;
+    let git_objects = if v_node.log.is_empty() {
+        drop(repo);
+        let entry_ino = fs.next_inode_checked(ino)?;
+        let repo = fs.get_repo(ino)?;
+        let mut repo = repo.lock().map_err(|_| anyhow!("Lock poisoned"))?;
+        let entries = repo.blob_history_objects(origin_oid)?;
+        for entry in entries {
+            v_node.log.insert(entry.name.clone(), (entry_ino, entry));
+        }
+        repo.vdir_cache.insert(fs.set_vdir_bit(ino), v_node);
+        let node = repo
+            .vdir_cache
+            .get(&fs.set_vdir_bit(ino))
+            .unwrap()
+            .log
+            .clone();
+        drop(repo);
+        node
+    } else {
+        v_node.log
+    };
+        let mut dir_entries = vec![];
+    for (entry_ino, git_attr) in git_objects.values() {
+        dir_entries.push(DirectoryEntry::new(
+            *entry_ino,
+            git_attr.oid,
+            git_attr.name.clone(),
+            FileType::RegularFile,
+            git_attr.filemode,
+        ));
+    }
+    Ok(dir_entries)
 }
