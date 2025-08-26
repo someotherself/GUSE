@@ -102,9 +102,13 @@ fn test_mkdir_fetch() -> anyhow::Result<()> {
                                     dbg!(&v_dir_entries[0].inode);
                                     dbg!(v_dir_attr.inode);
 
-                                    let _lookup_attr = fs
+                                    let lookup_attr = fs
                                         .find_by_name(v_dir_attr.inode, &v_dir_entries[0].name)?
                                         .unwrap();
+                                    dbg!(lookup_attr.inode);
+
+                                    let getattr_attr = fs.getattr(v_dir_entries[0].inode)?;
+                                    dbg!(getattr_attr.inode);
 
                                     return Ok(());
                                 }
