@@ -220,7 +220,6 @@ impl GitFs {
             snapshots: BTreeMap::new(),
             res_inodes,
             vdir_cache: BTreeMap::new(),
-            vdir_map: BTreeMap::new(),
         };
 
         {
@@ -280,7 +279,6 @@ impl GitFs {
             snapshots: BTreeMap::new(),
             res_inodes: HashSet::new(),
             vdir_cache: BTreeMap::new(),
-            vdir_map: BTreeMap::new(),
         };
 
         let repo_rc = Arc::from(Mutex::from(git_repo));
@@ -315,7 +313,6 @@ impl GitFs {
             snapshots: BTreeMap::new(),
             res_inodes: HashSet::new(),
             vdir_cache: BTreeMap::new(),
-            vdir_map: BTreeMap::new(),
         })
     }
 
@@ -465,16 +462,11 @@ impl GitFs {
         let perms = 0o775;
         let st_mode = libc::S_IFDIR | perms;
 
-        let (is_vdir, inode) = if inode != ROOT_INO {
-            let repo = self.get_repo(inode)?;
-            let repo = repo.lock().map_err(|_| anyhow!("Lock poisoned"))?;
-            if let Some(real_ino) = repo.vdir_map.get(&inode) {
-                (true, *real_ino)
-            } else {
-                (false, inode)
-            }
+        let is_vdir = self.is_virtual(inode);
+        let inode = if is_vdir {
+            self.clear_vdir_bit(inode)
         } else {
-            (false, inode)
+            inode
         };
 
         if !self.exists(inode)? {
@@ -690,16 +682,11 @@ impl GitFs {
     }
 
     pub fn readdir(&self, parent: u64) -> anyhow::Result<Vec<DirectoryEntry>> {
-        let (is_vdir, parent) = if parent != ROOT_INO {
-            let repo = self.get_repo(parent)?;
-            let repo = repo.lock().map_err(|_| anyhow!("Lock poisoned"))?;
-            if let Some(real_ino) = repo.vdir_map.get(&parent) {
-                (true, *real_ino)
-            } else {
-                (false, parent)
-            }
+        let is_vdir = self.is_virtual(parent);
+        let parent = if is_vdir {
+            self.clear_vdir_bit(parent)
         } else {
-            (false, parent)
+            parent
         };
 
         let ctx = FsOperationContext::get_operation(self, parent);
@@ -856,7 +843,7 @@ impl GitFs {
             }
         }
 
-        let v_ino = self.next_inode_checked(attr.inode)?;
+        let v_ino = self.set_vdir_bit(attr.inode);
 
         {
             let mut repo = repo_arc.lock().map_err(|_| anyhow!("Lock poisoned"))?;
@@ -875,7 +862,6 @@ impl GitFs {
                     };
                     slot.insert(v_node);
                     new_attr.inode = v_ino;
-                    repo.vdir_map.insert(v_ino, attr.inode);
                 }
             };
             new_attr.kind = FileType::Directory;
