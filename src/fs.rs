@@ -36,6 +36,7 @@ mod test;
 const META_STORE: &str = "fs_meta.db";
 pub const REPO_SHIFT: u8 = 48;
 pub const ROOT_INO: u64 = 1;
+pub const VDIR_BIT: u64 = 1u64 << 47;
 
 enum FsOperationContext {
     // Is the root directory
@@ -889,6 +890,14 @@ impl GitFs {
 
 // gitfs_helpers
 impl GitFs {
+pub fn set_vdir_bit(&self, ino: u64) -> u64 {
+    ino | VDIR_BIT
+}
+
+pub fn clear_vdir_bit(&self, ino: u64) -> u64 {
+    ino & !VDIR_BIT
+}
+
     pub fn refresh_attr(&self, attr: &mut FileAttr) -> anyhow::Result<FileAttr> {
         let path = self.build_full_path(attr.inode)?;
         let metadata = path.metadata()?;
@@ -1185,6 +1194,10 @@ impl GitFs {
         let mode = self.get_mode_from_db(ino)?;
         Ok(mode == FileMode::Link)
     }
+
+pub fn is_virtual(&self, ino: u64) -> bool {
+    (ino & VDIR_BIT) != 0
+}
 
     fn get_ino_from_db(&self, parent: u64, name: &str) -> anyhow::Result<u64> {
         let conn_arc = {
