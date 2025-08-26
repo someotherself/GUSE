@@ -787,6 +787,13 @@ impl GitFs {
         let spec = NameSpec::parse(name);
         let name = if spec.is_virtual() { spec.name } else { name };
 
+        let is_vdir = self.is_virtual(parent);
+        let parent = if is_vdir {
+            self.clear_vdir_bit(parent)
+        } else {
+            parent
+        };
+
         let ctx = FsOperationContext::get_operation(self, parent);
         match ctx? {
             FsOperationContext::Root => ops::lookup::lookup_root(self, name),
