@@ -90,14 +90,24 @@ fn test_mkdir_fetch() -> anyhow::Result<()> {
                                         .ok_or_else(|| anyhow!("Invalid input"))?;
                                     assert_eq!(c.inode, c_attr.inode);
                                 }
-                                // dbg!("startig v_dir search");
-                                // if c.oid != Oid::zero() && c.kind == FileType::RegularFile {
-                                //     let name = format!("{}@", c.name);
-                                //     let v_dir_attr = fs.find_by_name(b_attr.inode, &name)?.unwrap();
-                                //     dbg!(v_dir_attr.inode);
-                                //     let v_dir_entries = fs.readdir(v_dir_attr.inode)?;
-                                //     dbg!(v_dir_entries.len());
-                                // }
+                                dbg!("startig v_dir search");
+                                if c.oid != Oid::zero() && c.kind == FileType::RegularFile {
+                                    let name = format!("{}@", c.name);
+                                    let v_dir_attr = fs.find_by_name(b_attr.inode, &name)?.unwrap();
+                                    dbg!(v_dir_attr.inode);
+                                    let v_dir_entries = fs.readdir(v_dir_attr.inode)?;
+                                    dbg!(v_dir_entries.len());
+
+                                    dbg!(&v_dir_entries[0].name);
+                                    dbg!(&v_dir_entries[0].inode);
+                                    dbg!(v_dir_attr.inode);
+
+                                    let _lookup_attr = fs
+                                        .find_by_name(v_dir_attr.inode, &v_dir_entries[0].name)?
+                                        .unwrap();
+
+                                    return Ok(());
+                                }
                             }
                         }
                     }
@@ -213,11 +223,13 @@ fn test_mkdir_normal() -> anyhow::Result<()> {
             assert!(attr_vdir.is_ok());
             let attr_vdir = attr_vdir?;
             let attr_vdir = attr_vdir.unwrap();
+            assert!(fs.is_virtual(attr_vdir.inode));
 
             dbg!(attr_real_file.unwrap().inode);
             dbg!(attr_vdir.inode);
 
             dbg!(attr_real_file.unwrap().kind);
+            assert!(!fs.is_virtual(attr_real_file.unwrap().inode));
             dbg!(attr_vdir.kind);
 
             let attr_vdir_getattr = fs.getattr(attr_vdir.inode)?;
