@@ -454,8 +454,6 @@ impl GitRepo {
         Ok(entries)
     }
 
-    // The FileAttr for the snap folder will contain the commit id instead of tree
-    // This makes walking and getting info for the Fileattr easier
     pub fn attr_from_snap(&self, commit_oid: Oid, name: &str) -> anyhow::Result<ObjectAttr> {
         let commit = self.inner.find_commit(commit_oid)?;
         let name = name.to_string();
@@ -475,198 +473,239 @@ impl GitRepo {
         })
     }
 
-    pub fn get_object_log(&self, blob_oid: Oid) -> anyhow::Result<Vec<ObjectAttr>> {
-        let mut objects: Vec<ObjectAttr> = vec![];
-        for (idx, &oid) in self.blob_history_oids(blob_oid)?.iter().enumerate() {
-            let name = format!("Snap{idx:03}_{oid:.7}");
-            let commit_time = Time::new(0, 0);
-            objects.push(ObjectAttr {
-                name,
-                filemode: 0o100644,
-                kind: ObjectType::Blob,
-                oid,
-                size: 0,
-                commit_time,
-            });
-        }
-        Ok(objects)
-    }
-
-    pub fn blob_history_oids(&self, blob_oid: Oid) -> anyhow::Result<Vec<Oid>> {
+    pub fn blob_history_objects(&self, target_blob: Oid) -> anyhow::Result<Vec<ObjectAttr>> {
         let repo = &self.inner;
-        dbg!("Starting history search");
 
-        // Start from the newest commit (reachable from HEAD) that contains the blob.
         let mut commit = self
-            .find_newest_commit_containing_blob(blob_oid)
-            .context("Blob not found in any reachable commit from HEAD")?;
-        dbg!("1");
+            .find_newest_commit_containing_blob_fp(target_blob, 50_000)
+            .context("Blob not found (first-parent scan)")?;
 
-        let mut history = Vec::new();
-        dbg!("2");
-
-        // Determine the initial path of the blob in the starting commit.
         let mut current_path = self
-            .find_path_of_blob_in_tree(&commit.tree()?, blob_oid)
-            .ok_or_else(|| anyhow!("Could not determine path for blob at start commit"))?;
+            .find_path_of_blob_in_tree(&commit.tree()?, target_blob)
+            .ok_or_else(|| anyhow!("Could not determine initial path for blob"))?;
 
-        // Guard against any weird cycles (shouldn't happen in normal Git history).
-        let mut seen: HashSet<Oid> = HashSet::new();
+        const MAX_STEPS: usize = 200_000;
+        let mut steps = 0usize;
+        let mut out = Vec::new();
+        let mut last_pushed_oid: Option<Oid> = None;
 
         loop {
-            if !seen.insert(commit.id()) {
-                // Cycle detected; bail out safely.
-                break;
+            steps += 1;
+            if steps > MAX_STEPS {
+                bail!(
+                    "Aborting blob history: exceeded {MAX_STEPS} steps (possible pathological history)"
+                );
             }
-
             let tree = commit.tree()?;
-            if let Some(oid_here) = self.get_blob_oid_at_path(&tree, &current_path) {
-                println!("Pushing {} to history", oid_here);
-                history.push(oid_here);
-            }
-            dbg!("3");
-
-            let parent_count = commit.parent_count();
-            if parent_count == 0 {
+            if let Some(attr) =
+                self.object_attr_for_path_in_tree(repo, &tree, &current_path, commit.time())?
+            {
+                if last_pushed_oid != Some(attr.oid) {
+                    last_pushed_oid = Some(attr.oid);
+                    out.push(attr);
+                }
+            } else {
                 break;
             }
-            dbg!("4");
 
-            // Try all parents; advance to one that preserves the file
-            // either at the same path or via rename/copy detection.
+            let pcount = commit.parent_count();
+            if pcount == 0 {
+                break;
+            }
+
+            let parent0 = commit.parent(0)?;
+            let parent0_tree = parent0.tree()?;
+
+            if self
+                .get_blob_oid_at_path(&parent0_tree, &current_path)
+                .is_some()
+            {
+                commit = parent0;
+                continue;
+            }
+
+            if let Some(old_path) =
+                self.find_renamed_parent_path(&parent0_tree, &tree, &current_path)?
+            {
+                current_path = old_path;
+                commit = parent0;
+                continue;
+            }
+
             let mut advanced = false;
+            for i in 1..pcount {
+                let p = commit.parent(i)?;
+                let pt = p.tree()?;
 
-            for pidx in 0..parent_count {
-                let parent = commit.parent(pidx)?;
-                let parent_tree = parent.tree()?;
-                dbg!("5");
-
-                // 1) Same path exists in this parent?
-                if self
-                    .get_blob_oid_at_path(&parent_tree, &current_path)
-                    .is_some()
-                {
-                    commit = parent;
+                if self.get_blob_oid_at_path(&pt, &current_path).is_some() {
+                    commit = p;
                     advanced = true;
                     break;
                 }
-
-                // 2) Try rename/copy detection for this parent.
-                let mut diff_opts = DiffOptions::new();
-                diff_opts.include_typechange(true);
-
-                let mut diff =
-                    repo.diff_tree_to_tree(Some(&parent_tree), Some(&tree), Some(&mut diff_opts))?;
-
-                let mut find_opts = DiffFindOptions::new();
-                find_opts.renames(true).renames_from_rewrites(true);
-                // Optional: tweak sensitivity if needed.
-                // find_opts.rename_threshold(40);
-                diff.find_similar(Some(&mut find_opts))?;
-
-                let mut parent_path_candidate = None;
-
-                for d in diff.deltas() {
-                    let newp = d.new_file().path();
-                    let oldp = d.old_file().path();
-
-                    if let (Some(newp), Some(oldp)) = (newp, oldp)
-                        && newp == std::path::Path::new(&current_path)
-                    {
-                        match d.status() {
-                            Delta::Renamed
-                            | Delta::Copied
-                            | Delta::Modified
-                            | Delta::Typechange
-                            | Delta::Added => {
-                                parent_path_candidate = Some(oldp.to_path_buf());
-                                break;
-                            }
-                            _ => {}
-                        }
-                    }
-                }
-
-                if let Some(parent_path) = parent_path_candidate
-                    && self
-                        .get_blob_oid_at_path(&parent_tree, parent_path.to_str().unwrap())
-                        .is_some()
-                {
-                    current_path = parent_path.to_string_lossy().into_owned();
-                    commit = parent;
+                if let Some(old_path) = self.find_renamed_parent_path(&pt, &tree, &current_path)? {
+                    current_path = old_path;
+                    commit = p;
                     advanced = true;
                     break;
                 }
             }
 
             if !advanced {
-                dbg!(history.len());
                 break;
             }
         }
 
-        Ok(history)
+        Ok(out)
     }
 
-    fn find_newest_commit_containing_blob(
+    fn object_attr_for_path_in_tree(
         &self,
-        blob_oid: Oid,
-    ) -> anyhow::Result<git2::Commit<'_>> {
-        let repo = &self.inner;
-        let mut walk = repo.revwalk()?;
-        walk.push_head()?;
-        walk.set_sorting(git2::Sort::TOPOLOGICAL | git2::Sort::TIME)?;
+        repo: &Repository,
+        tree: &Tree,
+        path: &str,
+        commit_time: Time,
+    ) -> anyhow::Result<Option<ObjectAttr>> {
+        let entry = match tree.get_path(std::path::Path::new(path)) {
+            Ok(e) => e,
+            Err(_) => return Ok(None),
+        };
+        if entry.kind() != Some(ObjectType::Blob) {
+            return Ok(None);
+        }
+        let oid = entry.id();
+        let blob = repo.find_blob(oid)?;
+        let filemode = entry.filemode() as u32;
+        let name = std::path::Path::new(path)
+            .file_name()
+            .and_then(|s| s.to_str())
+            .unwrap_or("")
+            .to_string();
 
-        for id in walk {
-            let id = id?;
-            let commit = repo.find_commit(id)?;
-            let tree = commit.tree()?;
-            if self.tree_contains_blob(&tree, blob_oid) {
-                return Ok(commit);
+        Ok(Some(ObjectAttr {
+            name,
+            oid,
+            kind: ObjectType::Blob,
+            filemode,
+            size: blob.size() as u64,
+            commit_time,
+        }))
+    }
+
+    fn find_renamed_parent_path(
+        &self,
+        parent_tree: &Tree,
+        tree: &Tree,
+        current_path: &str,
+    ) -> anyhow::Result<Option<String>> {
+        let repo = &self.inner;
+
+        let mut diff_opts = DiffOptions::new();
+        diff_opts.include_typechange(true);
+        // Do NOT pathspec-limit here; it can hide the "old" side needed for rename pairing.
+
+        let mut diff =
+            repo.diff_tree_to_tree(Some(parent_tree), Some(tree), Some(&mut diff_opts))?;
+
+        let mut find_opts = DiffFindOptions::new();
+        find_opts
+            .renames(true)
+            .renames_from_rewrites(true)
+            .copies(true);
+
+        diff.find_similar(Some(&mut find_opts))?;
+
+        for d in diff.deltas() {
+            let newp = d.new_file().path();
+            let oldp = d.old_file().path();
+
+            if let (Some(np), Some(op)) = (newp, oldp)
+                && np == std::path::Path::new(current_path)
+            {
+                match d.status() {
+                    Delta::Renamed
+                    | Delta::Copied
+                    | Delta::Typechange
+                    | Delta::Modified
+                    | Delta::Added => {
+                        return Ok(Some(op.to_string_lossy().into_owned()));
+                    }
+                    _ => {}
+                }
             }
         }
-        bail!("Blob not found in any commit reachable from HEAD");
+
+        Ok(None)
+    }
+
+    fn find_newest_commit_containing_blob_fp(
+        &self,
+        blob_oid: Oid,
+        max_steps: usize,
+    ) -> anyhow::Result<Commit<'_>> {
+        let repo = &self.inner;
+        let mut commit = repo.head()?.peel_to_commit()?;
+        let mut steps = 0usize;
+
+        let mut tree_hit: HashMap<Oid, bool> = HashMap::new();
+
+        loop {
+            steps += 1;
+            if steps > max_steps {
+                bail!("find_newest_commit_containing_blob_fp: exceeded {max_steps} steps");
+            }
+
+            let tid = commit.tree_id();
+            let contains = *tree_hit.entry(tid).or_insert_with(|| {
+                let tree = repo.find_tree(tid).expect("missing tree");
+                self.tree_contains_blob(&tree, blob_oid)
+            });
+
+            if contains {
+                return Ok(commit);
+            }
+
+            if commit.parent_count() == 0 {
+                bail!("Blob not found on first-parent chain from HEAD");
+            }
+            commit = commit.parent(0)?;
+        }
     }
 
     fn tree_contains_blob(&self, tree: &Tree, blob_oid: Oid) -> bool {
         let mut found = false;
-        let _ = tree.walk(TreeWalkMode::PreOrder, |_, entry| {
-            if let Some(id) = entry.id().to_owned().into()
-                && id == blob_oid
-                && entry.kind() == Some(git2::ObjectType::Blob)
-            {
+        let _ = tree.walk(git2::TreeWalkMode::PreOrder, |_, entry| {
+            if entry.kind() == Some(ObjectType::Blob) && entry.id() == blob_oid {
                 found = true;
-                return TreeWalkResult::Abort;
+                return git2::TreeWalkResult::Abort;
             }
-            TreeWalkResult::Ok
+            git2::TreeWalkResult::Ok
         });
         found
     }
 
     fn find_path_of_blob_in_tree(&self, tree: &Tree, blob_oid: Oid) -> Option<String> {
         let mut result: Option<String> = None;
-        let _ = tree.walk(TreeWalkMode::PreOrder, |root, entry| {
-            if entry.kind() == Some(git2::ObjectType::Blob) && entry.id() == blob_oid {
+        let _ = tree.walk(git2::TreeWalkMode::PreOrder, |root, entry| {
+            if entry.kind() == Some(ObjectType::Blob) && entry.id() == blob_oid {
                 let name = entry.name().unwrap_or_default();
                 let mut path = String::new();
                 path.push_str(root);
                 path.push_str(name);
-                // Strip leading "./" if present (git2 sometimes prefixes roots)
-                if let Some(stripped) = path.strip_prefix("./") {
-                    result = Some(stripped.to_string());
+                if let Some(s) = path.strip_prefix("./") {
+                    result = Some(s.to_string());
                 } else {
                     result = Some(path);
                 }
-                return TreeWalkResult::Abort;
+                return git2::TreeWalkResult::Abort;
             }
-            TreeWalkResult::Ok
+            git2::TreeWalkResult::Ok
         });
         result
     }
 
     fn get_blob_oid_at_path(&self, tree: &Tree, path: &str) -> Option<Oid> {
         let entry = tree.get_path(std::path::Path::new(path)).ok()?;
-        if entry.kind() == Some(git2::ObjectType::Blob) {
+        if entry.kind() == Some(ObjectType::Blob) {
             Some(entry.id())
         } else {
             None

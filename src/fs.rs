@@ -705,7 +705,7 @@ impl GitFs {
                     };
                     let origin_oid = v_node.oid;
                     let git_objects = if v_node.log.is_empty() {
-                        let entries = repo.get_object_log(origin_oid)?;
+                        let entries = repo.blob_history_objects(origin_oid)?;
                         v_node.log.append(&mut entries.clone());
                         repo.vdir_cache.insert(ino, v_node);
                         &repo.vdir_cache.get(&ino).unwrap().log
@@ -738,13 +738,14 @@ impl GitFs {
                     };
                     let origin_oid = v_node.oid;
                     let git_objects = if v_node.log.is_empty() {
-                        let entries = repo.get_object_log(origin_oid)?;
+                        let entries = repo.blob_history_objects(origin_oid)?;
                         v_node.log.append(&mut entries.clone());
                         repo.vdir_cache.insert(ino, v_node);
-                        &repo.vdir_cache.get(&ino).unwrap().log
+                        &repo.vdir_cache.get(&ino).unwrap().log.clone()
                     } else {
                         &v_node.log
                     };
+                    drop(repo);
                     let mut dir_entries = vec![];
                     for git_attr in git_objects {
                         let entry_ino = self.next_inode_checked(ino)?;
