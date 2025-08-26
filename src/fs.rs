@@ -1079,12 +1079,15 @@ pub fn clear_vdir_bit(&self, ino: u64) -> u64 {
         self.current_handle.fetch_add(1, Ordering::SeqCst)
     }
 
-    // TODO: Check if not over 32767
     fn next_repo_id(&self) -> u16 {
         match self.repos_list.keys().next_back() {
-            Some(&i) => i
-                .checked_add(1)
-                .expect("Congrats. Repo ids have overflowed a u16."),
+            Some(&i) => {
+                let next = i
+                    .checked_add(1)
+                    .expect("Congrats. Repo ids have overflowed a u16.");
+                assert!(next <= 32767);
+                next
+            }
             None => 1,
         }
     }
