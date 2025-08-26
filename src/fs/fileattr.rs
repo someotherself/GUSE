@@ -41,7 +41,6 @@ pub enum FileType {
     RegularFile,
     Directory,
     Symlink,
-    VirtualDir { ino: u64 },
 }
 
 impl FileType {
