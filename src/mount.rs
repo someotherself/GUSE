@@ -147,7 +147,7 @@ impl fuser::Filesystem for GitFsAdapter {
         let fs = match fs_arc.lock() {
             Ok(fs) => fs,
             Err(e) => {
-                eprintln!("fs mutex poisoned: {e}");
+                error!(e = %e);
                 return reply.error(EIO);
             }
         };
@@ -193,7 +193,7 @@ impl fuser::Filesystem for GitFsAdapter {
         let fs = match fs_arc.lock() {
             Ok(fs) => fs,
             Err(e) => {
-                eprintln!("fs mutex poisoned: {e}");
+                error!(e = %e);
                 return reply.error(EIO);
             }
         };
@@ -253,7 +253,7 @@ impl fuser::Filesystem for GitFsAdapter {
         let mut fs = match fs_arc.lock() {
             Ok(fs) => fs,
             Err(e) => {
-                eprintln!("fs mutex poisoned: {e}");
+                error!(e = %e);
                 return reply.error(EIO);
             }
         };
@@ -278,7 +278,7 @@ impl fuser::Filesystem for GitFsAdapter {
         let fs = match fs_arc.lock() {
             Ok(fs) => fs,
             Err(e) => {
-                eprintln!("fs mutex poisoned: {e}");
+                error!(e = %e);
                 return reply.error(EIO);
             }
         };
@@ -303,7 +303,7 @@ impl fuser::Filesystem for GitFsAdapter {
         let fs = match fs_arc.lock() {
             Ok(fs) => fs,
             Err(e) => {
-                eprintln!("fs mutex poisoned: {e}");
+                error!(e = %e);
                 return reply.error(EIO);
             }
         };
@@ -331,7 +331,7 @@ impl fuser::Filesystem for GitFsAdapter {
         let fs = match fs_arc.lock() {
             Ok(fs) => fs,
             Err(e) => {
-                eprintln!("fs mutex poisoned: {e}");
+                error!(e = %e);
                 return reply.error(EIO);
             }
         };
@@ -350,7 +350,7 @@ impl fuser::Filesystem for GitFsAdapter {
         let fs = match fs_arc.lock() {
             Ok(fs) => fs,
             Err(e) => {
-                eprintln!("fs mutex poisoned: {e}");
+                error!(e = %e);
                 return reply.error(EIO);
             }
         };
@@ -394,7 +394,7 @@ impl fuser::Filesystem for GitFsAdapter {
         let fs: std::sync::MutexGuard<'_, GitFs> = match fs_arc.lock() {
             Ok(fs) => fs,
             Err(e) => {
-                eprintln!("fs mutex poisoned: {e}");
+                error!(e = %e);
                 return reply.error(EIO);
             }
         };
@@ -451,7 +451,7 @@ impl fuser::Filesystem for GitFsAdapter {
         let fs: std::sync::MutexGuard<'_, GitFs> = match fs_arc.lock() {
             Ok(fs) => fs,
             Err(e) => {
-                eprintln!("fs mutex poisoned: {e}");
+                error!(e = %e);
                 return reply.error(EIO);
             }
         };
@@ -545,7 +545,7 @@ impl fuser::Filesystem for GitFsAdapter {
         let fs = match fs_arc.lock() {
             Ok(fs) => fs,
             Err(e) => {
-                eprintln!("fs mutex poisoned: {e}");
+                error!(e = %e);
                 return reply.error(EIO);
             }
         };
@@ -576,7 +576,7 @@ impl fuser::Filesystem for GitFsAdapter {
         let fs = match fs_arc.lock() {
             Ok(fs) => fs,
             Err(e) => {
-                eprintln!("fs mutex poisoned: {e}");
+                error!(e = %e);
                 return reply.error(EIO);
             }
         };
@@ -614,7 +614,7 @@ impl fuser::Filesystem for GitFsAdapter {
         let fs = match fs_arc.lock() {
             Ok(fs) => fs,
             Err(e) => {
-                eprintln!("fs mutex poisoned: {e}");
+                error!(e = %e);
                 return reply.error(EIO);
             }
         };
@@ -646,7 +646,7 @@ impl fuser::Filesystem for GitFsAdapter {
         let res = match fs_arc.lock() {
             Ok(fs) => fs.release(fh),
             Err(e) => {
-                eprintln!("fs mutex poisoned: {e}");
+                error!(e = %e);
                 return reply.error(EIO);
             }
         };
@@ -673,7 +673,7 @@ impl fuser::Filesystem for GitFsAdapter {
         let fs = match fs_arc.lock() {
             Ok(g) => g,
             Err(e) => {
-                eprintln!("fs mutex poisoned: {e}");
+                error!(e = %e);
                 return reply.error(libc::EIO);
             }
         };
@@ -707,7 +707,7 @@ impl fuser::Filesystem for GitFsAdapter {
         let fs = match fs_arc.lock() {
             Ok(fs) => fs,
             Err(e) => {
-                eprintln!("fs mutex poisoned: {e}");
+                error!(e = %e);
                 return reply.error(EIO);
             }
         };
