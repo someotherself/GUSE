@@ -3,7 +3,7 @@ use std::ffi::OsString;
 use anyhow::{anyhow, bail};
 use git2::Oid;
 
-use crate::fs::{fileattr::{FileType}, FileAttr, GitFs, REPO_SHIFT};
+use crate::fs::{FileAttr, GitFs, REPO_SHIFT, fileattr::FileType};
 
 pub struct DirectoryEntry {
     pub inode: u64,
@@ -255,7 +255,7 @@ pub fn read_virtual_dir(fs: &GitFs, ino: u64) -> anyhow::Result<Vec<DirectoryEnt
     } else {
         v_node.log
     };
-        let mut dir_entries = vec![];
+    let mut dir_entries = vec![];
     for (entry_ino, git_attr) in git_objects.values() {
         dir_entries.push(DirectoryEntry::new(
             *entry_ino,
