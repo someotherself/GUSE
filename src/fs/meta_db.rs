@@ -3,7 +3,6 @@ use std::{collections::HashSet, path::PathBuf};
 use anyhow::{anyhow, bail};
 use git2::Oid;
 use rusqlite::{Connection, OptionalExtension, Transaction, params};
-use tracing::info;
 
 use crate::fs::{FileAttr, GitFs, ROOT_INO};
 
@@ -159,7 +158,6 @@ impl MetaDb {
 
     pub fn change_repo_id(&mut self, repo_id: u16) -> anyhow::Result<()> {
         let tx = self.conn.transaction()?;
-        info!("4");
 
         let repo_ino = GitFs::repo_id_to_ino(repo_id);
         let low48_mask: i64 = 0x0000_FFFF_FFFF_FFFFu64 as i64;

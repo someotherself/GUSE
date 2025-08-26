@@ -794,7 +794,6 @@ impl GitFs {
             bail!(format!("Parent {} does not exist", parent));
         }
         if !self.is_dir(parent)? {
-            info!("Not a dir -2 ");
             bail!(format!("Parent {} is not a directory", parent));
         }
 
@@ -813,16 +812,13 @@ impl GitFs {
         let ctx = FsOperationContext::get_operation(self, parent);
         match ctx? {
             FsOperationContext::Root => {
-                info!("V_dir is in root");
                 ops::lookup::lookup_root(self, name)
             }
             FsOperationContext::RepoDir { ino } => {
-                info!("V_dir is in repo");
                 ops::lookup::lookup_repo(self, ino, name)
             }
             FsOperationContext::InsideLiveDir { ino } => {
                 if par_is_vdir {
-                    info!("live_dir_Parent is a v_dir");
                     let repo = self.get_repo(ino)?;
                     let Ok(repo) = repo.lock() else {
                         return Ok(None);
@@ -841,7 +837,6 @@ impl GitFs {
                     attr.perm = 0o555;
                     return Ok(Some(attr));
                 };
-                info!("live_dir_Parent not a v_dir");
 
                 let attr = match ops::lookup::lookup_live(self, ino, name)? {
                     Some(attr) => attr,
@@ -855,7 +850,6 @@ impl GitFs {
             }
             FsOperationContext::InsideGitDir { ino } => {
                 if par_is_vdir {
-                    info!("git_dir_Parent is a v_dir");
                     let repo = self.get_repo(ino)?;
                     let Ok(repo) = repo.lock() else {
                         return Ok(None);
@@ -874,7 +868,6 @@ impl GitFs {
                     attr.perm = 0o555;
                     return Ok(Some(attr));
                 };
-                info!("git_dir_Parent not a v_dir");
                 let attr = match ops::lookup::lookup_git(self, ino, name)? {
                     Some(attr) => attr,
                     None => return Ok(None),
