@@ -270,7 +270,7 @@ impl GitFs {
 
         let connection = Arc::from(Mutex::from(connection));
 
-        let git_repo = GitRepo {
+        let mut git_repo = GitRepo {
             connection,
             repo_dir: repo_name.to_owned(),
             repo_id,
@@ -281,6 +281,7 @@ impl GitFs {
             vdir_cache: BTreeMap::new(),
         };
 
+        git_repo.res_inodes.insert(live_ino);
         let repo_rc = Arc::from(Mutex::from(git_repo));
         self.repos_list.insert(repo_id, repo_rc.clone());
         Ok(repo_rc)
