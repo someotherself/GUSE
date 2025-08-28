@@ -1010,18 +1010,17 @@ impl GitFs {
     }
 
     fn next_inode_checked(&self, parent: u64) -> anyhow::Result<u64> {
-    let repo_arc = self.get_repo(parent)?;
-    let mut repo = repo_arc.lock().map_err(|_| anyhow!("Lock poisoned"))?;
+        let repo_arc = self.get_repo(parent)?;
+        let mut repo = repo_arc.lock().map_err(|_| anyhow!("Lock poisoned"))?;
 
-    loop {
-        let inode = self.next_inode_raw(parent)?;
+        loop {
+            let inode = self.next_inode_raw(parent)?;
 
-        if repo.res_inodes.insert(inode) {
-            info!("Issuing ino {inode}");
-            return Ok(inode);
+            if repo.res_inodes.insert(inode) {
+                info!("Issuing ino {inode}");
+                return Ok(inode);
+            }
         }
-    }
-
     }
 
     fn next_inode_raw(&self, parent: u64) -> anyhow::Result<u64> {
