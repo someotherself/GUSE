@@ -152,7 +152,8 @@ impl fuser::Filesystem for GitFsAdapter {
             }
         };
         let attr_result = fs.getattr(parent);
-        if let Ok(parent_attrs) = attr_result {
+        match attr_result {
+            Ok(parent_attrs) => {
             if name == OsStr::new(".") {
                 reply.entry(&TTL, &parent_attrs.into(), 0);
                 return;
@@ -167,10 +168,14 @@ impl fuser::Filesystem for GitFsAdapter {
                 let parent_attr = fs.getattr(parent_ino).unwrap();
                 return reply.entry(&TTL, &parent_attr.into(), 0);
             }
-        } else {
-            reply.error(ENOENT);
-            return;
-        }
+            },
+            Err(e) => {
+                error!(e = %e);
+                reply.error(ENOENT);
+                return;
+            }
+        };
+
         match fs.find_by_name(parent, name.to_str().unwrap()) {
             Ok(Some(attr)) => {
                 let ino = attr.inode;
