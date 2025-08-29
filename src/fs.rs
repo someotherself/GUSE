@@ -18,7 +18,7 @@ use std::{
 use anyhow::{Context, anyhow, bail};
 use git2::{FileMode, ObjectType, Oid, Repository};
 use rusqlite::{Connection, OptionalExtension, params};
-use tracing::info;
+use tracing::{debug, info};
 
 use crate::fs::fileattr::{CreateFileAttr, FileAttr, FileType, ObjectAttr, build_attr_dir};
 use crate::fs::meta_db::MetaDb;
@@ -489,16 +489,32 @@ impl GitFs {
         if self.is_dir(ino)? {
             bail!("Target is a directory");
         }
+
+        let parent = self.get_parent_ino(ino)?;
+        let par_mode = self.get_mode_from_db(parent)?;
+        let parent_kind = match par_mode {
+            git2::FileMode::Tree | git2::FileMode::Commit => FileType::Directory,
+            _ => FileType::RegularFile,
+        };
+
         let ctx = FsOperationContext::get_operation(self, ino);
         match ctx? {
             FsOperationContext::Root => bail!("Target is a directory"),
             FsOperationContext::RepoDir { ino: _ } => bail!("Target is a directory"),
-            FsOperationContext::InsideLiveDir { ino: _ } => {
-                ops::open::open_live(self, ino, read, write, truncate)
-            }
-            FsOperationContext::InsideGitDir { ino: _ } => {
-                ops::open::open_git(self, ino, read, write, truncate)
-            }
+            FsOperationContext::InsideLiveDir { ino: _ } => match parent_kind {
+                FileType::Directory => ops::open::open_live(self, ino, read, write, truncate),
+                FileType::RegularFile => {
+                    ops::open::open_vdir(self, ino, read, write, truncate, parent)
+                }
+                _ => bail!("Invalid filemode"),
+            },
+            FsOperationContext::InsideGitDir { ino: _ } => match parent_kind {
+                FileType::Directory => ops::open::open_git(self, ino, read, write, truncate),
+                FileType::RegularFile => {
+                    ops::open::open_vdir(self, ino, read, write, truncate, parent)
+                }
+                _ => bail!("Invalid filemode"),
+            },
         }
     }
 
@@ -894,7 +910,7 @@ impl GitFs {
                     Inodes::VirtualIno(_) => {
                         debug!("Looking up {} {}", parent.to_virt().0, name);
                         ops::lookup::lookup_vdir(self, parent.to_virt(), name)
-                    },
+                    }
                 }
             }
         }

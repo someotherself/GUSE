@@ -1,7 +1,8 @@
 #![allow(unused_variables)]
 use std::{fs::OpenOptions, sync::Arc};
 
-use anyhow::anyhow;
+use anyhow::{anyhow, bail};
+use git2::Oid;
 
 use crate::fs::{GitFs, Handle, SourceTypes};
 
@@ -40,6 +41,33 @@ pub fn open_git(
     truncate: bool,
 ) -> anyhow::Result<u64> {
     let oid = fs.get_oid_from_db(ino)?;
+    open_blob(fs, oid, ino, read)
+}
+
+pub fn open_vdir(
+    fs: &GitFs,
+    ino: u64,
+    read: bool,
+    write: bool,
+    truncate: bool,
+    parent: u64,
+) -> anyhow::Result<u64> {
+    let repo = fs.get_repo(ino)?;
+    let repo = repo.lock().map_err(|_| anyhow!("Lock poisoned"))?;
+    let log = match repo.vdir_cache.get(&fs.set_vdir_bit(parent)) {
+        Some(v_node) => &v_node.log,
+        None => bail!("File not found"),
+    };
+    let name = fs.get_name_from_db(ino)?;
+    let oid = log
+        .get(&name)
+        .ok_or_else(|| anyhow!("File not found"))?
+        .1
+        .oid;
+    open_blob(fs, oid, ino, read)
+}
+
+fn open_blob(fs: &GitFs, oid: Oid, ino: u64, read: bool) -> anyhow::Result<u64> {
     let buf = {
         let repo = fs.get_repo(ino)?;
         let repo = repo.lock().map_err(|_| anyhow!("Lock poisoned"))?;
