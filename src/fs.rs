@@ -798,31 +798,20 @@ impl GitFs {
     }
 
     pub fn readdir(&self, parent: u64) -> anyhow::Result<Vec<DirectoryEntry>> {
-        let is_vdir = self.is_virtual(parent);
-        let parent = if is_vdir {
-            self.clear_vdir_bit(parent)
-        } else {
-            parent
-        };
+        let parent: InodeTypes = parent.into();
 
-        let ctx = FsOperationContext::get_operation(self, parent);
+        let ctx = FsOperationContext::get_operation(self, parent.to_u64_n());
         match ctx? {
             FsOperationContext::Root => ops::readdir::readdir_root_dir(self),
             FsOperationContext::RepoDir { ino } => ops::readdir::readdir_repo_dir(self, ino),
-            FsOperationContext::InsideLiveDir { ino } => {
-                if !is_vdir {
-                    ops::readdir::readdir_live_dir(self, ino)
-                } else {
-                    ops::readdir::read_virtual_dir(self, ino)
-                }
-            }
-            FsOperationContext::InsideGitDir { ino } => {
-                if !is_vdir {
-                    ops::readdir::readdir_git_dir(self, ino)
-                } else {
-                    ops::readdir::read_virtual_dir(self, ino)
-                }
-            }
+            FsOperationContext::InsideLiveDir { ino: _ } => match parent {
+                InodeTypes::NormalIno(_) => ops::readdir::readdir_live_dir(self, parent.to_norm()),
+                InodeTypes::VirtualIno(_) => ops::readdir::read_virtual_dir(self, parent.to_virt()),
+            },
+            FsOperationContext::InsideGitDir { ino: _ } => match parent {
+                InodeTypes::NormalIno(_) => ops::readdir::readdir_git_dir(self, parent.to_norm()),
+                InodeTypes::VirtualIno(_) => ops::readdir::read_virtual_dir(self, parent.to_virt()),
+            },
         }
     }
 

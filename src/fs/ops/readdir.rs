@@ -3,7 +3,10 @@ use std::ffi::OsString;
 use anyhow::{anyhow, bail};
 use git2::Oid;
 
-use crate::fs::{FileAttr, GitFs, REPO_SHIFT, fileattr::FileType};
+use crate::fs::{
+    FileAttr, GitFs, NormalIno, REPO_SHIFT, VirtualIno,
+    fileattr::{FileType, ObjectAttr},
+};
 
 pub struct DirectoryEntry {
     pub inode: u64,
@@ -114,7 +117,8 @@ pub fn readdir_repo_dir(fs: &GitFs, ino: u64) -> anyhow::Result<Vec<DirectoryEnt
     Ok(entries)
 }
 
-pub fn readdir_live_dir(fs: &GitFs, ino: u64) -> anyhow::Result<Vec<DirectoryEntry>> {
+pub fn readdir_live_dir(fs: &GitFs, ino: NormalIno) -> anyhow::Result<Vec<DirectoryEntry>> {
+    let ino = u64::from(ino);
     let ignore_list = [OsString::from(".git"), OsString::from("fs_meta.db")];
     let path = fs.build_full_path(ino)?;
     let mut entries: Vec<DirectoryEntry> = vec![];
@@ -168,9 +172,10 @@ fn classify_inode(fs: &GitFs, ino: u64) -> anyhow::Result<DirCase> {
     Ok(DirCase::Commit { oid: attr.oid })
 }
 
-pub fn readdir_git_dir(fs: &GitFs, ino: u64) -> anyhow::Result<Vec<DirectoryEntry>> {
-    let repo = fs.get_repo(ino)?;
+pub fn readdir_git_dir(fs: &GitFs, ino: NormalIno) -> anyhow::Result<Vec<DirectoryEntry>> {
+    let ino = u64::from(ino);
 
+    let repo = fs.get_repo(ino)?;
     let git_objects = match classify_inode(fs, ino)? {
         DirCase::Month { year, month } => {
             let repo = repo.lock().map_err(|_| anyhow!("Lock poisoned"))?;
@@ -226,23 +231,31 @@ pub fn readdir_git_dir(fs: &GitFs, ino: u64) -> anyhow::Result<Vec<DirectoryEntr
     Ok(entries)
 }
 
-pub fn read_virtual_dir(fs: &GitFs, ino: u64) -> anyhow::Result<Vec<DirectoryEntry>> {
+fn get_log_entries(fs: &GitFs, ino: u64, oid: Oid) -> anyhow::Result<Vec<ObjectAttr>> {
+    let repo = fs.get_repo(ino)?;
+    let repo = repo.lock().map_err(|_| anyhow!("Lock poisoned"))?;
+    repo.blob_history_objects(oid)
+}
+
+pub fn read_virtual_dir(fs: &GitFs, ino: VirtualIno) -> anyhow::Result<Vec<DirectoryEntry>> {
+    let ino = u64::from(ino);
     let repo = fs.get_repo(ino)?;
     let mut repo = repo.lock().map_err(|_| anyhow!("Lock poisoned"))?;
     let mut v_node = match repo.vdir_cache.remove(&fs.set_vdir_bit(ino)) {
         Some(o) => o,
         None => bail!("Oid missing"),
     };
+    drop(repo);
     let origin_oid = v_node.oid;
     let git_objects = if v_node.log.is_empty() {
-        drop(repo);
-        let entry_ino = fs.next_inode_checked(ino)?;
+        let entries = get_log_entries(fs, ino, origin_oid)?;
+        for e in entries {
+            let new_ino = fs.next_inode_checked(ino)?;
+            v_node.log.insert(e.name.clone(), (new_ino, e));
+        }
+
         let repo = fs.get_repo(ino)?;
         let mut repo = repo.lock().map_err(|_| anyhow!("Lock poisoned"))?;
-        let entries = repo.blob_history_objects(origin_oid)?;
-        for entry in entries {
-            v_node.log.insert(entry.name.clone(), (entry_ino, entry));
-        }
         repo.vdir_cache.insert(fs.set_vdir_bit(ino), v_node);
         let node = repo
             .vdir_cache
