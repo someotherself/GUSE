@@ -884,13 +884,17 @@ impl GitFs {
                 }
                 match parent {
                     Inodes::NormalIno(_) => {
+                        debug!("Looking up {} {}", parent.to_norm().0, name);
                         let attr = match ops::lookup::lookup_git(self, parent.to_norm(), name)? {
                             Some(attr) => attr,
                             None => return Ok(None),
                         };
                         Ok(Some(attr))
                     }
-                    Inodes::VirtualIno(_) => ops::lookup::lookup_vdir(self, parent.to_virt(), name),
+                    Inodes::VirtualIno(_) => {
+                        debug!("Looking up {} {}", parent.to_virt().0, name);
+                        ops::lookup::lookup_vdir(self, parent.to_virt(), name)
+                    },
                 }
             }
         }
