@@ -201,6 +201,7 @@ impl fuser::Filesystem for GitFsAdapter {
         match fs.find_by_name(parent, name.to_str().unwrap()) {
             Ok(Some(attr)) => {
                 let ino = attr.inode;
+                debug!("Found lookup attr for {} in {parent}", name.display());
                 reply.entry(&TTL, &attr.into(), 0)
             }
             Ok(None) => {
@@ -213,7 +214,7 @@ impl fuser::Filesystem for GitFsAdapter {
             }
             Err(e) => {
                 // Other internal error
-                error!(e = %e, "Finding lookup attribute:");
+                error!(e = %e, "Finding lookup attribute {}{}:", parent, name.display() );
                 reply.error(EIO);
             }
         };
@@ -224,7 +225,7 @@ impl fuser::Filesystem for GitFsAdapter {
         let fs = match fs_arc.lock() {
             Ok(fs) => fs,
             Err(e) => {
-                error!(e = %e);
+                error!(e = %e, "Getting attribute for {}", ino);
                 return reply.error(EIO);
             }
         };
@@ -443,7 +444,7 @@ impl fuser::Filesystem for GitFsAdapter {
         let gitfs_entries = match res_entries {
             Ok(ent) => ent,
             Err(e) => {
-                error!(e = %e);
+                error!(e = %e, "Fetching dir entries");
                 return reply.error(EIO);
             }
         };
@@ -452,6 +453,7 @@ impl fuser::Filesystem for GitFsAdapter {
         }
 
         for (i, entry) in entries.into_iter().enumerate().skip(offset as usize) {
+            info!("Creating direntry for {} and {}", entry.name, entry.inode);
             if reply.add(entry.inode, (i + 1) as i64, entry.kind.into(), entry.name) {
                 break;
             }
