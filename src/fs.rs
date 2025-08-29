@@ -840,62 +840,69 @@ impl GitFs {
     }
 
     pub fn find_by_name(&self, parent: u64, name: &str) -> anyhow::Result<Option<FileAttr>> {
-        if !self.exists(parent)? {
-            bail!(format!("Parent {} does not exist", parent));
-        }
-        if !self.is_dir(parent)? {
-            bail!(format!("Parent {} is not a directory", parent));
-        }
+        // Check if name if a virtual dir
+        // If not, check if the parent is a virtual dir
+        // If not, treat as regular
+        // If the parent a virtual directory
 
-        // If the target a virtual directory
         let spec = NameSpec::parse(name);
         let name = if spec.is_virtual() { spec.name } else { name };
+        let parent: InodeTypes = parent.into();
 
-        // If the parent a virtual directory
-        let par_is_vdir = self.is_virtual(parent);
-
-        // Both should never be true at the same time
-        if par_is_vdir && spec.is_virtual() {
-            return Ok(None);
+        if !self.exists(parent.to_u64_n())? {
+            bail!(format!("Parent {} does not exist", parent));
+        }
+        if !self.is_dir(u64::from(&parent))? {
+            bail!(format!("Parent {} is not a directory", parent));
         }
 
         info!("Find attr for {} {}", parent, name);
 
-        let ctx = FsOperationContext::get_operation(self, parent);
+        let ctx = FsOperationContext::get_operation(self, parent.to_u64_n());
         match ctx? {
             FsOperationContext::Root => ops::lookup::lookup_root(self, name),
             FsOperationContext::RepoDir { ino } => ops::lookup::lookup_repo(self, ino, name),
-            FsOperationContext::InsideLiveDir { ino } => {
-                if par_is_vdir {
-                    return ops::lookup::lookup_vdir(self, parent, name);
-                };
-
-                let attr = match ops::lookup::lookup_live(self, ino, name)? {
-                    Some(attr) => attr,
-                    None => return Ok(None),
-                };
-
-                if !spec.is_virtual() {
-                    return Ok(Some(attr));
+            FsOperationContext::InsideLiveDir { ino: _ } => {
+                if spec.is_virtual() {
+                    let attr = match ops::lookup::lookup_live(self, parent.to_norm(), name)? {
+                        Some(attr) => attr,
+                        None => return Ok(None),
+                    };
+                    return Ok(Some(self.prepare_virtual_folder(attr)?));
                 }
-                Ok(Some(self.prepare_virtual_folder(attr)?))
-            }
-            FsOperationContext::InsideGitDir { ino } => {
-                if par_is_vdir {
-                    return ops::lookup::lookup_vdir(self, parent, name);
-                };
-                let attr = match ops::lookup::lookup_git(self, ino, name)? {
-                    Some(attr) => attr,
-                    None => {
-                        tracing::error!("Could not find attr for {name}");
-                        return Ok(None);
+                match parent {
+                    InodeTypes::NormalIno(_) => {
+                        let attr = match ops::lookup::lookup_live(self, parent.to_norm(), name)? {
+                            Some(attr) => attr,
+                            None => return Ok(None),
+                        };
+                        Ok(Some(attr))
                     }
-                };
-                info!("Found attr for {}", attr.inode);
-                if !spec.is_virtual() {
-                    return Ok(Some(attr));
+                    InodeTypes::VirtualIno(_) => {
+                        ops::lookup::lookup_vdir(self, parent.to_virt(), name)
+                    }
                 }
-                Ok(Some(self.prepare_virtual_folder(attr)?))
+            }
+            FsOperationContext::InsideGitDir { ino: _ } => {
+                if spec.is_virtual() {
+                    let attr = match ops::lookup::lookup_git(self, parent.to_norm(), name)? {
+                        Some(attr) => attr,
+                        None => return Ok(None),
+                    };
+                    return Ok(Some(self.prepare_virtual_folder(attr)?));
+                }
+                match parent {
+                    InodeTypes::NormalIno(_) => {
+                        let attr = match ops::lookup::lookup_git(self, parent.to_norm(), name)? {
+                            Some(attr) => attr,
+                            None => return Ok(None),
+                        };
+                        Ok(Some(attr))
+                    }
+                    InodeTypes::VirtualIno(_) => {
+                        ops::lookup::lookup_vdir(self, parent.to_virt(), name)
+                    }
+                }
             }
         }
     }
@@ -917,8 +924,10 @@ impl GitFs {
     pub fn prepare_virtual_folder(&self, attr: FileAttr) -> anyhow::Result<FileAttr> {
         let repo_arc = self.get_repo(attr.inode)?;
         let mut new_attr = attr;
-        let v_ino = self.set_vdir_bit(attr.inode);
+        let ino: InodeTypes = attr.inode.into();
+        let v_ino = ino.to_u64_v();
 
+        // Check if the entry is alread saved in vdir_cache
         {
             let repo = repo_arc.lock().map_err(|_| anyhow!("Lock poisoned"))?;
             if let Some(e) = repo.vdir_cache.get(&v_ino) {
@@ -932,6 +941,7 @@ impl GitFs {
             }
         }
 
+        // If not, create it and save the VirtualNode in vdir_cache
         {
             let mut repo = repo_arc.lock().map_err(|_| anyhow!("Lock poisoned"))?;
             match repo.vdir_cache.entry(v_ino) {
@@ -942,7 +952,7 @@ impl GitFs {
                 }
                 Entry::Vacant(slot) => {
                     let v_node = VirtualNode {
-                        real: attr.inode,
+                        real: ino.to_u64_n(),
                         inode: v_ino,
                         oid: attr.oid,
                         log: HashMap::new(),
