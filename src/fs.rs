@@ -210,6 +210,11 @@ impl GitFs {
 
         let repo = git2::Repository::init(repo_path)?;
         let res_inodes = connection.populate_res_inodes()?;
+        info!(
+            "Populated {} inodes into repo {}",
+            res_inodes.len(),
+            repo_name
+        );
 
         let mut git_repo = GitRepo {
             connection: Arc::new(Mutex::new(connection)),
@@ -744,6 +749,8 @@ impl GitFs {
             return Ok(None);
         }
 
+        info!("Find attr for {} {}", parent, name);
+
         let ctx = FsOperationContext::get_operation(self, parent);
         match ctx? {
             FsOperationContext::Root => ops::lookup::lookup_root(self, name),
@@ -770,9 +777,11 @@ impl GitFs {
                 let attr = match ops::lookup::lookup_git(self, ino, name)? {
                     Some(attr) => attr,
                     None => {
+                        tracing::error!("Could not find attr for {name}");
                         return Ok(None);
                     }
                 };
+                info!("Found attr for {}", attr.inode);
                 if !spec.is_virtual() {
                     return Ok(Some(attr));
                 }

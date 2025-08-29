@@ -151,26 +151,48 @@ impl fuser::Filesystem for GitFsAdapter {
                 return reply.error(EIO);
             }
         };
+        // let attr_result = fs.getattr(parent);
+        // match attr_result {
+        //     Ok(parent_attrs) => {
+        //         if name == OsStr::new(".") {
+        //             info!("Serving . directory {}", parent_attrs.inode);
+        //             reply.entry(&TTL, &parent_attrs.into(), 0);
+        //             return;
+        //         }
+
+        //         if name == OsStr::new("..") {
+        //             let parent_ino = if parent == ROOT_INO {
+        //                 ROOT_INO
+        //             } else {
+        //                 fs.get_parent_ino(parent).unwrap_or(ROOT_INO)
+        //             };
+        //             let parent_attr = fs.getattr(parent_ino).unwrap();
+        //             info!("Serving .. directory {}", parent_attrs.inode);
+        //             return reply.entry(&TTL, &parent_attr.into(), 0);
+        //         }
+        //     }
         let attr_result = fs.getattr(parent);
         match attr_result {
             Ok(parent_attrs) => {
-            if name == OsStr::new(".") {
-                reply.entry(&TTL, &parent_attrs.into(), 0);
-                return;
-            }
+                if name == OsStr::new(".") {
+                    info!("Serving . directory {}", parent_attrs.inode);
+                    reply.entry(&TTL, &parent_attrs.into(), 0);
+                    return;
+                }
 
-            if name == OsStr::new("..") {
-                let parent_ino = if parent == ROOT_INO {
-                    ROOT_INO
-                } else {
-                    fs.get_parent_ino(parent).unwrap_or(ROOT_INO)
-                };
-                let parent_attr = fs.getattr(parent_ino).unwrap();
-                return reply.entry(&TTL, &parent_attr.into(), 0);
+                if name == OsStr::new("..") {
+                    let parent_ino = if parent == ROOT_INO {
+                        ROOT_INO
+                    } else {
+                        fs.get_parent_ino(parent).unwrap_or(ROOT_INO)
+                    };
+                    let parent_attr = fs.getattr(parent_ino).unwrap();
+                    info!("Serving .. directory {}", parent_attrs.inode);
+                    return reply.entry(&TTL, &parent_attr.into(), 0);
+                }
             }
-            },
             Err(e) => {
-                error!(e = %e);
+                error!(e = %e, "Lookup parent inode");
                 reply.error(ENOENT);
                 return;
             }
@@ -183,11 +205,15 @@ impl fuser::Filesystem for GitFsAdapter {
             }
             Ok(None) => {
                 // The name is not found under this parent
+                debug!(
+                    "No attr found during lookup for {} in {parent}",
+                    name.display()
+                );
                 reply.error(ENOENT);
             }
             Err(e) => {
                 // Other internal error
-                error!(e = %e);
+                error!(e = %e, "Finding lookup attribute:");
                 reply.error(EIO);
             }
         };
@@ -202,19 +228,6 @@ impl fuser::Filesystem for GitFsAdapter {
                 return reply.error(EIO);
             }
         };
-
-        match fs.exists(ino) {
-            Err(e) => {
-                tracing::error!("exists({}) failed: {}", ino, e);
-                reply.error(EIO);
-                return;
-            }
-            Ok(false) => {
-                reply.error(ENOENT);
-                return;
-            }
-            Ok(true) => {}
-        }
 
         match fs.getattr(ino) {
             Err(err) => {
