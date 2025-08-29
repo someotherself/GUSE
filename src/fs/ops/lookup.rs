@@ -5,7 +5,7 @@ use git2::Oid;
 use anyhow::anyhow;
 
 use crate::{
-    fs::{FileAttr, GitFs, REPO_SHIFT, build_attr_dir},
+    fs::{FileAttr, GitFs, NormalIno, REPO_SHIFT, VirtualIno, build_attr_dir},
     mount::{dir_attr, file_attr},
 };
 
