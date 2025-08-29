@@ -69,7 +69,7 @@ impl FsOperationContext {
 }
 
 #[derive(Debug, Clone)]
-pub enum InodeTypes {
+pub enum Inodes {
     NormalIno(u64),
     VirtualIno(u64),
 }
@@ -79,11 +79,11 @@ pub struct NormalIno(u64);
 #[derive(Debug, Clone, Copy)]
 pub struct VirtualIno(u64);
 
-impl InodeTypes {
+impl Inodes {
     fn to_norm(&self) -> NormalIno {
         match self {
-            InodeTypes::NormalIno(ino) => NormalIno(*ino),
-            InodeTypes::VirtualIno(ino) => {
+            Inodes::NormalIno(ino) => NormalIno(*ino),
+            Inodes::VirtualIno(ino) => {
                 let ino = ino & !VDIR_BIT;
                 NormalIno(ino)
             }
@@ -92,33 +92,33 @@ impl InodeTypes {
 
     fn to_virt(&self) -> VirtualIno {
         match self {
-            InodeTypes::NormalIno(ino) => {
+            Inodes::NormalIno(ino) => {
                 let ino = ino | VDIR_BIT;
                 VirtualIno(ino)
             }
-            InodeTypes::VirtualIno(ino) => VirtualIno(*ino),
+            Inodes::VirtualIno(ino) => VirtualIno(*ino),
         }
     }
 
     fn to_u64_n(&self) -> u64 {
         match self {
-            InodeTypes::NormalIno(ino) | InodeTypes::VirtualIno(ino) => *ino & !VDIR_BIT,
+            Inodes::NormalIno(ino) | Inodes::VirtualIno(ino) => *ino & !VDIR_BIT,
         }
     }
 
     fn to_u64_v(&self) -> u64 {
         match self {
-            InodeTypes::NormalIno(ino) | InodeTypes::VirtualIno(ino) => *ino | VDIR_BIT,
+            Inodes::NormalIno(ino) | Inodes::VirtualIno(ino) => *ino | VDIR_BIT,
         }
     }
 }
 
-impl From<u64> for InodeTypes {
+impl From<u64> for Inodes {
     fn from(value: u64) -> Self {
         if (value & VDIR_BIT) != 0 {
-            InodeTypes::VirtualIno(value)
+            Inodes::VirtualIno(value)
         } else {
-            InodeTypes::NormalIno(value)
+            Inodes::NormalIno(value)
         }
     }
 }
@@ -135,51 +135,51 @@ impl From<VirtualIno> for u64 {
     }
 }
 
-impl From<InodeTypes> for u64 {
-    fn from(i: InodeTypes) -> Self {
+impl From<Inodes> for u64 {
+    fn from(i: Inodes) -> Self {
         match i {
-            InodeTypes::NormalIno(ino) | InodeTypes::VirtualIno(ino) => ino,
+            Inodes::NormalIno(ino) | Inodes::VirtualIno(ino) => ino,
         }
     }
 }
 
-impl From<&InodeTypes> for u64 {
-    fn from(i: &InodeTypes) -> Self {
+impl From<&Inodes> for u64 {
+    fn from(i: &Inodes) -> Self {
         match *i {
-            InodeTypes::NormalIno(ino) | InodeTypes::VirtualIno(ino) => ino,
+            Inodes::NormalIno(ino) | Inodes::VirtualIno(ino) => ino,
         }
     }
 }
 
-impl AsRef<u64> for InodeTypes {
+impl AsRef<u64> for Inodes {
     fn as_ref(&self) -> &u64 {
         match self {
-            InodeTypes::NormalIno(ino) | InodeTypes::VirtualIno(ino) => ino,
+            Inodes::NormalIno(ino) | Inodes::VirtualIno(ino) => ino,
         }
     }
 }
 
-impl std::ops::BitAnd<u64> for &InodeTypes {
+impl std::ops::BitAnd<u64> for &Inodes {
     type Output = u64;
     fn bitand(self, rhs: u64) -> Self::Output {
         u64::from(self) & rhs
     }
 }
 
-impl Deref for InodeTypes {
+impl Deref for Inodes {
     type Target = u64;
     fn deref(&self) -> &Self::Target {
         match self {
-            InodeTypes::NormalIno(ino) => ino,
-            InodeTypes::VirtualIno(ino) => ino,
+            Inodes::NormalIno(ino) => ino,
+            Inodes::VirtualIno(ino) => ino,
         }
     }
 }
 
-impl Display for InodeTypes {
+impl Display for Inodes {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            InodeTypes::NormalIno(ino) | InodeTypes::VirtualIno(ino) => write!(f, "{ino}"),
+            Inodes::NormalIno(ino) | Inodes::VirtualIno(ino) => write!(f, "{ino}"),
         }
     }
 }
@@ -589,7 +589,7 @@ impl GitFs {
     pub fn getattr(&self, inode: u64) -> anyhow::Result<FileAttr> {
         let perms = 0o775;
         let st_mode = libc::S_IFDIR | perms;
-        let inode: InodeTypes = inode.into();
+        let inode: Inodes = inode.into();
 
         if !self.exists(inode.to_u64_n())? {
             bail!(format!("Inode {} does not exist", inode));
@@ -600,15 +600,15 @@ impl GitFs {
             FsOperationContext::Root => Ok(build_attr_dir(ROOT_INO, st_mode)),
             FsOperationContext::RepoDir { ino } => Ok(build_attr_dir(ino, st_mode)),
             FsOperationContext::InsideLiveDir { ino: _ } => match inode {
-                InodeTypes::NormalIno(_) => ops::getattr::getattr_live_dir(self, inode.to_norm()),
-                InodeTypes::VirtualIno(_) => {
+                Inodes::NormalIno(_) => ops::getattr::getattr_live_dir(self, inode.to_norm()),
+                Inodes::VirtualIno(_) => {
                     let attr = ops::getattr::getattr_live_dir(self, inode.to_norm())?;
                     self.prepare_virtual_folder(attr)
                 }
             },
             FsOperationContext::InsideGitDir { ino: _ } => match inode {
-                InodeTypes::NormalIno(_) => ops::getattr::getattr_git_dir(self, inode.to_norm()),
-                InodeTypes::VirtualIno(_) => {
+                Inodes::NormalIno(_) => ops::getattr::getattr_git_dir(self, inode.to_norm()),
+                Inodes::VirtualIno(_) => {
                     let attr = ops::getattr::getattr_git_dir(self, inode.to_norm())?;
                     self.prepare_virtual_folder(attr)
                 }
@@ -802,19 +802,19 @@ impl GitFs {
     }
 
     pub fn readdir(&self, parent: u64) -> anyhow::Result<Vec<DirectoryEntry>> {
-        let parent: InodeTypes = parent.into();
+        let parent: Inodes = parent.into();
 
         let ctx = FsOperationContext::get_operation(self, parent.to_u64_n());
         match ctx? {
             FsOperationContext::Root => ops::readdir::readdir_root_dir(self),
             FsOperationContext::RepoDir { ino } => ops::readdir::readdir_repo_dir(self, ino),
             FsOperationContext::InsideLiveDir { ino: _ } => match parent {
-                InodeTypes::NormalIno(_) => ops::readdir::readdir_live_dir(self, parent.to_norm()),
-                InodeTypes::VirtualIno(_) => ops::readdir::read_virtual_dir(self, parent.to_virt()),
+                Inodes::NormalIno(_) => ops::readdir::readdir_live_dir(self, parent.to_norm()),
+                Inodes::VirtualIno(_) => ops::readdir::read_virtual_dir(self, parent.to_virt()),
             },
             FsOperationContext::InsideGitDir { ino: _ } => match parent {
-                InodeTypes::NormalIno(_) => ops::readdir::readdir_git_dir(self, parent.to_norm()),
-                InodeTypes::VirtualIno(_) => ops::readdir::read_virtual_dir(self, parent.to_virt()),
+                Inodes::NormalIno(_) => ops::readdir::readdir_git_dir(self, parent.to_norm()),
+                Inodes::VirtualIno(_) => ops::readdir::read_virtual_dir(self, parent.to_virt()),
             },
         }
     }
@@ -840,7 +840,7 @@ impl GitFs {
 
         let spec = NameSpec::parse(name);
         let name = if spec.is_virtual() { spec.name } else { name };
-        let parent: InodeTypes = parent.into();
+        let parent: Inodes = parent.into();
 
         if !self.exists(parent.to_u64_n())? {
             bail!(format!("Parent {} does not exist", parent));
@@ -864,14 +864,14 @@ impl GitFs {
                     return Ok(Some(self.prepare_virtual_folder(attr)?));
                 }
                 match parent {
-                    InodeTypes::NormalIno(_) => {
+                    Inodes::NormalIno(_) => {
                         let attr = match ops::lookup::lookup_live(self, parent.to_norm(), name)? {
                             Some(attr) => attr,
                             None => return Ok(None),
                         };
                         Ok(Some(attr))
                     }
-                    InodeTypes::VirtualIno(_) => {
+                    Inodes::VirtualIno(_) => {
                         ops::lookup::lookup_vdir(self, parent.to_virt(), name)
                     }
                 }
@@ -885,14 +885,14 @@ impl GitFs {
                     return Ok(Some(self.prepare_virtual_folder(attr)?));
                 }
                 match parent {
-                    InodeTypes::NormalIno(_) => {
+                    Inodes::NormalIno(_) => {
                         let attr = match ops::lookup::lookup_git(self, parent.to_norm(), name)? {
                             Some(attr) => attr,
                             None => return Ok(None),
                         };
                         Ok(Some(attr))
                     }
-                    InodeTypes::VirtualIno(_) => {
+                    Inodes::VirtualIno(_) => {
                         ops::lookup::lookup_vdir(self, parent.to_virt(), name)
                     }
                 }
@@ -917,7 +917,7 @@ impl GitFs {
     pub fn prepare_virtual_folder(&self, attr: FileAttr) -> anyhow::Result<FileAttr> {
         let repo_arc = self.get_repo(attr.inode)?;
         let mut new_attr = attr;
-        let ino: InodeTypes = attr.inode.into();
+        let ino: Inodes = attr.inode.into();
         let v_ino = ino.to_u64_v();
 
         // Check if the entry is alread saved in vdir_cache
