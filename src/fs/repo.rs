@@ -40,8 +40,8 @@ pub struct VirtualNode {
     pub oid: Oid,
     /// Oids of the file history (if any)
     ///
-    /// key: full file name, values: <entry_ino, ObjectAttr>
-    pub log: HashMap<String, (u64, ObjectAttr)>,
+    /// key: full file name, values: <file entry_ino, ObjectAttr>
+    pub log: BTreeMap<String, (u64, ObjectAttr)>,
 }
 
 impl GitRepo {

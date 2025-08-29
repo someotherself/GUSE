@@ -504,6 +504,10 @@ impl GitFs {
 
     pub fn read(&self, ino: u64, offset: u64, buf: &mut [u8], fh: u64) -> anyhow::Result<usize> {
         let ctx = FsOperationContext::get_operation(self, ino);
+        // let parent = self.get_parent_ino(ino)?;
+        // let if self.is_file(parent) {
+
+        // }
         match ctx? {
             FsOperationContext::Root => bail!("Not allowed"),
             FsOperationContext::RepoDir { ino: _ } => bail!("Not allowed"),
@@ -944,7 +948,7 @@ impl GitFs {
                         real: ino.to_u64_n(),
                         inode: v_ino,
                         oid: attr.oid,
-                        log: HashMap::new(),
+                        log: BTreeMap::new(),
                     };
                     slot.insert(v_node);
                     new_attr.inode = v_ino;
