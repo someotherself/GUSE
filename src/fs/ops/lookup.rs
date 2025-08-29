@@ -65,7 +65,8 @@ pub fn lookup_repo(fs: &GitFs, parent: u64, name: &str) -> anyhow::Result<Option
     Ok(Some(attr))
 }
 
-pub fn lookup_live(fs: &GitFs, parent: u64, name: &str) -> anyhow::Result<Option<FileAttr>> {
+pub fn lookup_live(fs: &GitFs, parent: NormalIno, name: &str) -> anyhow::Result<Option<FileAttr>> {
+    let parent = u64::from(parent);
     let repo_id = GitFs::ino_to_repo_id(parent);
     match fs.repos_list.get(&repo_id) {
         Some(_) => {}
@@ -96,9 +97,10 @@ pub fn lookup_live(fs: &GitFs, parent: u64, name: &str) -> anyhow::Result<Option
     Ok(Some(attr))
 }
 
-pub fn lookup_git(fs: &GitFs, parent: u64, name: &str) -> anyhow::Result<Option<FileAttr>> {
-    // If oid == zero, folder is yyyy-mm-dd. Build black
+pub fn lookup_git(fs: &GitFs, parent: NormalIno, name: &str) -> anyhow::Result<Option<FileAttr>> {
+    // If oid == zero, folder is yyyy-mm-dd.
     // else oid is commit_id or tree_id
+    let parent = u64::from(parent);
     let repo = fs.get_repo(parent)?;
     let child_ino = {
         let repo = repo.lock().map_err(|_| anyhow!("Lock poisoned"))?;
@@ -134,12 +136,19 @@ pub fn lookup_git(fs: &GitFs, parent: u64, name: &str) -> anyhow::Result<Option<
     Ok(Some(attr))
 }
 
-pub fn lookup_vdir(fs: &GitFs, parent: u64, name: &str) -> anyhow::Result<Option<FileAttr>> {
+pub fn lookup_vdir(fs: &GitFs, parent: VirtualIno, name: &str) -> anyhow::Result<Option<FileAttr>> {
+    let parent = u64::from(parent);
     let repo = fs.get_repo(parent)?;
     let Ok(repo) = repo.lock() else {
         return Ok(None);
     };
-
+    // let _v_node = match repo.vdir_cache.get(&parent) {
+    //     Some(n) => n,
+    //     None => {
+    //         // Insert new node
+    //         todo!()
+    //     }
+    // };
     let Some(v_node) = repo.vdir_cache.get(&parent) else {
         return Ok(None);
     };
