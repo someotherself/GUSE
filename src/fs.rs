@@ -871,9 +871,7 @@ impl GitFs {
                         };
                         Ok(Some(attr))
                     }
-                    Inodes::VirtualIno(_) => {
-                        ops::lookup::lookup_vdir(self, parent.to_virt(), name)
-                    }
+                    Inodes::VirtualIno(_) => ops::lookup::lookup_vdir(self, parent.to_virt(), name),
                 }
             }
             FsOperationContext::InsideGitDir { ino: _ } => {
@@ -892,9 +890,7 @@ impl GitFs {
                         };
                         Ok(Some(attr))
                     }
-                    Inodes::VirtualIno(_) => {
-                        ops::lookup::lookup_vdir(self, parent.to_virt(), name)
-                    }
+                    Inodes::VirtualIno(_) => ops::lookup::lookup_vdir(self, parent.to_virt(), name),
                 }
             }
         }
