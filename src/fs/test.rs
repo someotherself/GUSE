@@ -43,7 +43,7 @@ fn test_mkdir_fetch() -> anyhow::Result<()> {
             assert_eq!(read_dir_root[0].name, "git_rust");
 
             // FIND BY NAME ROOT
-            let mio_attr = fs.find_by_name(ROOT_INO, "git_rust")?;
+            let mio_attr = fs.lookup(ROOT_INO, "git_rust")?;
             assert!(mio_attr.is_some());
             let mio_attr = mio_attr.unwrap();
             assert_eq!(mio_attr.inode, REPO_DIR_INO);
@@ -60,7 +60,7 @@ fn test_mkdir_fetch() -> anyhow::Result<()> {
             assert_eq!(read_dir_repo.len(), 3);
             let snap_1_parent = &read_dir_repo[1];
             let snap_1_parent_name: &String = &snap_1_parent.name;
-            let parent_snap_attr = fs.find_by_name(REPO_DIR_INO, snap_1_parent_name)?.unwrap();
+            let parent_snap_attr = fs.lookup(REPO_DIR_INO, snap_1_parent_name)?.unwrap();
             let parent_snap_ino = parent_snap_attr.inode;
 
             for a in fs.readdir(parent_snap_ino)? {
@@ -68,7 +68,7 @@ fn test_mkdir_fetch() -> anyhow::Result<()> {
                 assert_eq!(a.inode, a_attr_1.inode);
                 if a.kind == FileType::Directory {
                     let a_attr = fs
-                        .find_by_name(parent_snap_ino, &a.name)?
+                        .lookup(parent_snap_ino, &a.name)?
                         .ok_or_else(|| anyhow!("Invalid input"))?;
                     assert_eq!(a.inode, a_attr.inode);
 
@@ -77,7 +77,7 @@ fn test_mkdir_fetch() -> anyhow::Result<()> {
                         assert_eq!(b.inode, b_attr_1.inode);
                         if b.kind == FileType::Directory {
                             let b_attr = fs
-                                .find_by_name(a_attr.inode, &b.name)?
+                                .lookup(a_attr.inode, &b.name)?
                                 .ok_or_else(|| anyhow!("Invalid input"))?;
                             assert_eq!(b.inode, b_attr.inode);
                             for c in fs.readdir(b_attr.inode)? {
@@ -86,14 +86,14 @@ fn test_mkdir_fetch() -> anyhow::Result<()> {
                                 if c.kind == FileType::Directory {
                                     let _c_attr = fs.getattr(c.inode)?;
                                     let c_attr = fs
-                                        .find_by_name(b_attr.inode, &c.name)?
+                                        .lookup(b_attr.inode, &c.name)?
                                         .ok_or_else(|| anyhow!("Invalid input"))?;
                                     assert_eq!(c.inode, c_attr.inode);
                                 }
                                 dbg!("startig v_dir search");
                                 if c.oid != Oid::zero() && c.kind == FileType::RegularFile {
                                     let name = format!("{}@", c.name);
-                                    let v_dir_attr = fs.find_by_name(b_attr.inode, &name)?.unwrap();
+                                    let v_dir_attr = fs.lookup(b_attr.inode, &name)?.unwrap();
                                     dbg!(v_dir_attr.inode);
                                     let v_dir_entries = fs.readdir(v_dir_attr.inode)?;
                                     dbg!(v_dir_entries.len());
@@ -103,7 +103,7 @@ fn test_mkdir_fetch() -> anyhow::Result<()> {
                                     dbg!(v_dir_attr.inode);
 
                                     let lookup_attr = fs
-                                        .find_by_name(v_dir_attr.inode, &v_dir_entries[0].name)?
+                                        .lookup(v_dir_attr.inode, &v_dir_entries[0].name)?
                                         .unwrap();
                                     dbg!(lookup_attr.inode);
 
@@ -119,7 +119,7 @@ fn test_mkdir_fetch() -> anyhow::Result<()> {
             }
 
             // FIND BY NAME REPO_DIR
-            let live_attr = fs.find_by_name(REPO_DIR_INO, "live")?;
+            let live_attr = fs.lookup(REPO_DIR_INO, "live")?;
             assert!(live_attr.is_some());
             let live_attr = live_attr.unwrap();
             assert_eq!(live_attr.inode, LIVE_DIR_INO);
@@ -171,7 +171,7 @@ fn test_mkdir_normal() -> anyhow::Result<()> {
             assert_eq!(repo_attr.inode, REPO_DIR_INO);
 
             // FIND BY NAME
-            let live_attr = fs.find_by_name(REPO_DIR_INO, "live")?;
+            let live_attr = fs.lookup(REPO_DIR_INO, "live")?;
             assert!(live_attr.is_some());
             let live_attr = live_attr.unwrap();
             assert_eq!(live_attr.inode, LIVE_DIR_INO);
@@ -181,7 +181,7 @@ fn test_mkdir_normal() -> anyhow::Result<()> {
             assert_eq!(read_dir.len(), 1);
 
             assert_eq!(read_dir[0].name, "new_repo");
-            let _folder_attr = fs.find_by_name(ROOT_INO, "new_repo")?.unwrap();
+            let _folder_attr = fs.lookup(ROOT_INO, "new_repo")?.unwrap();
 
             let read_dir = fs.readdir(REPO_DIR_INO)?;
             assert_eq!(read_dir.len(), 1);
@@ -195,7 +195,7 @@ fn test_mkdir_normal() -> anyhow::Result<()> {
 
             assert!(fs.exists(dir1_attr.inode)?);
 
-            let find_dir1 = fs.find_by_name(LIVE_DIR_INO, "dir_in_live_1")?.unwrap();
+            let find_dir1 = fs.lookup(LIVE_DIR_INO, "dir_in_live_1")?.unwrap();
             assert_eq!(find_dir1.inode, dir1_ino);
             let getattr_dir1 = fs.getattr(find_dir1.inode)?;
             assert_eq!(getattr_dir1.inode, dir1_ino);
@@ -221,9 +221,9 @@ fn test_mkdir_normal() -> anyhow::Result<()> {
 
             let test_file1 = OsStr::new("new_file_1");
             fs.create(LIVE_DIR_INO, test_file1, true, true)?;
-            let attr_real_file = fs.find_by_name(LIVE_DIR_INO, "new_file_1")?;
+            let attr_real_file = fs.lookup(LIVE_DIR_INO, "new_file_1")?;
             assert!(attr_real_file.is_some());
-            let attr_vdir = fs.find_by_name(LIVE_DIR_INO, "new_file_1@");
+            let attr_vdir = fs.lookup(LIVE_DIR_INO, "new_file_1@");
             assert!(attr_vdir.is_ok());
             let attr_vdir = attr_vdir?;
             let attr_vdir = attr_vdir.unwrap();

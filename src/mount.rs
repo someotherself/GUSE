@@ -198,7 +198,7 @@ impl fuser::Filesystem for GitFsAdapter {
             }
         };
 
-        match fs.find_by_name(parent, name.to_str().unwrap()) {
+        match fs.lookup(parent, name.to_str().unwrap()) {
             Ok(Some(attr)) => {
                 let ino = attr.inode;
                 debug!("Found lookup attr for {} in {parent}", name.display());
@@ -214,7 +214,7 @@ impl fuser::Filesystem for GitFsAdapter {
             }
             Err(e) => {
                 // Other internal error
-                error!(e = %e, "Finding lookup attribute {}{}:", parent, name.display() );
+                error!(e = %e, "Finding lookup attribute {}{}:", parent, name.display());
                 reply.error(EIO);
             }
         };

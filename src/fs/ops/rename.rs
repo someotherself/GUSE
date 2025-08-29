@@ -14,13 +14,13 @@ pub fn rename_live(
     }
 
     let src_attr = fs
-        .find_by_name(parent, name)?
+        .lookup(parent, name)?
         .ok_or_else(|| anyhow!("Source does not exist"))?;
 
     let mut dest_exists = false;
     let mut dest_old_ino: u64 = 0;
 
-    if let Some(dest_attr) = fs.find_by_name(new_parent, new_name)? {
+    if let Some(dest_attr) = fs.lookup(new_parent, new_name)? {
         dest_exists = true;
         dest_old_ino = dest_attr.inode;
 

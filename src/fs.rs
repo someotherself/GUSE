@@ -740,7 +740,7 @@ impl GitFs {
             .to_str()
             .ok_or_else(|| anyhow!("Not a valid UTF-8 name"))?;
 
-        if self.find_by_name(parent, name).is_err() {
+        if self.lookup(parent, name).is_err() {
             bail!(format!("Source {} does not exist", name));
         }
 
@@ -824,7 +824,7 @@ impl GitFs {
         let entries = self.readdir(parent)?;
         for entry in entries {
             let attr = self
-                .find_by_name(parent, &entry.name)?
+                .lookup(parent, &entry.name)?
                 .ok_or_else(|| anyhow!("Repo not found"))?;
             let entry_plus = DirectoryEntryPlus { entry, attr };
             entries_plus.push(entry_plus);
@@ -832,7 +832,7 @@ impl GitFs {
         Ok(entries_plus)
     }
 
-    pub fn find_by_name(&self, parent: u64, name: &str) -> anyhow::Result<Option<FileAttr>> {
+    pub fn lookup(&self, parent: u64, name: &str) -> anyhow::Result<Option<FileAttr>> {
         // Check if name if a virtual dir
         // If not, check if the parent is a virtual dir
         // If not, treat as regular

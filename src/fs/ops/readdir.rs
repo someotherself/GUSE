@@ -137,7 +137,7 @@ pub fn readdir_live_dir(fs: &GitFs, ino: NormalIno) -> anyhow::Result<Vec<Direct
         } else {
             (FileType::Symlink, libc::S_IFLNK)
         };
-        let attr = fs.find_by_name(ino, &node_name_str)?;
+        let attr = fs.lookup(ino, &node_name_str)?;
         let Some(attr) = attr else { continue };
         let entry = DirectoryEntry::new(
             attr.inode,
