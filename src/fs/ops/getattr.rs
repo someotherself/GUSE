@@ -2,11 +2,12 @@ use anyhow::anyhow;
 use git2::Oid;
 
 use crate::{
-    fs::{FileAttr, GitFs},
+    fs::{FileAttr, GitFs, NormalIno},
     mount::{dir_attr, file_attr},
 };
 
-pub fn getattr_live_dir(fs: &GitFs, ino: u64) -> anyhow::Result<FileAttr> {
+pub fn getattr_live_dir(fs: &GitFs, ino: NormalIno) -> anyhow::Result<FileAttr> {
+    let ino = u64::from(ino);
     let filemode = fs.get_mode_from_db(ino)?;
     let mut attr: FileAttr = match filemode {
         git2::FileMode::Tree => dir_attr().into(),
@@ -18,7 +19,8 @@ pub fn getattr_live_dir(fs: &GitFs, ino: u64) -> anyhow::Result<FileAttr> {
     Ok(attr)
 }
 
-pub fn getattr_git_dir(fs: &GitFs, ino: u64) -> anyhow::Result<FileAttr> {
+pub fn getattr_git_dir(fs: &GitFs, ino: NormalIno) -> anyhow::Result<FileAttr> {
+    let ino = u64::from(ino);
     let target_oid = fs.get_oid_from_db(ino)?;
     if target_oid == Oid::zero() {
         let mut attr: FileAttr = dir_attr().into();
