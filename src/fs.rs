@@ -585,40 +585,30 @@ impl GitFs {
     pub fn getattr(&self, inode: u64) -> anyhow::Result<FileAttr> {
         let perms = 0o775;
         let st_mode = libc::S_IFDIR | perms;
+        let inode: InodeTypes = inode.into();
 
-        let is_vdir = self.is_virtual(inode);
-        let inode = if is_vdir {
-            self.clear_vdir_bit(inode)
-        } else {
-            inode
-        };
-
-        if !self.exists(inode)? {
+        if !self.exists(inode.to_u64_n())? {
             bail!(format!("Inode {} does not exist", inode));
         }
 
-        let ctx = FsOperationContext::get_operation(self, inode);
+        let ctx = FsOperationContext::get_operation(self, inode.to_u64_n());
         match ctx? {
             FsOperationContext::Root => Ok(build_attr_dir(ROOT_INO, st_mode)),
             FsOperationContext::RepoDir { ino } => Ok(build_attr_dir(ino, st_mode)),
-            FsOperationContext::InsideLiveDir { ino } => {
-                let attr = ops::getattr::getattr_live_dir(self, ino)?;
-                if !is_vdir {
-                    return Ok(attr);
+            FsOperationContext::InsideLiveDir { ino: _ } => match inode {
+                InodeTypes::NormalIno(_) => ops::getattr::getattr_live_dir(self, inode.to_norm()),
+                InodeTypes::VirtualIno(_) => {
+                    let attr = ops::getattr::getattr_live_dir(self, inode.to_norm())?;
+                    self.prepare_virtual_folder(attr)
                 }
-
-                // Called with the real inode
-                self.prepare_virtual_folder(attr)
-            }
-            FsOperationContext::InsideGitDir { ino } => {
-                let attr = ops::getattr::getattr_git_dir(self, ino)?;
-                if !is_vdir {
-                    return Ok(attr);
+            },
+            FsOperationContext::InsideGitDir { ino: _ } => match inode {
+                InodeTypes::NormalIno(_) => ops::getattr::getattr_git_dir(self, inode.to_norm()),
+                InodeTypes::VirtualIno(_) => {
+                    let attr = ops::getattr::getattr_git_dir(self, inode.to_norm())?;
+                    self.prepare_virtual_folder(attr)
                 }
-
-                // Called with the real inode
-                self.prepare_virtual_folder(attr)
-            }
+            },
         }
     }
 
