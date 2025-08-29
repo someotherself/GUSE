@@ -1,7 +1,9 @@
 use std::collections::btree_map::Entry;
 use std::collections::{BTreeMap, HashSet};
 use std::ffi::OsStr;
+use std::fmt::Display;
 use std::fs::File;
+use std::ops::Deref;
 use std::os::unix::fs::{FileExt, MetadataExt, PermissionsExt};
 use std::path::Path;
 use std::sync::{Arc, Mutex, RwLock};
@@ -62,6 +64,122 @@ impl FsOperationContext {
             Ok(FsOperationContext::InsideLiveDir { ino })
         } else {
             Ok(FsOperationContext::InsideGitDir { ino })
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub enum InodeTypes {
+    NormalIno(u64),
+    VirtualIno(u64),
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct NormalIno(u64);
+#[derive(Debug, Clone, Copy)]
+pub struct VirtualIno(u64);
+
+impl InodeTypes {
+    fn to_norm(&self) -> NormalIno {
+        match self {
+            InodeTypes::NormalIno(ino) => NormalIno(*ino),
+            InodeTypes::VirtualIno(ino) => {
+                let ino = ino & !VDIR_BIT;
+                NormalIno(ino)
+            }
+        }
+    }
+
+    fn to_virt(&self) -> VirtualIno {
+        match self {
+            InodeTypes::NormalIno(ino) => {
+                let ino = ino | VDIR_BIT;
+                VirtualIno(ino)
+            }
+            InodeTypes::VirtualIno(ino) => VirtualIno(*ino),
+        }
+    }
+
+    fn to_u64_n(&self) -> u64 {
+        match self {
+            InodeTypes::NormalIno(ino) | InodeTypes::VirtualIno(ino) => *ino & !VDIR_BIT,
+        }
+    }
+
+    fn to_u64_v(&self) -> u64 {
+        match self {
+            InodeTypes::NormalIno(ino) | InodeTypes::VirtualIno(ino) => *ino | VDIR_BIT,
+        }
+    }
+}
+
+impl From<u64> for InodeTypes {
+    fn from(value: u64) -> Self {
+        if (value & VDIR_BIT) != 0 {
+            InodeTypes::VirtualIno(value)
+        } else {
+            InodeTypes::NormalIno(value)
+        }
+    }
+}
+
+impl From<NormalIno> for u64 {
+    fn from(n: NormalIno) -> Self {
+        n.0
+    }
+}
+
+impl From<VirtualIno> for u64 {
+    fn from(v: VirtualIno) -> Self {
+        v.0
+    }
+}
+
+impl From<InodeTypes> for u64 {
+    fn from(i: InodeTypes) -> Self {
+        match i {
+            InodeTypes::NormalIno(ino) | InodeTypes::VirtualIno(ino) => ino,
+        }
+    }
+}
+
+impl From<&InodeTypes> for u64 {
+    fn from(i: &InodeTypes) -> Self {
+        match *i {
+            InodeTypes::NormalIno(ino) | InodeTypes::VirtualIno(ino) => ino,
+        }
+    }
+}
+
+impl AsRef<u64> for InodeTypes {
+    fn as_ref(&self) -> &u64 {
+        match self {
+            InodeTypes::NormalIno(ino) | InodeTypes::VirtualIno(ino) => ino,
+        }
+    }
+}
+
+impl std::ops::BitAnd<u64> for &InodeTypes {
+    type Output = u64;
+    fn bitand(self, rhs: u64) -> Self::Output {
+        u64::from(self) & rhs
+    }
+}
+
+impl Deref for InodeTypes {
+    type Target = u64;
+    fn deref(&self) -> &Self::Target {
+        match self {
+            InodeTypes::NormalIno(ino) => ino,
+            InodeTypes::VirtualIno(ino) => ino,
+        }
+    }
+}
+
+impl Display for InodeTypes {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            InodeTypes::NormalIno(ino) | InodeTypes::VirtualIno(ino) => write!(f, "{ino}"),
         }
     }
 }
