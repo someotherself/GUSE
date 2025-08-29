@@ -489,6 +489,7 @@ impl GitFs {
                     return Ok(attr);
                 }
 
+                // Called with the real inode
                 self.prepare_virtual_folder(attr)
             }
             FsOperationContext::InsideGitDir { ino } => {
@@ -497,6 +498,7 @@ impl GitFs {
                     return Ok(attr);
                 }
 
+                // Called with the real inode
                 self.prepare_virtual_folder(attr)
             }
         }
@@ -807,24 +809,24 @@ impl GitFs {
     pub fn prepare_virtual_folder(&self, attr: FileAttr) -> anyhow::Result<FileAttr> {
         let repo_arc = self.get_repo(attr.inode)?;
         let mut new_attr = attr;
+        let v_ino = self.set_vdir_bit(attr.inode);
 
         {
             let repo = repo_arc.lock().map_err(|_| anyhow!("Lock poisoned"))?;
-            if let Some(e) = repo.vdir_cache.get(&attr.inode) {
+            if let Some(e) = repo.vdir_cache.get(&v_ino) {
                 new_attr.inode = e.inode;
                 new_attr.perm = 0o555;
                 new_attr.size = 0;
                 new_attr.kind = FileType::Directory;
                 new_attr.nlink = 2;
+                debug_assert!(self.is_virtual(new_attr.inode));
                 return Ok(new_attr);
             }
         }
 
-        let v_ino = self.set_vdir_bit(attr.inode);
-
         {
             let mut repo = repo_arc.lock().map_err(|_| anyhow!("Lock poisoned"))?;
-            match repo.vdir_cache.entry(attr.inode) {
+            match repo.vdir_cache.entry(v_ino) {
                 Entry::Occupied(e) => {
                     // Another thread alread inserted an entry
                     let v = e.get();

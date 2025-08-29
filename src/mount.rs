@@ -419,14 +419,16 @@ impl fuser::Filesystem for GitFsAdapter {
         let mask: u64 = (1u64 << 48) - 1;
         let parent_entries: Vec<DirectoryEntry> = vec![
             DirectoryEntry {
-                inode: fs.clear_vdir_bit(ino),
+                inode: ino,
                 oid: Oid::zero(),
                 kind: FileType::Directory,
                 name: ".".to_string(),
                 filemode: libc::S_IFDIR,
             },
             DirectoryEntry {
-                inode: fs.get_parent_ino(ino).unwrap_or(ROOT_INO),
+                inode: fs
+                    .get_parent_ino(fs.clear_vdir_bit(ino))
+                    .unwrap_or(ROOT_INO),
                 oid: Oid::zero(),
                 kind: FileType::Directory,
                 name: "..".to_string(),

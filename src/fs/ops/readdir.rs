@@ -229,7 +229,7 @@ pub fn readdir_git_dir(fs: &GitFs, ino: u64) -> anyhow::Result<Vec<DirectoryEntr
 pub fn read_virtual_dir(fs: &GitFs, ino: u64) -> anyhow::Result<Vec<DirectoryEntry>> {
     let repo = fs.get_repo(ino)?;
     let mut repo = repo.lock().map_err(|_| anyhow!("Lock poisoned"))?;
-    let mut v_node = match repo.vdir_cache.remove(&ino) {
+    let mut v_node = match repo.vdir_cache.remove(&fs.set_vdir_bit(ino)) {
         Some(o) => o,
         None => bail!("Oid missing"),
     };
