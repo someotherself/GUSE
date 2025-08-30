@@ -68,7 +68,7 @@ impl FsOperationContext {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy)]
 pub enum Inodes {
     NormalIno(u64),
     VirtualIno(u64),
@@ -76,13 +76,34 @@ pub enum Inodes {
 
 #[derive(Debug, Clone, Copy)]
 pub struct NormalIno(u64);
-#[derive(Debug, Clone, Copy)]
+
+impl NormalIno {
+    pub fn to_virt(&self) -> VirtualIno {
+        VirtualIno(self | VDIR_BIT)
+    }
+
+    pub fn to_virt_u64(&self) -> u64 {
+        self | VDIR_BIT
+    }
+}
+
+#[derive(Debug, Clone, Copy, Eq)]
 pub struct VirtualIno(u64);
 
+impl VirtualIno {
+    pub fn to_norm(self) -> NormalIno {
+        NormalIno(self.0 & !VDIR_BIT)
+    }
+
+    pub fn to_norm_u64(&self) -> u64 {
+        self.0 & !VDIR_BIT
+    }
+}
+
 impl Inodes {
-    fn to_norm(&self) -> NormalIno {
+    fn to_norm(self) -> NormalIno {
         match self {
-            Inodes::NormalIno(ino) => NormalIno(*ino),
+            Inodes::NormalIno(ino) => NormalIno(ino),
             Inodes::VirtualIno(ino) => {
                 let ino = ino & !VDIR_BIT;
                 NormalIno(ino)
@@ -90,25 +111,25 @@ impl Inodes {
         }
     }
 
-    fn to_virt(&self) -> VirtualIno {
+    fn to_virt(self) -> VirtualIno {
         match self {
             Inodes::NormalIno(ino) => {
                 let ino = ino | VDIR_BIT;
                 VirtualIno(ino)
             }
-            Inodes::VirtualIno(ino) => VirtualIno(*ino),
+            Inodes::VirtualIno(ino) => VirtualIno(ino),
         }
     }
 
-    fn to_u64_n(&self) -> u64 {
+    fn to_u64_n(self) -> u64 {
         match self {
-            Inodes::NormalIno(ino) | Inodes::VirtualIno(ino) => *ino & !VDIR_BIT,
+            Inodes::NormalIno(ino) | Inodes::VirtualIno(ino) => ino & !VDIR_BIT,
         }
     }
 
-    fn to_u64_v(&self) -> u64 {
+    fn to_u64_v(self) -> u64 {
         match self {
-            Inodes::NormalIno(ino) | Inodes::VirtualIno(ino) => *ino | VDIR_BIT,
+            Inodes::NormalIno(ino) | Inodes::VirtualIno(ino) => ino | VDIR_BIT,
         }
     }
 }
@@ -166,6 +187,13 @@ impl std::ops::BitAnd<u64> for &Inodes {
     }
 }
 
+impl std::ops::BitOr<u64> for &NormalIno {
+    type Output = u64;
+    fn bitor(self, rhs: u64) -> Self::Output {
+        self.0 | rhs
+    }
+}
+
 impl Deref for Inodes {
     type Target = u64;
     fn deref(&self) -> &Self::Target {
@@ -181,6 +209,24 @@ impl Display for Inodes {
         match self {
             Inodes::NormalIno(ino) | Inodes::VirtualIno(ino) => write!(f, "{ino}"),
         }
+    }
+}
+
+impl PartialEq for VirtualIno {
+    fn eq(&self, other: &Self) -> bool {
+        self.0 == other.0
+    }
+}
+
+impl PartialOrd for VirtualIno {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for VirtualIno {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.0.cmp(&other.0)
     }
 }
 
@@ -940,7 +986,7 @@ impl GitFs {
         // Check if the entry is alread saved in vdir_cache
         {
             let repo = repo_arc.lock().map_err(|_| anyhow!("Lock poisoned"))?;
-            if let Some(e) = repo.vdir_cache.get(&v_ino) {
+            if let Some(e) = repo.vdir_cache.get(&ino.to_virt()) {
                 new_attr.inode = e.inode;
                 new_attr.perm = 0o555;
                 new_attr.size = 0;
@@ -954,7 +1000,7 @@ impl GitFs {
         // If not, create it and save the VirtualNode in vdir_cache
         {
             let mut repo = repo_arc.lock().map_err(|_| anyhow!("Lock poisoned"))?;
-            match repo.vdir_cache.entry(v_ino) {
+            match repo.vdir_cache.entry(ino.to_virt()) {
                 Entry::Occupied(e) => {
                     // Another thread alread inserted an entry
                     let v = e.get();

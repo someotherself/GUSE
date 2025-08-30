@@ -52,12 +52,11 @@ pub fn open_vdir(
     truncate: bool,
     parent: VirtualIno,
 ) -> anyhow::Result<u64> {
-    let parent = u64::from(parent);
     let name = fs.get_name_from_db(ino)?;
     let repo = fs.get_repo(ino)?;
     let repo = repo.lock().map_err(|_| anyhow!("Lock poisoned"))?;
     let Some(v_node) = repo.vdir_cache.get(&parent) else {
-        tracing::error!("Open - no v_node for {} and {}", name, parent);
+        tracing::error!("Open - no v_node for {} and {}", name, u64::from(parent));
         bail!("File not found!")
     };
     tracing::info!("{}", v_node.log.is_empty());

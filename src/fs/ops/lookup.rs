@@ -137,8 +137,7 @@ pub fn lookup_git(fs: &GitFs, parent: NormalIno, name: &str) -> anyhow::Result<O
 }
 
 pub fn lookup_vdir(fs: &GitFs, parent: VirtualIno, name: &str) -> anyhow::Result<Option<FileAttr>> {
-    let parent = u64::from(parent);
-    let repo = fs.get_repo(parent)?;
+    let repo = fs.get_repo(u64::from(parent))?;
     let Ok(repo) = repo.lock() else {
         return Ok(None);
     };

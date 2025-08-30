@@ -10,7 +10,7 @@ use std::{
     sync::{Arc, Mutex},
 };
 
-use crate::fs::{ObjectAttr, meta_db::MetaDb};
+use crate::fs::{ObjectAttr, VirtualIno, meta_db::MetaDb};
 
 pub struct GitRepo {
     // Caching the database connection for reads.
@@ -25,7 +25,7 @@ pub struct GitRepo {
     pub snapshots: BTreeMap<i64, Vec<Oid>>,
     pub res_inodes: HashSet<u64>,
     /// key: inode of the virtual directory
-    pub vdir_cache: BTreeMap<u64, VirtualNode>,
+    pub vdir_cache: BTreeMap<VirtualIno, VirtualNode>,
 }
 
 /// Insert/get a node during getattr/lookup

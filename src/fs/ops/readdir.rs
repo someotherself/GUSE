@@ -4,7 +4,7 @@ use anyhow::{anyhow, bail};
 use git2::Oid;
 
 use crate::fs::{
-    FileAttr, GitFs, NormalIno, REPO_SHIFT, VirtualIno,
+    FileAttr, GitFs, Inodes, NormalIno, REPO_SHIFT, VirtualIno,
     fileattr::{FileType, ObjectAttr},
     repo::VirtualNode,
 };
@@ -243,17 +243,12 @@ fn update_vdir_log(
     ino: u64,
     v_node: VirtualNode,
 ) -> anyhow::Result<BTreeMap<String, (u64, ObjectAttr)>> {
-    let v_ino = fs.set_vdir_bit(ino);
+    let v_ino: Inodes = ino.into();
 
-    let repo = fs.get_repo(v_ino)?;
+    let repo = fs.get_repo(u64::from(&v_ino))?;
     let mut repo = repo.lock().map_err(|_| anyhow!("Lock poisoned"))?;
-    repo.vdir_cache.insert(v_ino, v_node);
-    Ok(repo
-        .vdir_cache
-        .get(&fs.set_vdir_bit(v_ino))
-        .unwrap()
-        .log
-        .clone())
+    repo.vdir_cache.insert(v_ino.to_virt(), v_node);
+    Ok(repo.vdir_cache.get(&v_ino.to_virt()).unwrap().log.clone())
 }
 
 fn log_entries(
@@ -272,8 +267,7 @@ fn log_entries(
 }
 
 pub fn read_virtual_dir(fs: &GitFs, ino: VirtualIno) -> anyhow::Result<Vec<DirectoryEntry>> {
-    let ino = u64::from(ino);
-    let repo = fs.get_repo(ino)?;
+    let repo = fs.get_repo(u64::from(ino))?;
     let repo = repo.lock().map_err(|_| anyhow!("Lock poisoned"))?;
     let v_node = match repo.vdir_cache.get(&ino) {
         Some(o) => o,
@@ -282,11 +276,11 @@ pub fn read_virtual_dir(fs: &GitFs, ino: VirtualIno) -> anyhow::Result<Vec<Direc
     let origin_oid = v_node.oid;
     drop(repo);
 
-    let log_entries = log_entries(fs, ino, origin_oid)?;
+    let log_entries = log_entries(fs, ino.to_norm_u64(), origin_oid)?;
     let mut nodes: Vec<(u64, String, FileAttr)> = vec![];
     let mut dir_entries = vec![];
 
-    let repo = fs.get_repo(ino)?;
+    let repo = fs.get_repo(u64::from(ino))?;
     let mut repo = repo.lock().map_err(|_| anyhow!("Lock poisoned"))?;
     let v_node = match repo.vdir_cache.get_mut(&ino) {
         Some(o) => o,
@@ -297,7 +291,7 @@ pub fn read_virtual_dir(fs: &GitFs, ino: VirtualIno) -> anyhow::Result<Vec<Direc
             v_node.log.insert(name.clone(), entry.clone());
             let mut attr = fs.object_to_file_attr(entry.0, &entry.1.clone())?;
             attr.perm = 0o555;
-            nodes.push((fs.clear_vdir_bit(ino), name.clone(), attr));
+            nodes.push((ino.to_norm_u64(), name.clone(), attr));
         }
 
         dir_entries.push(DirectoryEntry::new(
