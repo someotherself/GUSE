@@ -38,7 +38,7 @@ pub struct VirtualNode {
     /// Inode of the real file
     pub real: u64,
     /// Inode of the virtual file
-    pub inode: u64,
+    pub ino: u64,
     /// Oid of the file
     pub oid: Oid,
     /// Oids of the file history (if any)

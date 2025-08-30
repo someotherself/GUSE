@@ -15,7 +15,7 @@ pub fn getattr_live_dir(fs: &GitFs, ino: NormalIno) -> anyhow::Result<FileAttr> 
         git2::FileMode::Commit => dir_attr().into(),
         _ => file_attr().into(),
     };
-    attr.inode = ino;
+    attr.ino = ino;
     let attr = fs.refresh_attr(&mut attr)?;
     Ok(attr)
 }
@@ -25,7 +25,7 @@ pub fn getattr_git_dir(fs: &GitFs, ino: NormalIno) -> anyhow::Result<FileAttr> {
     let target_oid = fs.get_oid_from_db(ino)?;
     if target_oid == Oid::zero() {
         let mut attr: FileAttr = dir_attr().into();
-        attr.inode = ino;
+        attr.ino = ino;
         attr.perm = 0o555;
         Ok(attr)
     } else {

@@ -63,7 +63,7 @@ pub fn mkdir_live(
 
     let mut attr: FileAttr = create_attr.into();
 
-    attr.inode = new_ino;
+    attr.ino = new_ino;
 
     let nodes = vec![(parent, name.into(), attr)];
     fs.write_inodes_to_db(nodes)?;

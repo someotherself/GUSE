@@ -13,7 +13,7 @@ use crate::{
 };
 
 pub struct DirectoryEntry {
-    pub inode: u64,
+    pub ino: u64,
     // The git Oid (SHA-1)
     pub oid: Oid,
     // The real filename
@@ -25,9 +25,9 @@ pub struct DirectoryEntry {
 }
 
 impl DirectoryEntry {
-    pub fn new(inode: u64, oid: Oid, name: String, kind: FileType, filemode: u32) -> Self {
+    pub fn new(ino: u64, oid: Oid, name: String, kind: FileType, filemode: u32) -> Self {
         Self {
-            inode,
+            ino,
             oid,
             name,
             kind,
@@ -142,13 +142,8 @@ pub fn readdir_live_dir(fs: &GitFs, ino: NormalIno) -> anyhow::Result<Vec<Direct
         };
         let attr = fs.lookup(ino, &node_name_str)?;
         let Some(attr) = attr else { continue };
-        let entry = DirectoryEntry::new(
-            attr.inode,
-            Oid::zero(),
-            node_name_str.into(),
-            kind,
-            filemode,
-        );
+        let entry =
+            DirectoryEntry::new(attr.ino, Oid::zero(), node_name_str.into(), kind, filemode);
         entries.push(entry);
     }
     Ok(entries)

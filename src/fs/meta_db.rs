@@ -32,7 +32,7 @@ impl MetaDb {
 
             for (parent_inode, name, fileattr) in nodes {
                 stmt.execute(params![
-                    fileattr.inode as i64,
+                    fileattr.ino as i64,
                     parent_inode as i64,
                     name,
                     fileattr.oid.to_string(),

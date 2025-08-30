@@ -30,7 +30,7 @@ fn test_mkdir_fetch() -> anyhow::Result<()> {
 
             // GET ATTR ROOT
             let root_attr = fs.getattr(ROOT_INO)?;
-            assert_eq!(root_attr.inode, ROOT_INO);
+            assert_eq!(root_attr.ino, ROOT_INO);
             assert_eq!(root_attr.kind, FileType::Directory);
 
             // READ DIR ROOT
@@ -39,19 +39,19 @@ fn test_mkdir_fetch() -> anyhow::Result<()> {
                 dbg!(&node.name);
             }
             assert_eq!(read_dir_root.len(), 1);
-            assert_eq!(read_dir_root[0].inode, REPO_DIR_INO);
+            assert_eq!(read_dir_root[0].ino, REPO_DIR_INO);
             assert_eq!(read_dir_root[0].name, "git_rust");
 
             // FIND BY NAME ROOT
             let mio_attr = fs.lookup(ROOT_INO, "git_rust")?;
             assert!(mio_attr.is_some());
             let mio_attr = mio_attr.unwrap();
-            assert_eq!(mio_attr.inode, REPO_DIR_INO);
+            assert_eq!(mio_attr.ino, REPO_DIR_INO);
 
             // GET ATTR REPO_DIR
             let repo_attr = fs.getattr(REPO_DIR_INO)?;
 
-            assert_eq!(repo_attr.inode, REPO_DIR_INO);
+            assert_eq!(repo_attr.ino, REPO_DIR_INO);
             assert_eq!(repo_attr.kind, FileType::Directory);
 
             // READ DIR REPO_DIR
@@ -61,54 +61,53 @@ fn test_mkdir_fetch() -> anyhow::Result<()> {
             let snap_1_parent = &read_dir_repo[1];
             let snap_1_parent_name: &String = &snap_1_parent.name;
             let parent_snap_attr = fs.lookup(REPO_DIR_INO, snap_1_parent_name)?.unwrap();
-            let parent_snap_ino = parent_snap_attr.inode;
+            let parent_snap_ino = parent_snap_attr.ino;
 
             for a in fs.readdir(parent_snap_ino)? {
-                let a_attr_1 = fs.getattr(a.inode)?;
-                assert_eq!(a.inode, a_attr_1.inode);
+                let a_attr_1 = fs.getattr(a.ino)?;
+                assert_eq!(a.ino, a_attr_1.ino);
                 if a.kind == FileType::Directory {
                     let a_attr = fs
                         .lookup(parent_snap_ino, &a.name)?
                         .ok_or_else(|| anyhow!("Invalid input"))?;
-                    assert_eq!(a.inode, a_attr.inode);
+                    assert_eq!(a.ino, a_attr.ino);
 
-                    for b in fs.readdir(a_attr.inode)? {
-                        let b_attr_1 = fs.getattr(b.inode)?;
-                        assert_eq!(b.inode, b_attr_1.inode);
+                    for b in fs.readdir(a_attr.ino)? {
+                        let b_attr_1 = fs.getattr(b.ino)?;
+                        assert_eq!(b.ino, b_attr_1.ino);
                         if b.kind == FileType::Directory {
                             let b_attr = fs
-                                .lookup(a_attr.inode, &b.name)?
+                                .lookup(a_attr.ino, &b.name)?
                                 .ok_or_else(|| anyhow!("Invalid input"))?;
-                            assert_eq!(b.inode, b_attr.inode);
-                            for c in fs.readdir(b_attr.inode)? {
-                                let c_attr_1 = fs.getattr(c.inode)?;
-                                assert_eq!(c.inode, c_attr_1.inode);
+                            assert_eq!(b.ino, b_attr.ino);
+                            for c in fs.readdir(b_attr.ino)? {
+                                let c_attr_1 = fs.getattr(c.ino)?;
+                                assert_eq!(c.ino, c_attr_1.ino);
                                 if c.kind == FileType::Directory {
-                                    let _c_attr = fs.getattr(c.inode)?;
+                                    let _c_attr = fs.getattr(c.ino)?;
                                     let c_attr = fs
-                                        .lookup(b_attr.inode, &c.name)?
+                                        .lookup(b_attr.ino, &c.name)?
                                         .ok_or_else(|| anyhow!("Invalid input"))?;
-                                    assert_eq!(c.inode, c_attr.inode);
+                                    assert_eq!(c.ino, c_attr.ino);
                                 }
                                 dbg!("startig v_dir search");
                                 if c.oid != Oid::zero() && c.kind == FileType::RegularFile {
                                     let name = format!("{}@", c.name);
-                                    let v_dir_attr = fs.lookup(b_attr.inode, &name)?.unwrap();
-                                    dbg!(v_dir_attr.inode);
-                                    let v_dir_entries = fs.readdir(v_dir_attr.inode)?;
+                                    let v_dir_attr = fs.lookup(b_attr.ino, &name)?.unwrap();
+                                    dbg!(v_dir_attr.ino);
+                                    let v_dir_entries = fs.readdir(v_dir_attr.ino)?;
                                     dbg!(v_dir_entries.len());
 
                                     dbg!(&v_dir_entries[0].name);
-                                    dbg!(&v_dir_entries[0].inode);
-                                    dbg!(v_dir_attr.inode);
+                                    dbg!(&v_dir_entries[0].ino);
+                                    dbg!(v_dir_attr.ino);
 
-                                    let lookup_attr = fs
-                                        .lookup(v_dir_attr.inode, &v_dir_entries[0].name)?
-                                        .unwrap();
-                                    dbg!(lookup_attr.inode);
+                                    let lookup_attr =
+                                        fs.lookup(v_dir_attr.ino, &v_dir_entries[0].name)?.unwrap();
+                                    dbg!(lookup_attr.ino);
 
-                                    let getattr_attr = fs.getattr(v_dir_entries[0].inode)?;
-                                    dbg!(getattr_attr.inode);
+                                    let getattr_attr = fs.getattr(v_dir_entries[0].ino)?;
+                                    dbg!(getattr_attr.ino);
 
                                     return Ok(());
                                 }
@@ -122,22 +121,22 @@ fn test_mkdir_fetch() -> anyhow::Result<()> {
             let live_attr = fs.lookup(REPO_DIR_INO, "live")?;
             assert!(live_attr.is_some());
             let live_attr = live_attr.unwrap();
-            assert_eq!(live_attr.inode, LIVE_DIR_INO);
+            assert_eq!(live_attr.ino, LIVE_DIR_INO);
 
             assert_eq!(read_dir_root[0].name, "git_rust");
             let parent_for_mio = {
-                let repo = fs.get_repo(read_dir_root[0].inode)?;
+                let repo = fs.get_repo(read_dir_root[0].ino)?;
                 let repo = repo.lock().map_err(|_| anyhow!("Lock poisoned"))?;
                 repo.connection
                     .lock()
                     .unwrap()
-                    .get_parent_ino(read_dir_root[0].inode)?
+                    .get_parent_ino(read_dir_root[0].ino)?
             };
             assert_eq!(parent_for_mio, ROOT_INO);
 
             // GET ATTR LIVE_DIR
             let live_attr = fs.getattr(LIVE_DIR_INO)?;
-            assert_eq!(live_attr.inode, LIVE_DIR_INO);
+            assert_eq!(live_attr.ino, LIVE_DIR_INO);
             assert_eq!(live_attr.kind, FileType::Directory);
 
             // READ DIR LIVE
@@ -165,16 +164,16 @@ fn test_mkdir_normal() -> anyhow::Result<()> {
             fs.mkdir(ROOT_INO, name, create_attr)?;
 
             let root_attr = fs.getattr(ROOT_INO)?;
-            assert_eq!(root_attr.inode, ROOT_INO);
+            assert_eq!(root_attr.ino, ROOT_INO);
 
             let repo_attr = fs.getattr(REPO_DIR_INO)?;
-            assert_eq!(repo_attr.inode, REPO_DIR_INO);
+            assert_eq!(repo_attr.ino, REPO_DIR_INO);
 
             // FIND BY NAME
             let live_attr = fs.lookup(REPO_DIR_INO, "live")?;
             assert!(live_attr.is_some());
             let live_attr = live_attr.unwrap();
-            assert_eq!(live_attr.inode, LIVE_DIR_INO);
+            assert_eq!(live_attr.ino, LIVE_DIR_INO);
 
             // READ DIR
             let read_dir = fs.readdir(ROOT_INO)?;
@@ -190,28 +189,28 @@ fn test_mkdir_normal() -> anyhow::Result<()> {
 
             let create_attr = dir_attr();
             let dir_name1 = OsStr::new("dir_in_live_1");
-            let dir1_attr = fs.mkdir(live_attr.inode, dir_name1, create_attr)?;
+            let dir1_attr = fs.mkdir(live_attr.ino, dir_name1, create_attr)?;
             let dir1_ino = LIVE_DIR_INO + 1;
 
-            assert!(fs.exists(dir1_attr.inode)?);
+            assert!(fs.exists(dir1_attr.ino)?);
 
             let find_dir1 = fs.lookup(LIVE_DIR_INO, "dir_in_live_1")?.unwrap();
-            assert_eq!(find_dir1.inode, dir1_ino);
-            let getattr_dir1 = fs.getattr(find_dir1.inode)?;
-            assert_eq!(getattr_dir1.inode, dir1_ino);
-            assert_eq!(dir1_attr.inode, dir1_ino);
+            assert_eq!(find_dir1.ino, dir1_ino);
+            let getattr_dir1 = fs.getattr(find_dir1.ino)?;
+            assert_eq!(getattr_dir1.ino, dir1_ino);
+            assert_eq!(dir1_attr.ino, dir1_ino);
 
             let file1 = OsStr::new("txt.txt");
             let (file1_attr, fh) = fs.create(LIVE_DIR_INO, file1, true, true)?;
-            dbg!(file1_attr.inode);
+            dbg!(file1_attr.ino);
             dbg!(fh);
             fs.release(fh)?;
-            let fh = fs.open(file1_attr.inode, true, true, false)?;
+            let fh = fs.open(file1_attr.ino, true, true, false)?;
             dbg!(fh);
             let write_buf = b"some text";
-            fs.write(file1_attr.inode, 0, write_buf, fh)?;
+            fs.write(file1_attr.ino, 0, write_buf, fh)?;
             let mut buffer = [0u8; 100];
-            let bytes_read = fs.read(file1_attr.inode, 0, &mut buffer, fh)?;
+            let bytes_read = fs.read(file1_attr.ino, 0, &mut buffer, fh)?;
             dbg!(buffer.len());
             let text = String::from_utf8(buffer[..bytes_read].to_vec()).unwrap();
             println!("{}", text);
@@ -227,17 +226,17 @@ fn test_mkdir_normal() -> anyhow::Result<()> {
             assert!(attr_vdir.is_ok());
             let attr_vdir = attr_vdir?;
             let attr_vdir = attr_vdir.unwrap();
-            assert!(fs.is_virtual(attr_vdir.inode));
+            assert!(fs.is_virtual(attr_vdir.ino));
 
-            dbg!(attr_real_file.unwrap().inode);
-            dbg!(attr_vdir.inode);
+            dbg!(attr_real_file.unwrap().ino);
+            dbg!(attr_vdir.ino);
 
             dbg!(attr_real_file.unwrap().kind);
-            assert!(!fs.is_virtual(attr_real_file.unwrap().inode));
+            assert!(!fs.is_virtual(attr_real_file.unwrap().ino));
             dbg!(attr_vdir.kind);
 
-            let attr_vdir_getattr = fs.getattr(attr_vdir.inode)?;
-            assert_eq!(attr_vdir_getattr.inode, attr_vdir.inode);
+            let attr_vdir_getattr = fs.getattr(attr_vdir.ino)?;
+            assert_eq!(attr_vdir_getattr.ino, attr_vdir.ino);
 
             Ok(())
         },

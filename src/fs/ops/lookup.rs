@@ -42,7 +42,7 @@ pub fn lookup_repo(fs: &GitFs, parent: u64, name: &str) -> anyhow::Result<Option
             fs.repos_dir.join(&repo.repo_dir)
         };
         let mut attr = fs.attr_from_path(path)?;
-        attr.inode = live_ino;
+        attr.ino = live_ino;
         attr
     } else {
         // It will always be a yyyy-mm folder
@@ -59,7 +59,7 @@ pub fn lookup_repo(fs: &GitFs, parent: u64, name: &str) -> anyhow::Result<Option
             Err(_) => return Ok(None),
         };
         let mut attr: FileAttr = dir_attr().into();
-        attr.inode = child_ino;
+        attr.ino = child_ino;
         attr.perm = 0o555;
         attr
     };
@@ -91,7 +91,7 @@ pub fn lookup_live(fs: &GitFs, parent: NormalIno, name: &str) -> anyhow::Result<
         return Ok(None);
     }
 
-    attr.inode = child_ino;
+    attr.ino = child_ino;
     attr.perm = 0o775;
     attr.size = size;
 
@@ -132,7 +132,7 @@ pub fn lookup_git(fs: &GitFs, parent: NormalIno, name: &str) -> anyhow::Result<O
         };
         fs.object_to_file_attr(child_ino, &object_attr)?
     };
-    attr.inode = child_ino;
+    attr.ino = child_ino;
     attr.perm = 0o555;
     Ok(Some(attr))
 }

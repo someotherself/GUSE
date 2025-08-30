@@ -22,7 +22,7 @@ pub fn rename_live(
 
     if let Some(dest_attr) = fs.lookup(new_parent, new_name)? {
         dest_exists = true;
-        dest_old_ino = dest_attr.inode;
+        dest_old_ino = dest_attr.ino;
 
         if dest_attr.kind == FileType::Directory && fs.readdir(new_parent)?.is_empty() {
             bail!("Directory is not empty")
@@ -37,7 +37,7 @@ pub fn rename_live(
 
     std::fs::rename(src, dest.clone())?;
 
-    fs.remove_db_record(src_attr.inode)?;
+    fs.remove_db_record(src_attr.ino)?;
     if dest_exists {
         fs.remove_db_record(dest_old_ino)?;
     }

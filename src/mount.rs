@@ -175,7 +175,7 @@ impl fuser::Filesystem for GitFsAdapter {
         match attr_result {
             Ok(parent_attrs) => {
                 if name == OsStr::new(".") {
-                    info!("Serving . directory {}", parent_attrs.inode);
+                    info!("Serving . directory {}", parent_attrs.ino);
                     reply.entry(&TTL, &parent_attrs.into(), 0);
                     return;
                 }
@@ -187,7 +187,7 @@ impl fuser::Filesystem for GitFsAdapter {
                         fs.get_parent_ino(parent).unwrap_or(ROOT_INO)
                     };
                     let parent_attr = fs.getattr(parent_ino).unwrap();
-                    info!("Serving .. directory {}", parent_attrs.inode);
+                    info!("Serving .. directory {}", parent_attrs.ino);
                     return reply.entry(&TTL, &parent_attr.into(), 0);
                 }
             }
@@ -200,7 +200,7 @@ impl fuser::Filesystem for GitFsAdapter {
 
         match fs.lookup(parent, name.to_str().unwrap()) {
             Ok(Some(attr)) => {
-                let ino = attr.inode;
+                let ino = attr.ino;
                 debug!("Found lookup attr for {} in {parent}", name.display());
                 reply.entry(&TTL, &attr.into(), 0)
             }
@@ -420,14 +420,14 @@ impl fuser::Filesystem for GitFsAdapter {
         let mask: u64 = (1u64 << 48) - 1;
         let parent_entries: Vec<DirectoryEntry> = vec![
             DirectoryEntry {
-                inode: ino,
+                ino,
                 oid: Oid::zero(),
                 kind: FileType::Directory,
                 name: ".".to_string(),
                 filemode: libc::S_IFDIR,
             },
             DirectoryEntry {
-                inode: fs
+                ino: fs
                     .get_parent_ino(fs.clear_vdir_bit(ino))
                     .unwrap_or(ROOT_INO),
                 oid: Oid::zero(),
@@ -453,8 +453,8 @@ impl fuser::Filesystem for GitFsAdapter {
         }
 
         for (i, entry) in entries.into_iter().enumerate().skip(offset as usize) {
-            info!("Creating direntry for {} and {}", entry.name, entry.inode);
-            if reply.add(entry.inode, (i + 1) as i64, entry.kind.into(), entry.name) {
+            info!("Creating direntry for {} and {}", entry.name, entry.ino);
+            if reply.add(entry.ino, (i + 1) as i64, entry.kind.into(), entry.name) {
                 break;
             }
         }
@@ -479,14 +479,14 @@ impl fuser::Filesystem for GitFsAdapter {
         };
         let parent_entries: Vec<DirectoryEntry> = vec![
             DirectoryEntry {
-                inode: ROOT_INO,
+                ino: ROOT_INO,
                 oid: Oid::zero(),
                 kind: FileType::Directory,
                 name: ".".to_string(),
                 filemode: libc::S_IFDIR,
             },
             DirectoryEntry {
-                inode: ROOT_INO,
+                ino: ROOT_INO,
                 oid: Oid::zero(),
                 kind: FileType::Directory,
                 name: "..".to_string(),
@@ -515,7 +515,7 @@ impl fuser::Filesystem for GitFsAdapter {
 
         for (i, entry) in entries.into_iter().enumerate().skip(offset as usize) {
             if reply.add(
-                entry.entry.inode,
+                entry.entry.ino,
                 (i + 1) as i64,
                 entry.entry.name,
                 &TTL,
@@ -750,7 +750,7 @@ impl fuser::Filesystem for GitFsAdapter {
 impl From<FileAttr> for fuser::FileAttr {
     fn from(from: FileAttr) -> Self {
         Self {
-            ino: from.inode,
+            ino: from.ino,
             size: from.size,
             blocks: from.blocks,
             atime: from.atime,

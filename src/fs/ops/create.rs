@@ -19,7 +19,7 @@ pub fn create_live(
     };
     let ino = fs.next_inode_checked(parent)?;
     let mut attr: FileAttr = file_attr().into();
-    attr.inode = ino;
+    attr.ino = ino;
     let file_path = fs.build_path(parent, name)?;
 
     let file = std::fs::File::create_new(&file_path)?;

@@ -5,7 +5,7 @@ use git2::{ObjectType, Oid};
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct FileAttr {
     // Inode in the fuse fs
-    pub inode: u64,
+    pub ino: u64,
     // SHA-1 in git
     pub oid: Oid,
     // Blob size
@@ -69,7 +69,7 @@ impl From<CreateFileAttr> for FileAttr {
     fn from(value: CreateFileAttr) -> Self {
         let now = SystemTime::now();
         Self {
-            inode: 0,
+            ino: 0,
             oid: Oid::zero(),
             size: 0,
             blocks: 0,
@@ -94,10 +94,10 @@ impl From<CreateFileAttr> for FileAttr {
     }
 }
 
-fn build_attr_file(inode: u64, st_mode: u32) -> FileAttr {
+fn build_attr_file(ino: u64, st_mode: u32) -> FileAttr {
     let now = SystemTime::now();
     FileAttr {
-        inode,
+        ino,
         oid: Oid::zero(),
         size: 0,
         blocks: 0,
@@ -117,10 +117,10 @@ fn build_attr_file(inode: u64, st_mode: u32) -> FileAttr {
     }
 }
 
-pub fn build_attr_dir(inode: u64, st_mode: u32) -> FileAttr {
+pub fn build_attr_dir(ino: u64, st_mode: u32) -> FileAttr {
     let now = SystemTime::now();
     FileAttr {
-        inode,
+        ino,
         oid: Oid::zero(),
         size: 0,
         blocks: 0,

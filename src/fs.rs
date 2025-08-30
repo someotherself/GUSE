@@ -259,7 +259,7 @@ impl GitFs {
             .insert(repo_id, AtomicU64::from(repo_ino + 1));
 
         let mut repo_attr: FileAttr = mount::dir_attr().into();
-        repo_attr.inode = repo_ino;
+        repo_attr.ino = repo_ino;
         let mut nodes: Vec<(u64, String, FileAttr)> = vec![(ROOT_INO, repo_name.into(), repo_attr)];
 
         let live_ino = self.next_inode_raw(repo_ino)?;
@@ -308,8 +308,8 @@ impl GitFs {
 
         let opt: Option<i64> = stmt.query_row(params![], |row| row.get(0)).optional()?;
 
-        let inode = opt.ok_or_else(|| anyhow!("no inodes in inode_map"))?;
-        let repo_id = (inode >> REPO_SHIFT) as u16;
+        let ino = opt.ok_or_else(|| anyhow!("no inodes in inode_map"))?;
+        let repo_id = (ino >> REPO_SHIFT) as u16;
         drop(stmt);
 
         Ok(GitRepo {
@@ -458,7 +458,7 @@ impl GitFs {
         Ok(guard.remove(&fh).is_some())
     }
 
-    fn object_to_file_attr(&self, inode: u64, git_attr: &ObjectAttr) -> anyhow::Result<FileAttr> {
+    fn object_to_file_attr(&self, ino: u64, git_attr: &ObjectAttr) -> anyhow::Result<FileAttr> {
         let blocks = git_attr.size.div_ceil(512);
 
         // Compute atime and mtime from commit_time
@@ -485,7 +485,7 @@ impl GitFs {
         let flags = 0;
 
         Ok(FileAttr {
-            inode,
+            ino,
             oid: git_attr.oid,
             size: git_attr.size,
             blocks,
@@ -505,30 +505,30 @@ impl GitFs {
         })
     }
 
-    pub fn getattr(&self, inode: u64) -> anyhow::Result<FileAttr> {
+    pub fn getattr(&self, ino: u64) -> anyhow::Result<FileAttr> {
         let perms = 0o775;
         let st_mode = libc::S_IFDIR | perms;
-        let inode: Inodes = inode.into();
+        let ino: Inodes = ino.into();
 
-        if !self.exists(inode.to_u64_n())? {
-            bail!(format!("Inode {} does not exist", inode));
+        if !self.exists(ino.to_u64_n())? {
+            bail!(format!("Inode {} does not exist", ino));
         }
 
-        let ctx = FsOperationContext::get_operation(self, inode);
+        let ctx = FsOperationContext::get_operation(self, ino);
         match ctx? {
             FsOperationContext::Root => Ok(build_attr_dir(ROOT_INO, st_mode)),
             FsOperationContext::RepoDir { ino } => Ok(build_attr_dir(ino, st_mode)),
-            FsOperationContext::InsideLiveDir { ino: _ } => match inode {
-                Inodes::NormalIno(_) => ops::getattr::getattr_live_dir(self, inode.to_norm()),
+            FsOperationContext::InsideLiveDir { ino: _ } => match ino {
+                Inodes::NormalIno(_) => ops::getattr::getattr_live_dir(self, ino.to_norm()),
                 Inodes::VirtualIno(_) => {
-                    let attr = ops::getattr::getattr_live_dir(self, inode.to_norm())?;
+                    let attr = ops::getattr::getattr_live_dir(self, ino.to_norm())?;
                     self.prepare_virtual_folder(attr)
                 }
             },
-            FsOperationContext::InsideGitDir { ino: _ } => match inode {
-                Inodes::NormalIno(_) => ops::getattr::getattr_git_dir(self, inode.to_norm()),
+            FsOperationContext::InsideGitDir { ino: _ } => match ino {
+                Inodes::NormalIno(_) => ops::getattr::getattr_git_dir(self, ino.to_norm()),
                 Inodes::VirtualIno(_) => {
-                    let attr = ops::getattr::getattr_git_dir(self, inode.to_norm())?;
+                    let attr = ops::getattr::getattr_git_dir(self, ino.to_norm())?;
                     self.prepare_virtual_folder(attr)
                 }
             },
@@ -848,21 +848,21 @@ impl GitFs {
     }
 
     pub fn prepare_virtual_folder(&self, attr: FileAttr) -> anyhow::Result<FileAttr> {
-        let repo_arc = self.get_repo(attr.inode)?;
+        let repo_arc = self.get_repo(attr.ino)?;
         let mut new_attr = attr;
-        let ino: Inodes = attr.inode.into();
+        let ino: Inodes = attr.ino.into();
         let v_ino = ino.to_u64_v();
 
         // Check if the entry is alread saved in vdir_cache
         {
             let repo = repo_arc.lock().map_err(|_| anyhow!("Lock poisoned"))?;
             if let Some(e) = repo.vdir_cache.get(&ino.to_virt()) {
-                new_attr.inode = e.inode;
+                new_attr.ino = e.ino;
                 new_attr.perm = 0o555;
                 new_attr.size = 0;
                 new_attr.kind = FileType::Directory;
                 new_attr.nlink = 2;
-                debug_assert!(self.is_virtual(new_attr.inode));
+                debug_assert!(self.is_virtual(new_attr.ino));
                 return Ok(new_attr);
             }
         }
@@ -874,17 +874,17 @@ impl GitFs {
                 Entry::Occupied(e) => {
                     // Another thread alread inserted an entry
                     let v = e.get();
-                    new_attr.inode = v.inode;
+                    new_attr.ino = v.ino;
                 }
                 Entry::Vacant(slot) => {
                     let v_node = VirtualNode {
                         real: ino.to_u64_n(),
-                        inode: v_ino,
+                        ino: v_ino,
                         oid: attr.oid,
                         log: BTreeMap::new(),
                     };
                     slot.insert(v_node);
-                    new_attr.inode = v_ino;
+                    new_attr.ino = v_ino;
                 }
             };
             new_attr.kind = FileType::Directory;
@@ -908,7 +908,7 @@ impl GitFs {
     }
 
     pub fn refresh_attr(&self, attr: &mut FileAttr) -> anyhow::Result<FileAttr> {
-        let path = self.build_full_path(attr.inode)?;
+        let path = self.build_full_path(attr.ino)?;
         let metadata = path.metadata()?;
         let std_type = metadata.file_type();
         let actual = if std_type.is_dir() {
@@ -972,7 +972,7 @@ impl GitFs {
         let st_mode = mode | perms;
 
         Ok(FileAttr {
-            inode: 0,
+            ino: 0,
             oid: Oid::zero(),
             size: metadata.size(),
             blocks: metadata.blocks(),
@@ -1016,12 +1016,12 @@ impl GitFs {
         Ok(PathBuf::from(&self.repos_dir).join(db_path).join(name))
     }
 
-    fn get_repo(&self, inode: u64) -> anyhow::Result<Arc<Mutex<GitRepo>>> {
-        let repo_id = (inode >> REPO_SHIFT) as u16;
+    fn get_repo(&self, ino: u64) -> anyhow::Result<Arc<Mutex<GitRepo>>> {
+        let repo_id = (ino >> REPO_SHIFT) as u16;
         let repo = self
             .repos_list
             .get(&repo_id)
-            .ok_or_else(|| anyhow!("No repo for {inode}"))?;
+            .ok_or_else(|| anyhow!("No repo for {ino}"))?;
         Ok(repo.clone())
     }
 
@@ -1069,23 +1069,23 @@ impl GitFs {
         let mut repo = repo_arc.lock().map_err(|_| anyhow!("Lock poisoned"))?;
 
         loop {
-            let inode = self.next_inode_raw(parent)?;
+            let ino = self.next_inode_raw(parent)?;
 
-            if repo.res_inodes.insert(inode) {
-                info!("Issuing ino {inode}");
-                return Ok(inode);
+            if repo.res_inodes.insert(ino) {
+                info!("Issuing ino {ino}");
+                return Ok(ino);
             }
         }
     }
 
     fn next_inode_raw(&self, parent: u64) -> anyhow::Result<u64> {
         let repo_id = GitFs::ino_to_repo_id(parent);
-        let inode = self
+        let ino = self
             .next_inode
             .get(&repo_id)
             .ok_or_else(|| anyhow!("No repo for id {repo_id}"))?
             .fetch_add(1, Ordering::SeqCst);
-        Ok(inode)
+        Ok(ino)
     }
 
     fn next_file_handle(&self) -> u64 {
