@@ -256,58 +256,62 @@ fn update_vdir_log(
         .clone())
 }
 
+fn log_entries(
+    fs: &GitFs,
+    ino: u64,
+    origin_oid: Oid,
+) -> anyhow::Result<Vec<(String, (u64, ObjectAttr))>> {
+    let entries = get_history_objects(fs, ino, origin_oid)?;
+
+    let mut log_entries: Vec<(String, (u64, ObjectAttr))> = vec![];
+    for e in entries {
+        let new_ino = fs.next_inode_checked(ino)?;
+        log_entries.push((e.name.clone(), (new_ino, e)));
+    }
+    Ok(log_entries)
+}
+
 pub fn read_virtual_dir(fs: &GitFs, ino: VirtualIno) -> anyhow::Result<Vec<DirectoryEntry>> {
     let ino = u64::from(ino);
     let repo = fs.get_repo(ino)?;
-    let mut repo = repo.lock().map_err(|_| anyhow!("Lock poisoned"))?;
-    let mut v_node = match repo.vdir_cache.remove(&fs.set_vdir_bit(ino)) {
+    let repo = repo.lock().map_err(|_| anyhow!("Lock poisoned"))?;
+    let v_node = match repo.vdir_cache.get(&ino) {
         Some(o) => o,
         None => bail!("Oid missing"),
     };
+    let origin_oid = v_node.oid;
     drop(repo);
 
+    let log_entries = log_entries(fs, ino, origin_oid)?;
     let mut nodes: Vec<(u64, String, FileAttr)> = vec![];
     let mut dir_entries = vec![];
 
-    let origin_oid = v_node.oid;
-    if v_node.log.is_empty() {
-        let entries = get_history_objects(fs, ino, origin_oid)?;
-        for e in entries {
-            if !v_node.log.contains_key(&e.name) {
-                let new_ino = fs.next_inode_checked(ino)?;
-                v_node.log.insert(e.name.clone(), (new_ino, e));
-            }
+    let repo = fs.get_repo(ino)?;
+    let mut repo = repo.lock().map_err(|_| anyhow!("Lock poisoned"))?;
+    let v_node = match repo.vdir_cache.get_mut(&ino) {
+        Some(o) => o,
+        None => bail!("Oid missing"),
+    };
+    for (name, entry) in log_entries {
+        if !v_node.log.contains_key(&name) {
+            v_node.log.insert(name.clone(), entry.clone());
+            let mut attr = fs.object_to_file_attr(entry.0, &entry.1.clone())?;
+            attr.perm = 0o555;
+            nodes.push((fs.clear_vdir_bit(ino), name.clone(), attr));
         }
-        let log_entries = update_vdir_log(fs, ino, v_node)?;
 
-        for (entry_ino, git_attr) in log_entries.values() {
-            dir_entries.push(DirectoryEntry::new(
-                *entry_ino,
-                git_attr.oid,
-                git_attr.name.clone(),
-                FileType::RegularFile,
-                git_attr.filemode,
-            ));
-            let mut attr = fs.object_to_file_attr(*entry_ino, git_attr)?;
-            attr.perm = 0o555;
-            nodes.push((fs.clear_vdir_bit(ino), git_attr.name.clone(), attr));
-        }
-        fs.write_inodes_to_db(nodes)?;
-        Ok(dir_entries)
-    } else {
-        let log_entries = update_vdir_log(fs, ino, v_node)?;
-        for (entry_ino, git_attr) in log_entries.values() {
-            dir_entries.push(DirectoryEntry::new(
-                *entry_ino,
-                git_attr.oid,
-                git_attr.name.clone(),
-                FileType::RegularFile,
-                git_attr.filemode,
-            ));
-            let mut attr = fs.object_to_file_attr(*entry_ino, git_attr)?;
-            attr.perm = 0o555;
-            nodes.push((fs.clear_vdir_bit(ino), git_attr.name.clone(), attr));
-        }
-        Ok(dir_entries)
+        dir_entries.push(DirectoryEntry::new(
+            entry.0,
+            entry.1.oid,
+            name.clone(),
+            FileType::RegularFile,
+            entry.1.filemode,
+        ));
+
+        let mut attr = fs.object_to_file_attr(entry.0, &entry.1)?;
+        attr.perm = 0o555;
     }
+    drop(repo);
+    fs.write_inodes_to_db(nodes)?;
+    Ok(dir_entries)
 }
