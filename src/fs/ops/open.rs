@@ -6,16 +6,17 @@ use git2::Oid;
 
 use crate::{
     fs::{GitFs, Handle, SourceTypes},
-    inodes::VirtualIno,
+    inodes::{NormalIno, VirtualIno},
 };
 
 pub fn open_live(
     fs: &GitFs,
-    ino: u64,
+    ino: NormalIno,
     read: bool,
     write: bool,
     truncate: bool,
 ) -> anyhow::Result<u64> {
+    let ino = u64::from(ino);
     let path = fs.build_full_path(ino)?;
     let file = OpenOptions::new()
         .read(read)
@@ -38,23 +39,25 @@ pub fn open_live(
 
 pub fn open_git(
     fs: &GitFs,
-    ino: u64,
+    ino: NormalIno,
     read: bool,
     write: bool,
     truncate: bool,
 ) -> anyhow::Result<u64> {
+    let ino = u64::from(ino);
     let oid = fs.get_oid_from_db(ino)?;
     open_blob(fs, oid, ino, read)
 }
 
 pub fn open_vdir(
     fs: &GitFs,
-    ino: u64,
+    ino: NormalIno,
     read: bool,
     write: bool,
     truncate: bool,
     parent: VirtualIno,
 ) -> anyhow::Result<u64> {
+    let ino = u64::from(ino);
     let name = fs.get_name_from_db(ino)?;
     let repo = fs.get_repo(ino)?;
     let repo = repo.lock().map_err(|_| anyhow!("Lock poisoned"))?;

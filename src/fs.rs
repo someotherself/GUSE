@@ -51,7 +51,8 @@ enum FsOperationContext {
 }
 
 impl FsOperationContext {
-    fn get_operation(fs: &GitFs, ino: u64) -> anyhow::Result<Self> {
+    fn get_operation(fs: &GitFs, ino: Inodes) -> anyhow::Result<Self> {
+        let ino = u64::from(ino);
         let mask: u64 = (1u64 << 48) - 1;
         let repo_dir = GitFs::ino_to_repo_id(ino);
         if ino == ROOT_INO {
@@ -379,6 +380,8 @@ impl GitFs {
             git2::FileMode::Tree | git2::FileMode::Commit => FileType::Directory,
             _ => FileType::RegularFile,
         };
+
+        let ino: Inodes = ino.into();
         let parent: Inodes = parent.into();
 
         let ctx = FsOperationContext::get_operation(self, ino);
@@ -386,23 +389,38 @@ impl GitFs {
             FsOperationContext::Root => bail!("Target is a directory"),
             FsOperationContext::RepoDir { ino: _ } => bail!("Target is a directory"),
             FsOperationContext::InsideLiveDir { ino: _ } => match parent_kind {
-                FileType::Directory => ops::open::open_live(self, ino, read, write, truncate),
-                FileType::RegularFile => {
-                    ops::open::open_vdir(self, ino, read, write, truncate, parent.to_virt())
+                FileType::Directory => {
+                    ops::open::open_live(self, ino.to_norm(), read, write, truncate)
                 }
+                FileType::RegularFile => ops::open::open_vdir(
+                    self,
+                    ino.to_norm(),
+                    read,
+                    write,
+                    truncate,
+                    parent.to_virt(),
+                ),
                 _ => bail!("Invalid filemode"),
             },
             FsOperationContext::InsideGitDir { ino: _ } => match parent_kind {
-                FileType::Directory => ops::open::open_git(self, ino, read, write, truncate),
-                FileType::RegularFile => {
-                    ops::open::open_vdir(self, ino, read, write, truncate, parent.to_virt())
+                FileType::Directory => {
+                    ops::open::open_git(self, ino.to_norm(), read, write, truncate)
                 }
+                FileType::RegularFile => ops::open::open_vdir(
+                    self,
+                    ino.to_norm(),
+                    read,
+                    write,
+                    truncate,
+                    parent.to_virt(),
+                ),
                 _ => bail!("Invalid filemode"),
             },
         }
     }
 
     pub fn read(&self, ino: u64, offset: u64, buf: &mut [u8], fh: u64) -> anyhow::Result<usize> {
+        let ino: Inodes = ino.into();
         let ctx = FsOperationContext::get_operation(self, ino);
         // let parent = self.get_parent_ino(ino)?;
         // let if self.is_file(parent) {
@@ -421,6 +439,7 @@ impl GitFs {
     }
 
     pub fn write(&self, ino: u64, offset: u64, buf: &[u8], fh: u64) -> anyhow::Result<usize> {
+        let ino = ino.into();
         let ctx = FsOperationContext::get_operation(self, ino);
         match ctx? {
             FsOperationContext::Root => bail!("Not allowed"),
@@ -495,7 +514,7 @@ impl GitFs {
             bail!(format!("Inode {} does not exist", inode));
         }
 
-        let ctx = FsOperationContext::get_operation(self, inode.to_u64_n());
+        let ctx = FsOperationContext::get_operation(self, inode);
         match ctx? {
             FsOperationContext::Root => Ok(build_attr_dir(ROOT_INO, st_mode)),
             FsOperationContext::RepoDir { ino } => Ok(build_attr_dir(ino, st_mode)),
@@ -537,6 +556,9 @@ impl GitFs {
         let name = os_name
             .to_str()
             .ok_or_else(|| anyhow!("Not a valid UTF-8 name"))?;
+
+        let parent = parent.into();
+
         let ctx = FsOperationContext::get_operation(self, parent);
         match ctx? {
             FsOperationContext::Root => ops::mkdir::mkdir_root(self, ROOT_INO, name, create_attr),
@@ -568,6 +590,9 @@ impl GitFs {
         let name = os_name
             .to_str()
             .ok_or_else(|| anyhow!("Not a valid UTF-8 name"))?;
+
+        let parent = parent.into();
+
         let ctx = FsOperationContext::get_operation(self, parent);
         match ctx? {
             FsOperationContext::Root => {
@@ -598,6 +623,9 @@ impl GitFs {
         if name == "." || name == ".." {
             bail!("invalid name");
         }
+
+        let parent = parent.into();
+
         let ctx = FsOperationContext::get_operation(self, parent);
         match ctx? {
             FsOperationContext::Root => {
@@ -656,6 +684,8 @@ impl GitFs {
             bail!(format!("Invalid name {}", new_name));
         }
 
+        let parent = parent.into();
+
         let ctx = FsOperationContext::get_operation(self, parent);
         match ctx? {
             FsOperationContext::Root => {
@@ -686,6 +716,9 @@ impl GitFs {
         if name == "." || name == ".." {
             bail!("invalid name");
         }
+
+        let parent = parent.into();
+
         let ctx = FsOperationContext::get_operation(self, parent);
         match ctx? {
             FsOperationContext::Root => {
@@ -704,7 +737,7 @@ impl GitFs {
     pub fn readdir(&self, parent: u64) -> anyhow::Result<Vec<DirectoryEntry>> {
         let parent: Inodes = parent.into();
 
-        let ctx = FsOperationContext::get_operation(self, parent.to_u64_n());
+        let ctx = FsOperationContext::get_operation(self, parent);
         match ctx? {
             FsOperationContext::Root => ops::readdir::readdir_root_dir(self),
             FsOperationContext::RepoDir { ino } => ops::readdir::readdir_repo_dir(self, ino),
@@ -751,7 +784,7 @@ impl GitFs {
 
         info!("Find attr for {} {}", parent, name);
 
-        let ctx = FsOperationContext::get_operation(self, parent.to_u64_n());
+        let ctx = FsOperationContext::get_operation(self, parent);
         match ctx? {
             FsOperationContext::Root => ops::lookup::lookup_root(self, name),
             FsOperationContext::RepoDir { ino } => ops::lookup::lookup_repo(self, ino, name),
@@ -1135,6 +1168,9 @@ impl GitFs {
         if ino == ROOT_INO {
             return Ok(true);
         }
+
+        let ino: Inodes = ino.into();
+
         let ctx = FsOperationContext::get_operation(self, ino);
         match ctx? {
             FsOperationContext::Root => Ok(true),
