@@ -496,6 +496,7 @@ impl GitFs {
             git2::FileMode::Tree | git2::FileMode::Commit => FileType::Directory,
             _ => FileType::RegularFile,
         };
+        let parent: Inodes = parent.into();
 
         let ctx = FsOperationContext::get_operation(self, ino);
         match ctx? {
@@ -504,14 +505,14 @@ impl GitFs {
             FsOperationContext::InsideLiveDir { ino: _ } => match parent_kind {
                 FileType::Directory => ops::open::open_live(self, ino, read, write, truncate),
                 FileType::RegularFile => {
-                    ops::open::open_vdir(self, ino, read, write, truncate, parent)
+                    ops::open::open_vdir(self, ino, read, write, truncate, parent.to_virt())
                 }
                 _ => bail!("Invalid filemode"),
             },
             FsOperationContext::InsideGitDir { ino: _ } => match parent_kind {
                 FileType::Directory => ops::open::open_git(self, ino, read, write, truncate),
                 FileType::RegularFile => {
-                    ops::open::open_vdir(self, ino, read, write, truncate, parent)
+                    ops::open::open_vdir(self, ino, read, write, truncate, parent.to_virt())
                 }
                 _ => bail!("Invalid filemode"),
             },

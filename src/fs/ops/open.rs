@@ -4,7 +4,7 @@ use std::{fs::OpenOptions, sync::Arc};
 use anyhow::{anyhow, bail};
 use git2::Oid;
 
-use crate::fs::{GitFs, Handle, SourceTypes};
+use crate::fs::{GitFs, Handle, SourceTypes, VirtualIno};
 
 pub fn open_live(
     fs: &GitFs,
@@ -50,20 +50,23 @@ pub fn open_vdir(
     read: bool,
     write: bool,
     truncate: bool,
-    parent: u64,
+    parent: VirtualIno,
 ) -> anyhow::Result<u64> {
+    let parent = u64::from(parent);
+    let name = fs.get_name_from_db(ino)?;
     let repo = fs.get_repo(ino)?;
     let repo = repo.lock().map_err(|_| anyhow!("Lock poisoned"))?;
-    let log = match repo.vdir_cache.get(&fs.set_vdir_bit(parent)) {
-        Some(v_node) => &v_node.log,
-        None => bail!("File not found"),
+    let Some(v_node) = repo.vdir_cache.get(&parent) else {
+        tracing::error!("Open - no v_node for {} and {}", name, parent);
+        bail!("File not found!")
     };
-    let name = fs.get_name_from_db(ino)?;
-    let oid = log
-        .get(&name)
-        .ok_or_else(|| anyhow!("File not found"))?
-        .1
-        .oid;
+    tracing::info!("{}", v_node.log.is_empty());
+    let Some((_, object)) = v_node.log.get(&name) else {
+        tracing::error!("Open - no log for {}", name);
+        bail!("File not found!")
+    };
+    let oid = object.oid;
+    drop(repo);
     open_blob(fs, oid, ino, read)
 }
 
