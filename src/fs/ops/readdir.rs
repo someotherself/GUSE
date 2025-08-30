@@ -1,13 +1,12 @@
-use std::{collections::BTreeMap, ffi::OsString};
+use std::ffi::OsString;
 
 use anyhow::{anyhow, bail};
 use git2::Oid;
 
 use crate::{
     fs::{
-        FileAttr, GitFs, Inodes, REPO_SHIFT,
+        FileAttr, GitFs, REPO_SHIFT,
         fileattr::{FileType, ObjectAttr},
-        repo::VirtualNode,
     },
     inodes::{NormalIno, VirtualIno},
 };
@@ -234,19 +233,6 @@ fn get_history_objects(fs: &GitFs, ino: u64, oid: Oid) -> anyhow::Result<Vec<Obj
     let repo = fs.get_repo(ino)?;
     let repo = repo.lock().map_err(|_| anyhow!("Lock poisoned"))?;
     repo.blob_history_objects(oid)
-}
-
-fn update_vdir_log(
-    fs: &GitFs,
-    ino: u64,
-    v_node: VirtualNode,
-) -> anyhow::Result<BTreeMap<String, (u64, ObjectAttr)>> {
-    let v_ino: Inodes = ino.into();
-
-    let repo = fs.get_repo(u64::from(&v_ino))?;
-    let mut repo = repo.lock().map_err(|_| anyhow!("Lock poisoned"))?;
-    repo.vdir_cache.insert(v_ino.to_virt(), v_node);
-    Ok(repo.vdir_cache.get(&v_ino.to_virt()).unwrap().log.clone())
 }
 
 fn log_entries(
