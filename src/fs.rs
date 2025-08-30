@@ -40,19 +40,19 @@ pub const ROOT_INO: u64 = 1;
 pub const VDIR_BIT: u64 = 1u64 << 47;
 
 enum FsOperationContext {
-    // Is the root directory
+    /// Is the root directory
     Root,
-    // Is one of the directories holding a repo
+    /// Is one of the directories holding a repo
     RepoDir { ino: u64 },
-    // Dir or File inside the live dir
+    /// Dir or File inside the live dir
     InsideLiveDir { ino: u64 },
-    // Dir or File inside a repo dir
+    /// Dir or File inside a repo dir
     InsideGitDir { ino: u64 },
 }
 
 impl FsOperationContext {
     fn get_operation(fs: &GitFs, ino: Inodes) -> anyhow::Result<Self> {
-        let ino = u64::from(ino);
+        let ino = u64::from(ino.to_norm());
         let mask: u64 = (1u64 << 48) - 1;
         let repo_dir = GitFs::ino_to_repo_id(ino);
         if ino == ROOT_INO {
