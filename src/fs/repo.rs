@@ -10,7 +10,10 @@ use std::{
     sync::{Arc, Mutex},
 };
 
-use crate::fs::{ObjectAttr, VirtualIno, meta_db::MetaDb};
+use crate::{
+    fs::{ObjectAttr, meta_db::MetaDb},
+    inodes::VirtualIno,
+};
 
 pub struct GitRepo {
     // Caching the database connection for reads.

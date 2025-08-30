@@ -2,7 +2,8 @@ use anyhow::anyhow;
 use git2::Oid;
 
 use crate::{
-    fs::{FileAttr, GitFs, NormalIno},
+    fs::{FileAttr, GitFs},
+    inodes::NormalIno,
     mount::{dir_attr, file_attr},
 };
 

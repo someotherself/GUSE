@@ -4,7 +4,10 @@ use std::{fs::OpenOptions, sync::Arc};
 use anyhow::{anyhow, bail};
 use git2::Oid;
 
-use crate::fs::{GitFs, Handle, SourceTypes, VirtualIno};
+use crate::{
+    fs::{GitFs, Handle, SourceTypes},
+    inodes::VirtualIno,
+};
 
 pub fn open_live(
     fs: &GitFs,

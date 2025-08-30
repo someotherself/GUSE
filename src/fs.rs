@@ -1,9 +1,7 @@
 use std::collections::btree_map::Entry;
 use std::collections::{BTreeMap, HashSet};
 use std::ffi::OsStr;
-use std::fmt::Display;
 use std::fs::File;
-use std::ops::Deref;
 use std::os::unix::fs::{FileExt, MetadataExt, PermissionsExt};
 use std::path::Path;
 use std::sync::{Arc, Mutex, RwLock};
@@ -24,6 +22,7 @@ use crate::fs::fileattr::{CreateFileAttr, FileAttr, FileType, ObjectAttr, build_
 use crate::fs::meta_db::MetaDb;
 use crate::fs::ops::readdir::{DirectoryEntry, DirectoryEntryPlus};
 use crate::fs::repo::{GitRepo, VirtualNode};
+use crate::inodes::Inodes;
 use crate::mount;
 use crate::namespec::NameSpec;
 
@@ -65,168 +64,6 @@ impl FsOperationContext {
         } else {
             Ok(FsOperationContext::InsideGitDir { ino })
         }
-    }
-}
-
-#[derive(Debug, Clone, Copy)]
-pub enum Inodes {
-    NormalIno(u64),
-    VirtualIno(u64),
-}
-
-#[derive(Debug, Clone, Copy)]
-pub struct NormalIno(u64);
-
-impl NormalIno {
-    pub fn to_virt(&self) -> VirtualIno {
-        VirtualIno(self | VDIR_BIT)
-    }
-
-    pub fn to_virt_u64(&self) -> u64 {
-        self | VDIR_BIT
-    }
-}
-
-#[derive(Debug, Clone, Copy, Eq)]
-pub struct VirtualIno(u64);
-
-impl VirtualIno {
-    pub fn to_norm(self) -> NormalIno {
-        NormalIno(self.0 & !VDIR_BIT)
-    }
-
-    pub fn to_norm_u64(&self) -> u64 {
-        self.0 & !VDIR_BIT
-    }
-}
-
-impl Inodes {
-    fn to_norm(self) -> NormalIno {
-        match self {
-            Inodes::NormalIno(ino) => NormalIno(ino),
-            Inodes::VirtualIno(ino) => {
-                let ino = ino & !VDIR_BIT;
-                NormalIno(ino)
-            }
-        }
-    }
-
-    fn to_virt(self) -> VirtualIno {
-        match self {
-            Inodes::NormalIno(ino) => {
-                let ino = ino | VDIR_BIT;
-                VirtualIno(ino)
-            }
-            Inodes::VirtualIno(ino) => VirtualIno(ino),
-        }
-    }
-
-    fn to_u64_n(self) -> u64 {
-        match self {
-            Inodes::NormalIno(ino) | Inodes::VirtualIno(ino) => ino & !VDIR_BIT,
-        }
-    }
-
-    fn to_u64_v(self) -> u64 {
-        match self {
-            Inodes::NormalIno(ino) | Inodes::VirtualIno(ino) => ino | VDIR_BIT,
-        }
-    }
-}
-
-impl From<u64> for Inodes {
-    fn from(value: u64) -> Self {
-        if (value & VDIR_BIT) != 0 {
-            Inodes::VirtualIno(value)
-        } else {
-            Inodes::NormalIno(value)
-        }
-    }
-}
-
-impl From<NormalIno> for u64 {
-    fn from(n: NormalIno) -> Self {
-        n.0
-    }
-}
-
-impl From<VirtualIno> for u64 {
-    fn from(v: VirtualIno) -> Self {
-        v.0
-    }
-}
-
-impl From<Inodes> for u64 {
-    fn from(i: Inodes) -> Self {
-        match i {
-            Inodes::NormalIno(ino) | Inodes::VirtualIno(ino) => ino,
-        }
-    }
-}
-
-impl From<&Inodes> for u64 {
-    fn from(i: &Inodes) -> Self {
-        match *i {
-            Inodes::NormalIno(ino) | Inodes::VirtualIno(ino) => ino,
-        }
-    }
-}
-
-impl AsRef<u64> for Inodes {
-    fn as_ref(&self) -> &u64 {
-        match self {
-            Inodes::NormalIno(ino) | Inodes::VirtualIno(ino) => ino,
-        }
-    }
-}
-
-impl std::ops::BitAnd<u64> for &Inodes {
-    type Output = u64;
-    fn bitand(self, rhs: u64) -> Self::Output {
-        u64::from(self) & rhs
-    }
-}
-
-impl std::ops::BitOr<u64> for &NormalIno {
-    type Output = u64;
-    fn bitor(self, rhs: u64) -> Self::Output {
-        self.0 | rhs
-    }
-}
-
-impl Deref for Inodes {
-    type Target = u64;
-    fn deref(&self) -> &Self::Target {
-        match self {
-            Inodes::NormalIno(ino) => ino,
-            Inodes::VirtualIno(ino) => ino,
-        }
-    }
-}
-
-impl Display for Inodes {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Inodes::NormalIno(ino) | Inodes::VirtualIno(ino) => write!(f, "{ino}"),
-        }
-    }
-}
-
-impl PartialEq for VirtualIno {
-    fn eq(&self, other: &Self) -> bool {
-        self.0 == other.0
-    }
-}
-
-impl PartialOrd for VirtualIno {
-    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
-        Some(self.cmp(other))
-    }
-}
-
-impl Ord for VirtualIno {
-    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        self.0.cmp(&other.0)
     }
 }
 

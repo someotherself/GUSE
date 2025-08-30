@@ -3,10 +3,13 @@ use std::{collections::BTreeMap, ffi::OsString};
 use anyhow::{anyhow, bail};
 use git2::Oid;
 
-use crate::fs::{
-    FileAttr, GitFs, Inodes, NormalIno, REPO_SHIFT, VirtualIno,
-    fileattr::{FileType, ObjectAttr},
-    repo::VirtualNode,
+use crate::{
+    fs::{
+        FileAttr, GitFs, Inodes, REPO_SHIFT,
+        fileattr::{FileType, ObjectAttr},
+        repo::VirtualNode,
+    },
+    inodes::{NormalIno, VirtualIno},
 };
 
 pub struct DirectoryEntry {
