@@ -142,13 +142,6 @@ pub fn lookup_vdir(fs: &GitFs, parent: VirtualIno, name: &str) -> anyhow::Result
     let Ok(repo) = repo.lock() else {
         return Ok(None);
     };
-    // let _v_node = match repo.vdir_cache.get(&parent) {
-    //     Some(n) => n,
-    //     None => {
-    //         // Insert new node
-    //         todo!()
-    //     }
-    // };
     let Some(v_node) = repo.vdir_cache.get(&parent) else {
         return Ok(None);
     };
