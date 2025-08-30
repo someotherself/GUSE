@@ -272,38 +272,53 @@ pub fn read_virtual_dir(fs: &GitFs, ino: VirtualIno) -> anyhow::Result<Vec<Direc
         None => bail!("Oid missing"),
     };
     let origin_oid = v_node.oid;
+    let is_empty = v_node.log.is_empty();
     drop(repo);
 
-    let log_entries = log_entries(fs, ino.to_norm_u64(), origin_oid)?;
-    let mut nodes: Vec<(u64, String, FileAttr)> = vec![];
     let mut dir_entries = vec![];
 
-    let repo = fs.get_repo(u64::from(ino))?;
-    let mut repo = repo.lock().map_err(|_| anyhow!("Lock poisoned"))?;
-    let v_node = match repo.vdir_cache.get_mut(&ino) {
-        Some(o) => o,
-        None => bail!("Oid missing"),
-    };
-    for (name, entry) in log_entries {
-        if !v_node.log.contains_key(&name) {
-            v_node.log.insert(name.clone(), entry.clone());
-            let mut attr = fs.object_to_file_attr(entry.0, &entry.1.clone())?;
-            attr.perm = 0o555;
-            nodes.push((ino.to_norm_u64(), name.clone(), attr));
+    if is_empty {
+        let mut nodes: Vec<(u64, String, FileAttr)> = vec![];
+        let log_entries = log_entries(fs, ino.to_norm_u64(), origin_oid)?;
+        let repo = fs.get_repo(u64::from(ino))?;
+        let mut repo = repo.lock().map_err(|_| anyhow!("Lock poisoned"))?;
+        let v_node = match repo.vdir_cache.get_mut(&ino) {
+            Some(o) => o,
+            None => bail!("Oid missing"),
+        };
+        for (name, entry) in log_entries {
+            if !v_node.log.contains_key(&name) {
+                v_node.log.insert(name.clone(), entry.clone());
+                let mut attr = fs.object_to_file_attr(entry.0, &entry.1.clone())?;
+                attr.perm = 0o555;
+                nodes.push((ino.to_norm_u64(), name.clone(), attr));
+            }
+            dir_entries.push(DirectoryEntry::new(
+                entry.0,
+                entry.1.oid,
+                name.clone(),
+                FileType::RegularFile,
+                entry.1.filemode,
+            ));
         }
-
-        dir_entries.push(DirectoryEntry::new(
-            entry.0,
-            entry.1.oid,
-            name.clone(),
-            FileType::RegularFile,
-            entry.1.filemode,
-        ));
-
-        let mut attr = fs.object_to_file_attr(entry.0, &entry.1)?;
-        attr.perm = 0o555;
+        drop(repo);
+        fs.write_inodes_to_db(nodes)?;
+    } else {
+        let repo = fs.get_repo(u64::from(ino))?;
+        let repo = repo.lock().map_err(|_| anyhow!("Lock poisoned"))?;
+        let v_node = match repo.vdir_cache.get(&ino) {
+            Some(o) => o,
+            None => bail!("Oid missing"),
+        };
+        for (ino, entry) in v_node.log.values() {
+            dir_entries.push(DirectoryEntry::new(
+                *ino,
+                entry.oid,
+                entry.name.clone(),
+                FileType::RegularFile,
+                entry.filemode,
+            ));
+        }
     }
-    drop(repo);
-    fs.write_inodes_to_db(nodes)?;
     Ok(dir_entries)
 }
