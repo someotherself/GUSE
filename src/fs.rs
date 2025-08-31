@@ -648,16 +648,18 @@ impl GitFs {
         new_parent: u64,
         os_new_name: &OsStr,
     ) -> anyhow::Result<()> {
+        let parent: Inodes = parent.into();
+        let new_parent: Inodes = new_parent.into();
         if self.read_only {
             bail!("Filesystem is in read only");
         }
-        if !self.exists(parent)? {
+        if !self.exists(parent.to_u64_n())? {
             bail!(format!("Parent {} does not exist", parent));
         }
-        if !self.exists(new_parent)? {
+        if !self.exists(new_parent.to_u64_n())? {
             bail!(format!("New parent {} does not exist", new_parent));
         }
-        if !self.is_in_live(new_parent) {
+        if !self.is_in_live(new_parent.to_u64_n()) {
             bail!(format!("New parent {} not allowed", new_parent));
         }
 
@@ -668,7 +670,7 @@ impl GitFs {
             .to_str()
             .ok_or_else(|| anyhow!("Not a valid UTF-8 name"))?;
 
-        if self.lookup(parent, name).is_err() {
+        if self.lookup(parent.to_u64_n(), name).is_err() {
             bail!(format!("Source {} does not exist", name));
         }
 
@@ -684,8 +686,6 @@ impl GitFs {
             bail!(format!("Invalid name {}", new_name));
         }
 
-        let parent = parent.into();
-
         let ctx = FsOperationContext::get_operation(self, parent);
         match ctx? {
             FsOperationContext::Root => {
@@ -694,9 +694,13 @@ impl GitFs {
             FsOperationContext::RepoDir { ino: _ } => {
                 bail!("Not allowed")
             }
-            FsOperationContext::InsideLiveDir { ino } => {
-                ops::rename::rename_live(self, ino, name, new_parent, new_name)
-            }
+            FsOperationContext::InsideLiveDir { ino: _ } => ops::rename::rename_live(
+                self,
+                parent.to_norm(),
+                name,
+                new_parent.to_norm(),
+                new_name,
+            ),
             FsOperationContext::InsideGitDir { ino: _ } => {
                 bail!("This directory is read only")
             }
