@@ -8,7 +8,7 @@ pub enum Inodes {
     VirtualIno(u64),
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Eq)]
 pub struct NormalIno(pub u64);
 
 impl NormalIno {
@@ -151,6 +151,12 @@ impl Display for Inodes {
         match self {
             Inodes::NormalIno(ino) | Inodes::VirtualIno(ino) => write!(f, "{ino}"),
         }
+    }
+}
+
+impl PartialEq for NormalIno {
+    fn eq(&self, other: &Self) -> bool {
+        self.0 == other.0
     }
 }
 
