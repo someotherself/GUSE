@@ -54,3 +54,13 @@ pub fn rename_live(
 
     Ok(())
 }
+
+pub fn rename_git(
+    _fs: &GitFs,
+    _parent: NormalIno,
+    _name: &str,
+    _new_parent: NormalIno,
+    _new_name: &str,
+) -> anyhow::Result<()> {
+    todo!()
+}
