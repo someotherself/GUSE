@@ -16,7 +16,7 @@ use std::{
 use anyhow::{Context, anyhow, bail};
 use git2::{FileMode, ObjectType, Oid, Repository};
 use rusqlite::{Connection, OptionalExtension, params};
-use tracing::{debug, info};
+use tracing::{Level, debug, info, instrument};
 
 use crate::fs::fileattr::{CreateFileAttr, FileAttr, FileType, ObjectAttr, build_attr_dir};
 use crate::fs::meta_db::MetaDb;
@@ -505,6 +505,7 @@ impl GitFs {
         })
     }
 
+    #[instrument(level = "debug", skip(self), fields(ino), ret(level = Level::DEBUG), err(Display))]
     pub fn getattr(&self, ino: u64) -> anyhow::Result<FileAttr> {
         let perms = 0o775;
         let st_mode = libc::S_IFDIR | perms;
@@ -610,6 +611,17 @@ impl GitFs {
         }
     }
 
+    #[instrument(
+    level = "debug",
+    skip(self, os_name),
+    fields(
+        parent,
+        name = %os_name.to_string_lossy(),
+        read_only = self.read_only
+    ),
+    ret(level = Level::DEBUG),
+    err(Display)
+)]
     pub fn unlink(&self, parent: u64, os_name: &OsStr) -> anyhow::Result<()> {
         if self.read_only {
             bail!("Filesystem is in read only");
@@ -679,10 +691,12 @@ impl GitFs {
         }
 
         if name.contains('/') || name.contains('\\') {
+            tracing::error!(%name, "invalid name: contains '/' or '\\'");
             bail!(format!("Invalid name {}", name));
         }
 
         if new_name.contains('/') || new_name.contains('\\') {
+            tracing::error!(%new_name, "invalid name: contains '/' or '\\'");
             bail!(format!("Invalid name {}", new_name));
         }
 
@@ -769,6 +783,7 @@ impl GitFs {
         Ok(entries_plus)
     }
 
+    #[instrument(level = "debug", skip(self), fields(name= %name), ret(level = Level::DEBUG), err(Display))]
     pub fn lookup(&self, parent: u64, name: &str) -> anyhow::Result<Option<FileAttr>> {
         // Check if name if a virtual dir
         // If not, check if the parent is a virtual dir
