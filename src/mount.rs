@@ -175,7 +175,6 @@ impl fuser::Filesystem for GitFsAdapter {
         match attr_result {
             Ok(parent_attrs) => {
                 if name == OsStr::new(".") {
-                    info!("Serving . directory {}", parent_attrs.ino);
                     reply.entry(&TTL, &parent_attrs.into(), 0);
                     return;
                 }
@@ -187,7 +186,6 @@ impl fuser::Filesystem for GitFsAdapter {
                         fs.get_parent_ino(parent).unwrap_or(ROOT_INO)
                     };
                     let parent_attr = fs.getattr(parent_ino).unwrap();
-                    info!("Serving .. directory {}", parent_attrs.ino);
                     return reply.entry(&TTL, &parent_attr.into(), 0);
                 }
             }
@@ -201,15 +199,10 @@ impl fuser::Filesystem for GitFsAdapter {
         match fs.lookup(parent, name.to_str().unwrap()) {
             Ok(Some(attr)) => {
                 let ino = attr.ino;
-                debug!("Found lookup attr for {} in {parent}", name.display());
                 reply.entry(&TTL, &attr.into(), 0)
             }
             Ok(None) => {
                 // The name is not found under this parent
-                debug!(
-                    "No attr found during lookup for {} in {parent}",
-                    name.display()
-                );
                 reply.error(ENOENT);
             }
             Err(e) => {
@@ -453,7 +446,6 @@ impl fuser::Filesystem for GitFsAdapter {
         }
 
         for (i, entry) in entries.into_iter().enumerate().skip(offset as usize) {
-            info!("Creating direntry for {} and {}", entry.name, entry.ino);
             if reply.add(entry.ino, (i + 1) as i64, entry.kind.into(), entry.name) {
                 break;
             }

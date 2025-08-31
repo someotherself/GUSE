@@ -11,6 +11,7 @@ use crate::{
     inodes::{NormalIno, VirtualIno},
 };
 
+#[derive(Debug)]
 pub struct DirectoryEntry {
     pub ino: u64,
     // The git Oid (SHA-1)

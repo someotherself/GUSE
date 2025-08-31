@@ -16,7 +16,7 @@ use std::{
 use anyhow::{Context, anyhow, bail};
 use git2::{FileMode, ObjectType, Oid, Repository};
 use rusqlite::{Connection, OptionalExtension, params};
-use tracing::{Level, debug, info, instrument};
+use tracing::{Level, debug, field, info, instrument};
 
 use crate::fs::fileattr::{CreateFileAttr, FileAttr, FileType, ObjectAttr, build_attr_dir};
 use crate::fs::meta_db::MetaDb;
@@ -756,22 +756,30 @@ impl GitFs {
         }
     }
 
+    #[instrument(level = "debug", skip(self), fields(parent, return_len = field::Empty), err(Display))]
     pub fn readdir(&self, parent: u64) -> anyhow::Result<Vec<DirectoryEntry>> {
-        let parent: Inodes = parent.into();
+        let ret: anyhow::Result<Vec<DirectoryEntry>> = {
+            let parent: Inodes = parent.into();
 
-        let ctx = FsOperationContext::get_operation(self, parent);
-        match ctx? {
-            FsOperationContext::Root => ops::readdir::readdir_root_dir(self),
-            FsOperationContext::RepoDir { ino } => ops::readdir::readdir_repo_dir(self, ino),
-            FsOperationContext::InsideLiveDir { ino: _ } => match parent {
-                Inodes::NormalIno(_) => ops::readdir::readdir_live_dir(self, parent.to_norm()),
-                Inodes::VirtualIno(_) => ops::readdir::read_virtual_dir(self, parent.to_virt()),
-            },
-            FsOperationContext::InsideGitDir { ino: _ } => match parent {
-                Inodes::NormalIno(_) => ops::readdir::readdir_git_dir(self, parent.to_norm()),
-                Inodes::VirtualIno(_) => ops::readdir::read_virtual_dir(self, parent.to_virt()),
-            },
+            let ctx = FsOperationContext::get_operation(self, parent);
+            match ctx? {
+                FsOperationContext::Root => ops::readdir::readdir_root_dir(self),
+                FsOperationContext::RepoDir { ino } => ops::readdir::readdir_repo_dir(self, ino),
+                FsOperationContext::InsideLiveDir { ino: _ } => match parent {
+                    Inodes::NormalIno(_) => ops::readdir::readdir_live_dir(self, parent.to_norm()),
+                    Inodes::VirtualIno(_) => ops::readdir::read_virtual_dir(self, parent.to_virt()),
+                },
+                FsOperationContext::InsideGitDir { ino: _ } => match parent {
+                    Inodes::NormalIno(_) => ops::readdir::readdir_git_dir(self, parent.to_norm()),
+                    Inodes::VirtualIno(_) => ops::readdir::read_virtual_dir(self, parent.to_virt()),
+                },
+            }
+        };
+        if let Ok(ref entries) = ret {
+            tracing::Span::current().record("return_len", field::display(entries.len()));
+            tracing::debug!(len = entries.len(), "readdir ok");
         }
+        ret
     }
 
     pub fn readdirplus(&self, parent: u64) -> anyhow::Result<Vec<DirectoryEntryPlus>> {
