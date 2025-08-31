@@ -24,11 +24,11 @@ pub struct GitRepo {
     pub inner: Repository,
     pub head: Option<Oid>,
     /// i64 -> commit_time -> seconds since EPOCH
-    /// 
+    ///
     /// Vec<Oid> -> Vec<commit_oid> -> In case commits are made at the same time
     pub snapshots: BTreeMap<i64, Vec<Oid>>,
     /// Used inodes to prevent reading from DB
-    /// 
+    ///
     /// Gets populated from DB when loading a repo
     pub res_inodes: HashSet<u64>,
     /// key: inode of the virtual directory

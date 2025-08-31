@@ -19,6 +19,10 @@ impl NormalIno {
     pub fn to_virt_u64(&self) -> u64 {
         self | VDIR_BIT
     }
+
+    pub fn to_norm_u64(&self) -> u64 {
+        self.0
+    }
 }
 
 #[derive(Debug, Clone, Copy, Eq)]
@@ -31,6 +35,10 @@ impl VirtualIno {
 
     pub fn to_norm_u64(&self) -> u64 {
         self.0 & !VDIR_BIT
+    }
+
+    pub fn to_virt_u64(&self) -> u64 {
+        self.0
     }
 }
 
