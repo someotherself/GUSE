@@ -4,7 +4,7 @@ use anyhow::anyhow;
 use git2::Oid;
 
 use crate::{
-    fs::{FileType, REPO_SHIFT},
+    fs::{FileType, GitFs, REPO_SHIFT},
     mount::dir_attr,
     test_setup::{TestSetup, get_fs, run_test},
 };
