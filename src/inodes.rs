@@ -154,6 +154,18 @@ impl Display for Inodes {
     }
 }
 
+impl Display for NormalIno {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
+impl Display for VirtualIno {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
 impl PartialEq for NormalIno {
     fn eq(&self, other: &Self) -> bool {
         self.0 == other.0
