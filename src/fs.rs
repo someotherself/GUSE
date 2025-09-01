@@ -1314,6 +1314,10 @@ impl GitFs {
     }
 
     fn get_mode_from_db(&self, ino: u64) -> anyhow::Result<git2::FileMode> {
+        // Live directory does not exist in the DB. Handle it separately.
+        if ino == 0 {
+            return Ok(FileMode::Tree);
+        }
         let conn_arc = {
             let repo = &self.get_repo(ino)?;
             let repo = repo.lock().map_err(|_| anyhow!("Lock poisoned"))?;
