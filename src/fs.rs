@@ -716,13 +716,7 @@ impl GitFs {
                 new_parent.to_norm(),
                 new_name,
             ),
-            FsOperationContext::InsideGitDir { ino: _ } => ops::rename::rename_git(
-                self,
-                parent.to_norm(),
-                name,
-                new_parent.to_norm(),
-                new_name,
-            ),
+            FsOperationContext::InsideGitDir { ino: _ } => bail!("This directory is read only"),
         }
     }
 
