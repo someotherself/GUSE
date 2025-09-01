@@ -185,7 +185,9 @@ impl fuser::Filesystem for GitFsAdapter {
                     } else {
                         fs.get_parent_ino(parent).unwrap_or(ROOT_INO)
                     };
-                    let parent_attr = fs.getattr(parent_ino).unwrap();
+                    let Ok(parent_attr) = fs.getattr(parent_ino) else {
+                        return reply.error(libc::ENOENT);
+                    };
                     return reply.entry(&TTL, &parent_attr.into(), 0);
                 }
             }
