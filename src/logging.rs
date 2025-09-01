@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+// use std::collections::BTreeMap;
 
 use tracing_subscriber::EnvFilter;
 
@@ -53,6 +53,45 @@ use tracing_subscriber::EnvFilter;
 
 //     pub fn pop(&mut self) -> Option<T> {
 //         self.inner.pop_front()
+//     }
+// }
+
+/// Only works with inodes as keys
+///
+/// Keys must never have duplicates and should be created in accending order.
+// struct RingBTreeBuff<T, V> {
+//     inner: BTreeMap<T, V>,
+//     capacity: usize,
+// }
+
+// impl<T: Ord, V> RingBTreeBuff<T, V> {
+//     pub fn new(capacity: usize) -> Self {
+//         Self {
+//             inner: BTreeMap::new(),
+//             capacity,
+//         }
+//     }
+
+//     pub fn insert(&mut self, key: T, value: V) -> Option<V> {
+//         if self.capacity == 0 {
+//             return None;
+//         }
+//         if self.inner.len() == self.capacity {
+//             self.inner.pop_first();
+//         }
+//         self.inner.insert(key, value)
+//     }
+
+//     pub fn remove(&mut self, key: T) -> Option<V> {
+//         self.inner.remove(&key)
+//     }
+
+//     pub fn len(&self) -> usize {
+//         self.inner.len()
+//     }
+
+//     pub fn capacity(&self) -> usize {
+//         self.capacity
 //     }
 // }
 
