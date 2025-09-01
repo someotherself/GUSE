@@ -151,26 +151,6 @@ impl fuser::Filesystem for GitFsAdapter {
                 return reply.error(EIO);
             }
         };
-        // let attr_result = fs.getattr(parent);
-        // match attr_result {
-        //     Ok(parent_attrs) => {
-        //         if name == OsStr::new(".") {
-        //             info!("Serving . directory {}", parent_attrs.inode);
-        //             reply.entry(&TTL, &parent_attrs.into(), 0);
-        //             return;
-        //         }
-
-        //         if name == OsStr::new("..") {
-        //             let parent_ino = if parent == ROOT_INO {
-        //                 ROOT_INO
-        //             } else {
-        //                 fs.get_parent_ino(parent).unwrap_or(ROOT_INO)
-        //             };
-        //             let parent_attr = fs.getattr(parent_ino).unwrap();
-        //             info!("Serving .. directory {}", parent_attrs.inode);
-        //             return reply.entry(&TTL, &parent_attr.into(), 0);
-        //         }
-        //     }
         let attr_result = fs.getattr(parent);
         match attr_result {
             Ok(parent_attrs) => {
