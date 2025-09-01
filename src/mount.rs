@@ -733,7 +733,12 @@ impl fuser::Filesystem for GitFsAdapter {
             _ => return reply.error(libc::EINVAL),
         };
 
-        let (attr, fh) = fs.create(parent, name, read, write).unwrap();
+        let (attr, fh) = match fs.create(parent, name, read, write) {
+            Ok((a, h)) => (a, h),
+            Err(e) => {
+                return reply.error(libc::ENOENT);
+            }
+        };
 
         reply.created(&TTL, &attr.into(), 0, fh, flags as u32);
     }
