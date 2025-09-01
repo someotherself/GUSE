@@ -243,3 +243,274 @@ fn test_mkdir_normal() -> anyhow::Result<()> {
     )?;
     Ok(())
 }
+
+/// Helper to get the ino of the "live" dir under the repo-dir.
+fn live_ino(fs: &GitFs) -> anyhow::Result<u64> {
+    fs.lookup(REPO_DIR_INO, "live")?
+        .map(|a| a.ino)
+        .ok_or_else(|| anyhow!("live not found"))
+}
+
+/// Renaming a directory within the same parent should succeed and update the directory entries.
+#[test]
+fn test_rename_live_same_parent_dir() -> anyhow::Result<()> {
+    run_test(
+        TestSetup {
+            key: "rename_live_same_parent",
+            read_only: false,
+        },
+        |_| -> anyhow::Result<()> {
+            let fs_arc = get_fs();
+            let mut fs = fs_arc.lock().map_err(|_| anyhow!("Lock poisoned"))?;
+
+            let create_attr = dir_attr();
+            let name = OsStr::new("new_repo");
+            fs.mkdir(ROOT_INO, name, create_attr)?;
+            let live = live_ino(&fs)?;
+
+            // Create dir: live/alpha
+            let alpha = OsStr::new("alpha");
+            fs.mkdir(live, alpha, dir_attr())?;
+            // Sanity
+            assert!(fs.lookup(live, "alpha")?.is_some());
+
+            // Rename live/alpha -> live/bravo
+            let bravo = OsStr::new("bravo");
+            fs.rename(live, alpha, live, bravo)?;
+
+            // Old gone, new present
+            assert!(fs.lookup(live, "alpha")?.is_none());
+            let bravo_attr = fs.lookup(live, "bravo")?.expect("bravo missing");
+            // Bravo is a dir
+            assert_eq!(bravo_attr.kind, FileType::Directory);
+
+            Ok(())
+        },
+    )?;
+    Ok(())
+}
+
+/// Renaming a directory across two different parents inside live should succeed.
+#[test]
+fn test_rename_live_across_parents() -> anyhow::Result<()> {
+    run_test(
+        TestSetup {
+            key: "rename_live_across_parents",
+            read_only: false,
+        },
+        |_| -> anyhow::Result<()> {
+            let fs_arc = get_fs();
+            let mut fs = fs_arc.lock().map_err(|_| anyhow!("Lock poisoned"))?;
+
+            let create_attr = dir_attr();
+            let name = OsStr::new("new_repo");
+            fs.mkdir(ROOT_INO, name, create_attr)?;
+            let live = live_ino(&fs)?;
+
+            // live/left and live/right
+            let left = OsStr::new("left");
+            let right = OsStr::new("right");
+            let left_attr = fs.mkdir(live, left, dir_attr())?;
+            let right_attr = fs.mkdir(live, right, dir_attr())?;
+            // left/x
+            let x = OsStr::new("x");
+            fs.mkdir(left_attr.ino, x, dir_attr())?;
+            assert!(fs.lookup(left_attr.ino, "x")?.is_some());
+
+            // Move left/x -> right/x
+            fs.rename(left_attr.ino, x, right_attr.ino, x)?;
+
+            // Verify
+            assert!(fs.lookup(left_attr.ino, "x")?.is_none());
+            assert!(fs.lookup(right_attr.ino, "x")?.is_some());
+
+            Ok(())
+        },
+    )?;
+    Ok(())
+}
+
+/// No-op rename (same parent + same name) should return Ok(()) and not change entries.
+#[test]
+fn test_rename_live_noop_same_name() -> anyhow::Result<()> {
+    run_test(
+        TestSetup {
+            key: "rename_live_noop",
+            read_only: false,
+        },
+        |_| -> anyhow::Result<()> {
+            let fs_arc = get_fs();
+            let mut fs = fs_arc.lock().map_err(|_| anyhow!("Lock poisoned"))?;
+
+            let create_attr = dir_attr();
+            let name = OsStr::new("new_repo");
+            fs.mkdir(ROOT_INO, name, create_attr)?;
+            let live = live_ino(&fs)?;
+
+            let name = OsStr::new("noop_dir");
+            fs.mkdir(live, name, dir_attr())?;
+            let before = fs.readdir(live)?;
+
+            // Same parent + same name
+            fs.rename(live, name, live, name)?;
+
+            let after = fs.readdir(live)?;
+            assert_eq!(before.len(), after.len());
+            assert!(fs.lookup(live, "noop_dir")?.is_some());
+
+            Ok(())
+        },
+    )?;
+    Ok(())
+}
+
+/// Renaming onto an existing EMPTY destination directory should succeed
+/// (POSIX rename semantics allow replacing an empty directory).
+#[test]
+fn test_rename_live_overwrite_empty_dir() -> anyhow::Result<()> {
+    run_test(
+        TestSetup {
+            key: "rename_live_overwrite_empty_dir",
+            read_only: false,
+        },
+        |_| -> anyhow::Result<()> {
+            let fs_arc = get_fs();
+            let mut fs = fs_arc.lock().map_err(|_| anyhow!("Lock poisoned"))?;
+
+            let create_attr = dir_attr();
+            let name = OsStr::new("new_repo");
+            fs.mkdir(ROOT_INO, name, create_attr)?;
+            let live = live_ino(&fs)?;
+
+            // Create src and empty dst: live/src_dir, live/dst_dir
+            let src = OsStr::new("src_dir");
+            let dst = OsStr::new("dst_dir");
+            fs.mkdir(live, src, dir_attr())?;
+            fs.mkdir(live, dst, dir_attr())?;
+            assert!(fs.lookup(live, "src_dir")?.is_some());
+            assert!(fs.lookup(live, "dst_dir")?.is_some());
+            // Ensure dst is empty
+            let dst_attr = fs.lookup(live, "dst_dir")?.unwrap();
+            assert!(fs.readdir(dst_attr.ino)?.is_empty());
+
+            // Rename src_dir -> dst_dir (overwrite)
+            fs.rename(live, src, live, dst)?;
+
+            // src_dir gone; dst_dir now has src's inode (or at least exists)
+            assert!(fs.lookup(live, "src_dir")?.is_none());
+            assert!(fs.lookup(live, "dst_dir")?.is_some());
+
+            Ok(())
+        },
+    )?;
+    Ok(())
+}
+
+/// Renaming onto an existing NON-EMPTY destination directory should error.
+#[test]
+fn test_rename_live_overwrite_nonempty_dir_fails() -> anyhow::Result<()> {
+    run_test(
+        TestSetup {
+            key: "rename_live_overwrite_nonempty",
+            read_only: false,
+        },
+        |_| -> anyhow::Result<()> {
+            let fs_arc = get_fs();
+            let mut fs = fs_arc.lock().map_err(|_| anyhow!("Lock poisoned"))?;
+
+            let create_attr = dir_attr();
+            let name = OsStr::new("new_repo");
+            fs.mkdir(ROOT_INO, name, create_attr)?;
+            let live = live_ino(&fs)?;
+
+            // Create src: live/src_dir
+            let src = OsStr::new("src_dir");
+            let _src_attr = fs.mkdir(live, src, dir_attr())?;
+            // Create dst: live/dst_dir (non-empty: has child `c`)
+            let dst = OsStr::new("dst_dir");
+            let dst_attr = fs.mkdir(live, dst, dir_attr())?;
+            fs.mkdir(dst_attr.ino, OsStr::new("c"), dir_attr())?;
+            assert!(!fs.readdir(dst_attr.ino)?.is_empty());
+
+            // Attempt to rename src_dir -> dst_dir
+            let err = fs.rename(live, src, live, dst).unwrap_err();
+            let msg = format!("{err:#}");
+            assert!(msg.starts_with("Directory not empty"));
+
+            // Nothing should have changed
+            assert!(fs.lookup(live, "src_dir")?.is_some());
+            assert!(fs.lookup(live, "dst_dir")?.is_some());
+
+            Ok(())
+        },
+    )?;
+    Ok(())
+}
+
+/// Invalid names (with '/') must error and not change state.
+#[test]
+fn test_rename_live_invalid_name_with_slash() -> anyhow::Result<()> {
+    run_test(
+        TestSetup {
+            key: "rename_live_invalid_name",
+            read_only: false,
+        },
+        |_| -> anyhow::Result<()> {
+            let fs_arc = get_fs();
+            let mut fs = fs_arc.lock().map_err(|_| anyhow!("Lock poisoned"))?;
+
+            let create_attr = dir_attr();
+            let name = OsStr::new("new_repo");
+            fs.mkdir(ROOT_INO, name, create_attr)?;
+            let live = live_ino(&fs)?;
+
+            let good = OsStr::new("good");
+            fs.mkdir(live, good, dir_attr())?;
+
+            // Bad dest name
+            let bad = OsStr::new("bad/name");
+            let err = fs.rename(live, good, live, bad).unwrap_err();
+            let msg = format!("{err:#}");
+            assert!(msg.contains("Invalid name"));
+
+            // Still present under old name
+            assert!(fs.lookup(live, "good")?.is_some());
+
+            Ok(())
+        },
+    )?;
+    Ok(())
+}
+
+/// Source missing should error.
+#[test]
+fn test_rename_live_source_missing() -> anyhow::Result<()> {
+    run_test(
+        TestSetup {
+            key: "rename_live_src_missing",
+            read_only: false,
+        },
+        |_| -> anyhow::Result<()> {
+            let fs_arc = get_fs();
+            let mut fs = fs_arc.lock().map_err(|_| anyhow!("Lock poisoned"))?;
+
+            let create_attr = dir_attr();
+            let name = OsStr::new("new_repo");
+            fs.mkdir(ROOT_INO, name, create_attr)?;
+            let live = live_ino(&fs)?;
+
+            let missing = OsStr::new("i_do_not_exist");
+            let err = fs
+                .rename(live, missing, live, OsStr::new("whatever"))
+                .unwrap_err();
+            let msg = format!("{err:#}");
+            assert!(
+                msg.contains("Source does not exist")
+                    | msg.contains("Source i_do_not_exist does not exist")
+            );
+
+            Ok(())
+        },
+    )?;
+    Ok(())
+}
