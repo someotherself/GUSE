@@ -671,9 +671,6 @@ impl GitFs {
         if !self.exists(new_parent.to_u64_n())? {
             bail!(format!("New parent {} does not exist", new_parent));
         }
-        if !self.is_in_live(new_parent.to_u64_n()) {
-            bail!(format!("New parent {} not allowed", new_parent));
-        }
 
         let name = os_name
             .to_str()
@@ -698,6 +695,10 @@ impl GitFs {
         if new_name.contains('/') || new_name.contains('\\') {
             tracing::error!(%new_name, "invalid name: contains '/' or '\\'");
             bail!(format!("Invalid name {}", new_name));
+        }
+
+        if parent.to_norm() == new_parent.to_norm() && name == new_name {
+            return Ok(());
         }
 
         let ctx = FsOperationContext::get_operation(self, parent);
