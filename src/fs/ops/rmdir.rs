@@ -9,7 +9,7 @@ pub fn rmdir_live(fs: &GitFs, parent: u64, name: &str) -> anyhow::Result<()> {
     if !fs.is_dir(attr.ino)? {
         bail!("Not a directory")
     }
-    let entries = fs.readdir(parent)?;
+    let entries = fs.readdir(attr.ino)?;
     if !entries.is_empty() {
         bail!("Parent is not empty")
     }
