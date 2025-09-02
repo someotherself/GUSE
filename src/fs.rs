@@ -1199,6 +1199,7 @@ impl GitFs {
         conn.exists_by_name(self.clear_vdir_bit(parent), name)
     }
 
+    /// Takes Inodes as virtual inodes do not "exist"
     pub fn exists(&self, ino: Inodes) -> anyhow::Result<bool> {
         let ino = ino.to_u64_n();
         let ino = self.clear_vdir_bit(ino);
@@ -1220,6 +1221,7 @@ impl GitFs {
         }
     }
 
+    /// Needs to be passed the actual u64 inode
     fn is_dir(&self, ino: u64) -> anyhow::Result<bool> {
         if self.is_virtual(ino) {
             return Ok(true);
@@ -1236,6 +1238,7 @@ impl GitFs {
         Ok(mode == FileMode::Tree || mode == FileMode::Commit)
     }
 
+    /// Needs to be passed the actual u64 inode
     fn is_file(&self, ino: u64) -> anyhow::Result<bool> {
         let ino = self.clear_vdir_bit(ino);
         if ino == ROOT_INO {
@@ -1245,6 +1248,7 @@ impl GitFs {
         Ok(mode == FileMode::Blob || mode == FileMode::BlobExecutable)
     }
 
+    /// Needs to be passed the actual u64 inode
     fn is_link(&self, ino: u64) -> anyhow::Result<bool> {
         let ino = self.clear_vdir_bit(ino);
         if ino == ROOT_INO {
