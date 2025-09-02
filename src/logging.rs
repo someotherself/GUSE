@@ -56,9 +56,9 @@ use tracing_subscriber::EnvFilter;
 //     }
 // }
 
-/// Only works with inodes as keys
-///
-/// Keys must never have duplicates and should be created in accending order.
+// Only works with inodes as keys
+//
+// Keys must never have duplicates and should be created in accending order.
 // struct RingBTreeBuff<T, V> {
 //     inner: BTreeMap<T, V>,
 //     capacity: usize,
