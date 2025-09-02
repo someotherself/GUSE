@@ -583,9 +583,16 @@ impl fuser::Filesystem for GitFsAdapter {
         }
     }
 
-    // TODO
     fn statfs(&mut self, _req: &fuser::Request<'_>, _ino: u64, reply: fuser::ReplyStatfs) {
-        todo!()
+        let blocks = 1;
+        let bfree = 0;
+        let bavail = 0;
+        let files = 1;
+        let ffree = 0;
+        let bsize = 4096;
+        let namelen = u32::MAX;
+        let frsize = 0;
+        reply.statfs(blocks, bfree, bavail, files, ffree, bsize, namelen, frsize);
     }
 
     fn setattr(
