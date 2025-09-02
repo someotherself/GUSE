@@ -391,6 +391,13 @@ impl GitFs {
             git2::FileMode::Tree | git2::FileMode::Commit => FileType::Directory,
             _ => FileType::RegularFile,
         };
+
+        let target_mode = self.get_mode_from_db(ino.to_u64_n())?;
+        let target_kind = match target_mode {
+            git2::FileMode::Tree | git2::FileMode::Commit => FileType::Directory,
+            _ => FileType::RegularFile,
+        };
+
         let parent: Inodes = parent.into();
 
         let ctx = FsOperationContext::get_operation(self, ino);
@@ -412,9 +419,15 @@ impl GitFs {
                 _ => bail!("Invalid filemode"),
             },
             FsOperationContext::InsideGitDir { ino: _ } => match parent_kind {
-                FileType::Directory => {
-                    ops::open::open_git(self, ino.to_norm(), read, write, truncate)
-                }
+                // If parent is a dir
+                FileType::Directory => match target_kind {
+                    // and target is a file, open the blob as normal
+                    FileType::RegularFile => ops::open::open_git(self, ino.to_norm(), read, write),
+                    // and target is a directory, open as vfile (to create commit summary etc)
+                    FileType::Directory => ops::open::open_vfile(self, ino.to_norm(), read, write),
+                    _ => bail!("Invalid filemode"),
+                },
+                // If parent is a file, open target as vdir
                 FileType::RegularFile => ops::open::open_vdir(
                     self,
                     ino.to_norm(),

@@ -37,16 +37,14 @@ pub fn open_live(
     Ok(fh)
 }
 
-pub fn open_git(
-    fs: &GitFs,
-    ino: NormalIno,
-    read: bool,
-    write: bool,
-    truncate: bool,
-) -> anyhow::Result<u64> {
+pub fn open_git(fs: &GitFs, ino: NormalIno, read: bool, write: bool) -> anyhow::Result<u64> {
     let ino = u64::from(ino);
     let oid = fs.get_oid_from_db(ino)?;
     open_blob(fs, oid, ino, read)
+}
+
+pub fn open_vfile(fs: &GitFs, ino: NormalIno, read: bool, write: bool) -> anyhow::Result<u64> {
+    todo!()
 }
 
 pub fn open_vdir(
