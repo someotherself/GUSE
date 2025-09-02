@@ -1,4 +1,4 @@
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 
 use anyhow::anyhow;
 use tempfile::TempDir;
@@ -27,8 +27,12 @@ fn setup(setup: TestSetup) -> SetupResult {
         .tempdir()
         .expect("could not create tmpdir");
 
-    let fs =
-        GitFs::new(tmpdir.path().to_path_buf(), setup.read_only).expect("failed to init GitFs");
+    let fs = GitFs::new(
+        tmpdir.path().to_path_buf(),
+        setup.read_only,
+        Arc::new(OnceLock::new()),
+    )
+    .expect("failed to init GitFs");
 
     SetupResult {
         fs: Some(fs),

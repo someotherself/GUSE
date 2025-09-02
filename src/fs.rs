@@ -112,6 +112,7 @@ pub struct GitFs {
     current_handle: AtomicU64,
     handles: RwLock<HashMap<u64, Handle>>, // (fh, Handle)
     read_only: bool,
+    pub notifier: Arc<OnceLock<fuser::Notifier>>,
 }
 
 struct Handle {
@@ -170,7 +171,11 @@ impl FileExt for SourceTypes {
 
 // gitfs_fuse_functions
 impl GitFs {
-    pub fn new(repos_dir: PathBuf, read_only: bool) -> anyhow::Result<Arc<Mutex<Self>>> {
+    pub fn new(
+        repos_dir: PathBuf,
+        read_only: bool,
+        notifier: Arc<OnceLock<fuser::Notifier>>,
+    ) -> anyhow::Result<Arc<Mutex<Self>>> {
         let mut fs = Self {
             repos_dir,
             repos_list: BTreeMap::new(),
@@ -178,6 +183,7 @@ impl GitFs {
             handles: RwLock::new(HashMap::new()),
             current_handle: AtomicU64::new(1),
             next_inode: HashMap::new(),
+            notifier,
         };
         fs.ensure_base_dirs_exist()?;
         for entry in fs.repos_dir.read_dir()? {

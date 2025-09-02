@@ -12,7 +12,7 @@ use std::ffi::OsStr;
 use std::io::{BufRead, BufReader, ErrorKind};
 use std::iter::Skip;
 use std::path::Path;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::thread;
 use std::time::{Duration, SystemTime};
 use std::{num::NonZeroU32, path::PathBuf};
@@ -79,10 +79,14 @@ pub fn mount_fuse(opts: MountPoint) -> anyhow::Result<()> {
         options.push(MountOption::AllowRoot);
     }
 
-    let fs = GitFsAdapter::new(repos_dir, opts.read_only)?;
+    let notif = Arc::new(OnceLock::new());
+    let fs = GitFsAdapter::new(repos_dir, opts.read_only, notif.clone())?;
 
     let mut session = fuser::Session::new(fs, mountpoint, &options)?;
     let mut unmounter = session.unmount_callable();
+    let notifier = session.notifier();
+    let _ = notif.set(notifier);
+
     ctrlc::set_handler(move || {
         let _ = unmounter.unmount();
     })?;
@@ -105,8 +109,12 @@ struct GitFsAdapter {
 }
 
 impl GitFsAdapter {
-    fn new(repos_dir: PathBuf, read_only: bool) -> anyhow::Result<Self> {
-        let fs = GitFs::new(repos_dir, read_only)?;
+    fn new(
+        repos_dir: PathBuf,
+        read_only: bool,
+        notifier: Arc<OnceLock<fuser::Notifier>>,
+    ) -> anyhow::Result<Self> {
+        let fs = GitFs::new(repos_dir, read_only, Arc::new(OnceLock::new()))?;
         Ok(GitFsAdapter { inner: fs })
     }
 
