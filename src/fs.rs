@@ -95,13 +95,13 @@ impl FsOperationContext {
 // repo_id for repo 1       0000000000000001
 // ino for repo 1 root dir  0000000000000001000000000....0000
 // ino for repo_1 live dir: 0000000000000001000000000....0001
-// ino for repo_1 folder1:  0000000000000001000000000....0002
-// ino for repo_1 folder2:  0000000000000001000000000....0003
+// ino for repo_1 folder1:  0000000000000001000000000....0010
+// ino for repo_1 folder2:  0000000000000001000000000....0011
 
-// repo_id for repo 2       0000000000000002
-// ino for repo 2 root dir  0000000000000002000000000....0000
-// ino for repo_2 live dir: 0000000000000002000000000....0001
-// ino for repo_2 folder1:  0000000000000002000000000....0002
+// repo_id for repo 2       0000000000000000
+// ino for repo 2 root dir  0000000000000010000000000....0000
+// ino for repo_2 live dir: 0000000000000010000000000....0001
+// ino for repo_2 folder1:  0000000000000010000000000....0010
 
 // ino for repo folder  = (repo_id as u64) << 48 (see REPO_SHIFT)
 // repo_id from ino     = (ino >> REPO_SHIFT) as u16
