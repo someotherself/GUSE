@@ -81,28 +81,13 @@ pub fn mount_fuse(opts: MountPoint) -> anyhow::Result<()> {
 
     let fs = GitFsAdapter::new(repos_dir, opts.read_only)?;
 
-    // match fuser::spawn_mount2(fs, mountpoint, &options) {
-    //     Ok(session) => {
-    //         info!("Filesystem unmounted cleanly");
-    //         Ok(session)
-    //     }
-    //     Err(e) if e.kind() == ErrorKind::PermissionDenied => {
-    //         error!("Permission denied: {}", e);
-    //         std::process::exit(2);
-    //     }
-    //     Err(e) => Err(e.into()),
-    // }
-    match fuser::mount2(fs, mountpoint, &options) {
-        Ok(_) => {
-            info!("Filesystem unmounted cleanly");
-            Ok(())
-        }
-        Err(e) if e.kind() == ErrorKind::PermissionDenied => {
-            error!("Permission denied: {}", e);
-            std::process::exit(2);
-        }
-        Err(e) => Err(e.into()),
-    }
+    let mut session = fuser::Session::new(fs, mountpoint, &options)?;
+    let mut unmounter = session.unmount_callable();
+    ctrlc::set_handler(move || {
+        let _ = unmounter.unmount();
+    })?;
+    session.run()?;
+    Ok(())
 }
 
 fn fuse_allow_other_enabled() -> std::io::Result<bool> {
