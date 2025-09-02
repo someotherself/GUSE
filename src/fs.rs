@@ -720,6 +720,7 @@ impl GitFs {
         }
     }
 
+    #[instrument(level = "debug", skip(self), fields(name= %os_name.display()), ret(level = Level::DEBUG), err(Display))]
     pub fn rmdir(&self, parent: u64, os_name: &OsStr) -> anyhow::Result<()> {
         if self.read_only {
             bail!("Filesystem is in read only");
@@ -742,12 +743,12 @@ impl GitFs {
                 bail!("Not allowed")
             }
             FsOperationContext::RepoDir { ino: _ } => {
-                bail!("This directory is read only")
+                ops::rmdir::rmdir_live(self, parent.to_u64_n(), name)
             }
-            FsOperationContext::InsideLiveDir { ino } => ops::rmdir::rmdir_live(self, ino, name),
-            FsOperationContext::InsideGitDir { ino: _ } => {
-                bail!("This directory is read only")
+            FsOperationContext::InsideLiveDir { ino: _ } => {
+                ops::rmdir::rmdir_live(self, parent.to_u64_n(), name)
             }
+            FsOperationContext::InsideGitDir { ino: _ } => Ok(()),
         }
     }
 
@@ -772,7 +773,7 @@ impl GitFs {
         };
         if let Ok(ref entries) = ret {
             tracing::Span::current().record("return_len", field::display(entries.len()));
-            tracing::debug!(len = entries.len(), "readdir ok");
+            tracing::debug!(len = entries.len(), parent, "readdir ok");
         }
         ret
     }
@@ -808,7 +809,7 @@ impl GitFs {
             bail!(format!("Parent {} is not a directory", parent));
         }
 
-        info!("Find attr for {} {}", parent, name);
+        info!("Find attr for parent {} {}", parent, name);
 
         let ctx = FsOperationContext::get_operation(self, parent);
         match ctx? {
