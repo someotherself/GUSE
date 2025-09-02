@@ -833,13 +833,20 @@ impl GitFs {
             FsOperationContext::Root => ops::lookup::lookup_root(self, name),
             FsOperationContext::RepoDir { ino } => ops::lookup::lookup_repo(self, ino, name),
             FsOperationContext::InsideLiveDir { ino: _ } => {
+                // If the target has is a virtual, either File or Dir
                 if spec.is_virtual() {
-                    let attr = match ops::lookup::lookup_live(self, parent.to_norm(), name)? {
-                        Some(attr) => attr,
-                        None => return Ok(None),
+                    let Some(attr) = ops::lookup::lookup_live(self, parent.to_norm(), name)? else {
+                        return Ok(None);
                     };
-                    return Ok(Some(self.prepare_virtual_folder(attr)?));
+                    match attr.kind {
+                        FileType::RegularFile => {
+                            return Ok(Some(self.prepare_virtual_folder(attr)?));
+                        }
+                        FileType::Directory => return Ok(Some(self.prepare_virtual_file(attr)?)),
+                        _ => bail!("Invalid attr"),
+                    }
                 }
+                // If the parent has is a virtual. Only supports dir parents
                 match parent {
                     Inodes::NormalIno(_) => {
                         let attr = match ops::lookup::lookup_live(self, parent.to_norm(), name)? {
