@@ -688,7 +688,7 @@ impl GitRepo {
 /// Otherwise, it will return None
 /// This will signal that we create a normal folder <br>
 pub fn parse_mkdir_url(name: &str) -> anyhow::Result<Option<(String, String)>> {
-    if !name.starts_with("github.") && !name.ends_with(".git") {
+    if (!name.starts_with("github.") || !name.starts_with("gitlab.")) && !name.ends_with(".git") {
         return Ok(None);
     }
     let mut comp = name.splitn(4, ".");
