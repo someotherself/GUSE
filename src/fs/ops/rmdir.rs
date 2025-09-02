@@ -27,7 +27,16 @@ pub fn rmdir_repo(fs: &GitFs, parent: u64, name: &str) -> anyhow::Result<()> {
     if !fs.is_dir(attr.ino)? {
         bail!("Not a directory")
     }
+
     let entries = fs.readdir(attr.ino)?;
+    let mut entries_len = entries.len();
+    let live_ino = fs.get_live_ino(parent);
+    for entry in &entries {
+        if entry.ino == live_ino || entries_len > 0 {
+            entries_len -= 1;
+        }
+    }
+
     if !entries.is_empty() {
         bail!("Parent is not empty")
     }
