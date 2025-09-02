@@ -373,24 +373,24 @@ impl GitFs {
     }
 
     pub fn open(&self, ino: u64, read: bool, write: bool, truncate: bool) -> anyhow::Result<u64> {
+        let ino: Inodes = ino.into();
+
         if write && self.read_only {
             bail!("Filesystem is in read only");
         }
         if !write && !read {
             bail!("Read and write cannot be false at the same time");
         }
-        if self.is_dir(ino)? {
+        if self.is_dir(ino.to_u64_n())? {
             bail!("Target is a directory");
         }
 
-        let parent = self.get_parent_ino(ino)?;
+        let parent = self.get_parent_ino(ino.to_u64_n())?;
         let par_mode = self.get_mode_from_db(parent)?;
         let parent_kind = match par_mode {
             git2::FileMode::Tree | git2::FileMode::Commit => FileType::Directory,
             _ => FileType::RegularFile,
         };
-
-        let ino: Inodes = ino.into();
         let parent: Inodes = parent.into();
 
         let ctx = FsOperationContext::get_operation(self, ino);
@@ -520,7 +520,7 @@ impl GitFs {
         let st_mode = libc::S_IFDIR | perms;
         let ino: Inodes = ino.into();
 
-        if !self.exists(ino.to_u64_n())? {
+        if !self.exists(ino)? {
             bail!(format!("Inode {} does not exist", ino));
         }
 
@@ -554,20 +554,20 @@ impl GitFs {
         os_name: &OsStr,
         create_attr: CreateFileAttr,
     ) -> anyhow::Result<FileAttr> {
+        let parent: Inodes = parent.into();
+
         if self.read_only {
             bail!("Filesystem is in read only");
         }
         if !self.exists(parent)? {
             bail!(format!("Parent {} does not exist", parent));
         }
-        if !self.is_dir(parent)? {
+        if !self.is_dir(parent.to_u64_n())? {
             bail!(format!("Parent {} is not a directory", parent));
         }
         let name = os_name
             .to_str()
             .ok_or_else(|| anyhow!("Not a valid UTF-8 name"))?;
-
-        let parent = parent.into();
 
         let ctx = FsOperationContext::get_operation(self, parent);
         match ctx? {
@@ -591,6 +591,8 @@ impl GitFs {
         read: bool,
         write: bool,
     ) -> anyhow::Result<(FileAttr, u64)> {
+        let parent = parent.into();
+
         if self.read_only {
             bail!("Filesystem is in read only");
         }
@@ -600,8 +602,6 @@ impl GitFs {
         let name = os_name
             .to_str()
             .ok_or_else(|| anyhow!("Not a valid UTF-8 name"))?;
-
-        let parent = parent.into();
 
         let ctx = FsOperationContext::get_operation(self, parent);
         match ctx? {
@@ -632,6 +632,8 @@ impl GitFs {
     err(Display)
 )]
     pub fn unlink(&self, parent: u64, os_name: &OsStr) -> anyhow::Result<()> {
+        let parent: Inodes = parent.into();
+
         if self.read_only {
             bail!("Filesystem is in read only");
         }
@@ -644,8 +646,6 @@ impl GitFs {
         if name == "." || name == ".." {
             bail!("invalid name");
         }
-
-        let parent = parent.into();
 
         let ctx = FsOperationContext::get_operation(self, parent);
         match ctx? {
@@ -674,10 +674,10 @@ impl GitFs {
         if self.read_only {
             bail!("Filesystem is in read only");
         }
-        if !self.exists(parent.to_u64_n())? {
+        if !self.exists(parent)? {
             bail!(format!("Parent {} does not exist", parent));
         }
-        if !self.exists(new_parent.to_u64_n())? {
+        if !self.exists(new_parent)? {
             bail!(format!("New parent {} does not exist", new_parent));
         }
 
@@ -731,6 +731,8 @@ impl GitFs {
 
     #[instrument(level = "debug", skip(self), fields(name= %os_name.display()), ret(level = Level::DEBUG), err(Display))]
     pub fn rmdir(&self, parent: u64, os_name: &OsStr) -> anyhow::Result<()> {
+        let parent = parent.into();
+
         if self.read_only {
             bail!("Filesystem is in read only");
         }
@@ -743,8 +745,6 @@ impl GitFs {
         if name == "." || name == ".." {
             bail!("invalid name");
         }
-
-        let parent = parent.into();
 
         let ctx = FsOperationContext::get_operation(self, parent);
         match ctx? {
@@ -811,7 +811,7 @@ impl GitFs {
         let name = if spec.is_virtual() { spec.name } else { name };
         let parent: Inodes = parent.into();
 
-        if !self.exists(parent.to_u64_n())? {
+        if !self.exists(parent)? {
             bail!(format!("Parent {} does not exist", parent));
         }
         if !self.is_dir(u64::from(&parent))? {
@@ -1199,7 +1199,8 @@ impl GitFs {
         conn.exists_by_name(self.clear_vdir_bit(parent), name)
     }
 
-    pub fn exists(&self, ino: u64) -> anyhow::Result<bool> {
+    pub fn exists(&self, ino: Inodes) -> anyhow::Result<bool> {
+        let ino = ino.to_u64_n();
         let ino = self.clear_vdir_bit(ino);
         if ino == ROOT_INO {
             return Ok(true);

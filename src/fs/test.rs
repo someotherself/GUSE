@@ -5,6 +5,7 @@ use git2::Oid;
 
 use crate::{
     fs::{FileType, GitFs, REPO_SHIFT},
+    inodes::Inodes,
     mount::dir_attr,
     test_setup::{TestSetup, get_fs, run_test},
 };
@@ -192,7 +193,8 @@ fn test_mkdir_normal() -> anyhow::Result<()> {
             let dir1_attr = fs.mkdir(live_attr.ino, dir_name1, create_attr)?;
             let dir1_ino = LIVE_DIR_INO + 1;
 
-            assert!(fs.exists(dir1_attr.ino)?);
+            let dir1attr_ino: Inodes = dir1_attr.ino.into();
+            assert!(fs.exists(dir1attr_ino)?);
 
             let find_dir1 = fs.lookup(LIVE_DIR_INO, "dir_in_live_1")?.unwrap();
             assert_eq!(find_dir1.ino, dir1_ino);
