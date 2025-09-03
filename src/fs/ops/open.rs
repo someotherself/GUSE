@@ -18,6 +18,7 @@ use crate::{
     inodes::{Inodes, NormalIno, VirtualIno},
 };
 
+#[instrument(level = "debug", skip(fs), fields(ino), ret(level = Level::DEBUG), err(Display))]
 pub fn open_live(
     fs: &GitFs,
     ino: NormalIno,
@@ -46,6 +47,7 @@ pub fn open_live(
     Ok(fh)
 }
 
+#[instrument(level = "debug", skip(fs), fields(ino), ret(level = Level::DEBUG), err(Display))]
 pub fn open_git(fs: &GitFs, ino: NormalIno, read: bool, write: bool) -> anyhow::Result<u64> {
     let ino = u64::from(ino);
     let oid = fs.get_oid_from_db(ino)?;
@@ -56,9 +58,6 @@ pub fn open_git(fs: &GitFs, ino: NormalIno, read: bool, write: bool) -> anyhow::
 pub fn open_vfile(fs: &GitFs, ino: Inodes, read: bool, write: bool) -> anyhow::Result<u64> {
     let res = classify_inode(fs, ino.to_u64_v())?;
     match res {
-        // In both cases
-        // Create the summary and save it in a vec
-        // Issue the handle
         DirCase::Month { year, month } => {
             let entries = {
                 let repo = fs.get_repo(ino.to_u64_n())?;
@@ -116,6 +115,7 @@ pub fn open_vdir(
     open_blob(fs, oid, ino, read)
 }
 
+#[instrument(level = "debug", skip(fs), fields(ino), ret(level = Level::DEBUG), err(Display))]
 fn open_blob(fs: &GitFs, oid: Oid, ino: u64, read: bool) -> anyhow::Result<u64> {
     let buf = {
         let repo = fs.get_repo(ino)?;
