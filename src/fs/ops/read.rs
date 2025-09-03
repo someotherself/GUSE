@@ -1,7 +1,7 @@
 use std::os::unix::fs::FileExt;
 
 use anyhow::{anyhow, bail};
-use tracing::{Level, instrument};
+use tracing::instrument;
 
 use crate::{fs::GitFs, inodes::Inodes};
 
