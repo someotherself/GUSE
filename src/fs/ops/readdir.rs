@@ -174,7 +174,7 @@ pub fn classify_inode(fs: &GitFs, ino: u64) -> anyhow::Result<DirCase> {
         }
     }
 
-    // Branch 3
+    // Branch 2
     // Will be a commit_id for the root folder of the commit
     // Or a Tree or Blob for anything inside
     Ok(DirCase::Commit { oid })
