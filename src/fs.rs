@@ -407,24 +407,19 @@ impl GitFs {
             FsOperationContext::RepoDir { ino: _ } => bail!("Target is a directory"),
             FsOperationContext::InsideLiveDir { ino: _ } => match parent_kind {
                 FileType::Directory => {
-                    info!("open - livedir - dir");
                     ops::open::open_live(self, ino.to_norm(), read, write, truncate)
                 }
-                FileType::RegularFile => {
-                    info!("open - livedir - dir");
-                    ops::open::open_vdir(
-                        self,
-                        ino.to_norm(),
-                        read,
-                        write,
-                        truncate,
-                        parent.to_virt(),
-                    )
-                }
+                FileType::RegularFile => ops::open::open_vdir(
+                    self,
+                    ino.to_norm(),
+                    read,
+                    write,
+                    truncate,
+                    parent.to_virt(),
+                ),
                 _ => bail!("Invalid filemode"),
             },
             FsOperationContext::InsideGitDir { ino: _ } => {
-                info!("Inside the open git dir");
                 match parent_kind {
                     // If parent is a dir
                     FileType::Directory => match target_kind {
