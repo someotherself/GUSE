@@ -1,7 +1,7 @@
 use std::ffi::OsString;
 
 use anyhow::{anyhow, bail};
-use git2::Oid;
+use git2::{FileMode, Oid};
 
 use crate::{
     fs::{
@@ -162,10 +162,10 @@ pub fn readdir_live_dir(fs: &GitFs, ino: NormalIno) -> anyhow::Result<Vec<Direct
 // 1 - ino is for a month folder -> show days folders
 // 2 - ino is for a commit or inside a commit -> show commit contents
 pub fn classify_inode(fs: &GitFs, ino: u64) -> anyhow::Result<DirCase> {
-    let attr = fs.getattr(ino)?;
+    let mode = fs.get_mode_from_db(ino)?;
+    let oid = fs.get_oid_from_db(ino)?;
     let target_name = fs.get_name_from_db(ino)?;
-
-    if attr.kind == FileType::Directory && attr.oid.is_zero() {
+    if (mode == FileMode::Tree || mode == FileMode::Commit) && oid == Oid::zero() {
         // Branch 1
         if let Some((y, m)) = target_name.split_once('-')
             && let (Ok(year), Ok(month)) = (y.parse::<i32>(), m.parse::<u32>())
@@ -177,7 +177,7 @@ pub fn classify_inode(fs: &GitFs, ino: u64) -> anyhow::Result<DirCase> {
     // Branch 3
     // Will be a commit_id for the root folder of the commit
     // Or a Tree or Blob for anything inside
-    Ok(DirCase::Commit { oid: attr.oid })
+    Ok(DirCase::Commit { oid })
 }
 
 pub fn readdir_git_dir(fs: &GitFs, ino: NormalIno) -> anyhow::Result<Vec<DirectoryEntry>> {
