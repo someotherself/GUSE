@@ -42,7 +42,7 @@ pub struct DirectoryEntryPlus {
 }
 
 #[derive(Debug)]
-enum DirCase {
+pub enum DirCase {
     Month { year: i32, month: u32 },
     // Day { year: i32, month: u32, day: u32 },
     Commit { oid: Oid },
@@ -161,7 +161,7 @@ pub fn readdir_live_dir(fs: &GitFs, ino: NormalIno) -> anyhow::Result<Vec<Direct
 // Two branches
 // 1 - ino is for a month folder -> show days folders
 // 2 - ino is for a commit or inside a commit -> show commit contents
-fn classify_inode(fs: &GitFs, ino: u64) -> anyhow::Result<DirCase> {
+pub fn classify_inode(fs: &GitFs, ino: u64) -> anyhow::Result<DirCase> {
     let attr = fs.getattr(ino)?;
     let target_name = fs.get_name_from_db(ino)?;
 

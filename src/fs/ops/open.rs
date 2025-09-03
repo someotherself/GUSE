@@ -1,12 +1,20 @@
 #![allow(unused_variables)]
-use std::{fs::OpenOptions, sync::Arc};
+use std::{
+    fs::OpenOptions,
+    sync::Arc,
+    time::{Duration, UNIX_EPOCH},
+};
 
 use anyhow::{anyhow, bail};
-use git2::Oid;
+use git2::{Oid, Time};
 
 use crate::{
-    fs::{GitFs, Handle, SourceTypes},
-    inodes::{NormalIno, VirtualIno},
+    fs::{
+        GitFs, Handle, SourceTypes,
+        fileattr::ObjectAttr,
+        ops::readdir::{DirCase, classify_inode},
+    },
+    inodes::{Inodes, NormalIno, VirtualIno},
 };
 
 pub fn open_live(
@@ -43,8 +51,40 @@ pub fn open_git(fs: &GitFs, ino: NormalIno, read: bool, write: bool) -> anyhow::
     open_blob(fs, oid, ino, read)
 }
 
-pub fn open_vfile(fs: &GitFs, ino: NormalIno, read: bool, write: bool) -> anyhow::Result<u64> {
-    todo!()
+pub fn open_vfile(fs: &GitFs, ino: Inodes, read: bool, write: bool) -> anyhow::Result<u64> {
+    let res = classify_inode(fs, ino.to_u64_v())?;
+    match res {
+        // In both cases
+        // Create the summary and save it in a vec
+        // Issue the handle
+        DirCase::Month { year, month } => {
+            let entries = {
+                let repo = fs.get_repo(ino.to_u64_n())?;
+                let repo = repo.lock().map_err(|_| anyhow!("Lock poisoned"))?;
+                repo.month_commits(&format!("{year:04}-{month:02}"))?
+            };
+            let contents = build_commits_text(fs, entries, ino.to_u64_n())?;
+            let blob_file = SourceTypes::RoBlob {
+                oid: Oid::zero(),
+                data: Arc::new(contents),
+            };
+            let fh = fs.next_file_handle();
+            let handle = Handle {
+                ino: ino.to_u64_v(),
+                file: blob_file,
+                read,
+                write: false,
+            };
+            {
+                let mut guard = fs.handles.write().map_err(|_| anyhow!("Lock poisoned"))?;
+                guard.insert(fh, handle);
+            }
+            Ok(fh)
+        }
+        DirCase::Commit { oid } => {
+            todo!()
+        }
+    }
 }
 
 pub fn open_vdir(
@@ -96,4 +136,44 @@ fn open_blob(fs: &GitFs, oid: Oid, ino: u64, read: bool) -> anyhow::Result<u64> 
         guard.insert(fh, handle);
     }
     Ok(fh)
+}
+
+fn short_oid(oid: Oid) -> String {
+    let s = oid.to_string();
+    s[..7].to_string()
+}
+
+fn git_commit_time(t: Time) -> String {
+    let secs = t.seconds() as u64;
+    let st = UNIX_EPOCH + Duration::new(secs, 0);
+    let dt = chrono::DateTime::<chrono::Utc>::from(st);
+    dt.to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
+}
+
+fn build_commits_text(fs: &GitFs, entries: Vec<ObjectAttr>, ino: u64) -> anyhow::Result<Vec<u8>> {
+    // Pre-size roughly: header + ~100 bytes/row
+    let mut out = String::with_capacity(64 + entries.len() * 128);
+    out.push_str("iso8601_utc\tshort_oid\tfolder_name\tsubject\n");
+
+    for e in entries {
+        let ts = git_commit_time(e.commit_time);
+        let soid = short_oid(e.oid);
+        let subject = {
+            let repo = fs.get_repo(ino)?;
+            let repo = repo.lock().map_err(|_| anyhow!("Lock poisoned"))?;
+            repo.inner
+                .find_commit(e.oid)
+                .ok()
+                .and_then(|c| c.summary().map(|s| s.to_string()))
+                .unwrap_or_default()
+        };
+
+        // sanitize tabs/newlines so TSV stays one-line/row
+        let clean_name = e.name.replace(['\n', '\t'], " ");
+        let clean_subject = subject.replace(['\n', '\t'], " ");
+
+        out.push_str("{ts}\t{soid}\t{clean_name}\t{clean_subject}");
+    }
+
+    Ok(out.into_bytes())
 }

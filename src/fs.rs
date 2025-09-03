@@ -407,38 +407,47 @@ impl GitFs {
             FsOperationContext::RepoDir { ino: _ } => bail!("Target is a directory"),
             FsOperationContext::InsideLiveDir { ino: _ } => match parent_kind {
                 FileType::Directory => {
+                    info!("open - livedir - dir");
                     ops::open::open_live(self, ino.to_norm(), read, write, truncate)
                 }
-                FileType::RegularFile => ops::open::open_vdir(
-                    self,
-                    ino.to_norm(),
-                    read,
-                    write,
-                    truncate,
-                    parent.to_virt(),
-                ),
+                FileType::RegularFile => {
+                    info!("open - livedir - dir");
+                    ops::open::open_vdir(
+                        self,
+                        ino.to_norm(),
+                        read,
+                        write,
+                        truncate,
+                        parent.to_virt(),
+                    )
+                }
                 _ => bail!("Invalid filemode"),
             },
-            FsOperationContext::InsideGitDir { ino: _ } => match parent_kind {
-                // If parent is a dir
-                FileType::Directory => match target_kind {
-                    // and target is a file, open the blob as normal
-                    FileType::RegularFile => ops::open::open_git(self, ino.to_norm(), read, write),
-                    // and target is a directory, open as vfile (to create commit summary etc)
-                    FileType::Directory => ops::open::open_vfile(self, ino.to_norm(), read, write),
+            FsOperationContext::InsideGitDir { ino: _ } => {
+                info!("Inside the open git dir");
+                match parent_kind {
+                    // If parent is a dir
+                    FileType::Directory => match target_kind {
+                        // and target is a file, open the blob as normal
+                        FileType::RegularFile => {
+                            ops::open::open_git(self, ino.to_norm(), read, write)
+                        }
+                        // and target is a directory, open as vfile (to create commit summary etc)
+                        FileType::Directory => ops::open::open_vfile(self, ino, read, write),
+                        _ => bail!("Invalid filemode"),
+                    },
+                    // If parent is a file, open target as vdir
+                    FileType::RegularFile => ops::open::open_vdir(
+                        self,
+                        ino.to_norm(),
+                        read,
+                        write,
+                        truncate,
+                        parent.to_virt(),
+                    ),
                     _ => bail!("Invalid filemode"),
-                },
-                // If parent is a file, open target as vdir
-                FileType::RegularFile => ops::open::open_vdir(
-                    self,
-                    ino.to_norm(),
-                    read,
-                    write,
-                    truncate,
-                    parent.to_virt(),
-                ),
-                _ => bail!("Invalid filemode"),
-            },
+                }
+            }
         }
     }
 
@@ -1285,8 +1294,7 @@ impl GitFs {
             return Ok(true);
         }
         let mode = self.get_mode_from_db(ino.to_u64_n())?;
-        info!("{:?}", mode);
-        let ino: Inodes = ino.into();
+        let ino: Inodes = ino;
         match mode {
             FileMode::Tree | FileMode::Commit => match ino {
                 Inodes::NormalIno(_) => Ok(true),
