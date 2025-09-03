@@ -5,7 +5,7 @@ use tracing::instrument;
 
 use crate::{fs::GitFs, inodes::Inodes};
 
-#[instrument(level = "debug", skip(fs), fields(ino), err(Display))]
+#[instrument(level = "debug", skip(fs), fields(ino, fh), err(Display))]
 pub fn read_live(
     fs: &GitFs,
     ino: Inodes,
@@ -18,10 +18,10 @@ pub fn read_live(
         .get(&fh)
         .ok_or_else(|| anyhow!(format!("Handle {} for ino {} does not exist", fh, ino)))?;
     if !ctx.file.is_file() {
-        bail!("Invalid handle.")
+        bail!("Invalid handle - wrong file type")
     }
     if ctx.ino != *ino {
-        bail!("Invalid filehandle")
+        bail!("Invalid handle - wrong inode")
     }
 
     let len = ctx.file.size()?;
@@ -35,7 +35,7 @@ pub fn read_live(
     Ok(n)
 }
 
-#[instrument(level = "debug", skip(fs), fields(ino), err(Display))]
+#[instrument(level = "debug", skip(fs), fields(ino, fh), err(Display))]
 pub fn read_git(
     fs: &GitFs,
     ino: Inodes,
@@ -48,10 +48,10 @@ pub fn read_git(
         .get(&fh)
         .ok_or_else(|| anyhow!("Handle does not exist"))?;
     if !ctx.file.is_blob() {
-        bail!("Invalid handle.")
+        bail!("Invalid handle - wrong file type")
     }
     if ctx.ino != *ino {
-        bail!("Invalid filehandle")
+        bail!("Invalid handle - wrong inode")
     }
     Ok(ctx.file.read_at(buf, offset)?)
 }
