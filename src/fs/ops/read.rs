@@ -5,7 +5,7 @@ use tracing::{Level, instrument};
 
 use crate::{fs::GitFs, inodes::Inodes};
 
-#[instrument(level = "debug", skip(fs), fields(ino), ret(level = Level::DEBUG), err(Display))]
+#[instrument(level = "debug", skip(fs), fields(ino), err(Display))]
 pub fn read_live(
     fs: &GitFs,
     ino: Inodes,
@@ -35,7 +35,7 @@ pub fn read_live(
     Ok(n)
 }
 
-#[instrument(level = "debug", skip(fs), fields(ino), ret(level = Level::DEBUG), err(Display))]
+#[instrument(level = "debug", skip(fs), fields(ino), err(Display))]
 pub fn read_git(
     fs: &GitFs,
     ino: Inodes,
