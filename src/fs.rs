@@ -914,12 +914,24 @@ impl GitFs {
                 }
             }
             FsOperationContext::InsideGitDir { ino: _ } => {
+                info!("Lookup inside git dir for {name}");
                 if spec.is_virtual() {
+                    info!("Lookup inside is_virtual");
                     let attr = match ops::lookup::lookup_git(self, parent.to_norm(), name)? {
                         Some(attr) => attr,
                         None => return Ok(None),
                     };
-                    return Ok(Some(self.prepare_virtual_folder(attr)?));
+                    match attr.kind {
+                        FileType::RegularFile => {
+                            info!("Lookup virt for RegFile");
+                            return Ok(Some(self.prepare_virtual_folder(attr)?));
+                        }
+                        FileType::Directory => {
+                            info!("Lookup virt for Dir");
+                            return Ok(Some(self.prepare_virtual_file(attr)?));
+                        }
+                        _ => bail!("Invalid attr"),
+                    }
                 }
                 match parent {
                     Inodes::NormalIno(_) => {
