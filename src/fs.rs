@@ -372,6 +372,7 @@ impl GitFs {
         Ok(MetaDb { conn })
     }
 
+    #[instrument(level = "debug", skip(self), fields(ino), ret(level = Level::DEBUG), err(Display))]
     pub fn open(&self, ino: u64, read: bool, write: bool, truncate: bool) -> anyhow::Result<u64> {
         let ino: Inodes = ino.into();
 
