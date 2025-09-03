@@ -83,13 +83,13 @@ pub fn mount_fuse(opts: MountPoint) -> anyhow::Result<()> {
     let fs = GitFsAdapter::new(repos_dir, opts.read_only, notif.clone())?;
 
     let mut session = fuser::Session::new(fs, mountpoint, &options)?;
-    let mut unmounter = session.unmount_callable();
+    // let mut unmounter = session.unmount_callable();
     let notifier = session.notifier();
     let _ = notif.set(notifier);
 
-    ctrlc::set_handler(move || {
-        let _ = unmounter.unmount();
-    })?;
+    // ctrlc::set_handler(move || {
+    //     let _ = unmounter.unmount();
+    // })?;
     session.run()?;
     Ok(())
 }
