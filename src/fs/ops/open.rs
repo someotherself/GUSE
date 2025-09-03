@@ -7,6 +7,7 @@ use std::{
 
 use anyhow::{anyhow, bail};
 use git2::{Oid, Time};
+use tracing::{Level, instrument};
 
 use crate::{
     fs::{
@@ -51,6 +52,7 @@ pub fn open_git(fs: &GitFs, ino: NormalIno, read: bool, write: bool) -> anyhow::
     open_blob(fs, oid, ino, read)
 }
 
+#[instrument(level = "debug", skip(fs), fields(ino), ret(level = Level::DEBUG), err(Display))]
 pub fn open_vfile(fs: &GitFs, ino: Inodes, read: bool, write: bool) -> anyhow::Result<u64> {
     let res = classify_inode(fs, ino.to_u64_v())?;
     match res {
@@ -87,6 +89,7 @@ pub fn open_vfile(fs: &GitFs, ino: Inodes, read: bool, write: bool) -> anyhow::R
     }
 }
 
+#[instrument(level = "debug", skip(fs), fields(ino), ret(level = Level::DEBUG), err(Display))]
 pub fn open_vdir(
     fs: &GitFs,
     ino: NormalIno,

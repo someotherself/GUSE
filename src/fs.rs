@@ -461,10 +461,10 @@ impl GitFs {
         match ctx? {
             FsOperationContext::Root => bail!("Not allowed"),
             FsOperationContext::RepoDir { ino: _ } => bail!("Not allowed"),
-            FsOperationContext::InsideLiveDir { ino } => {
+            FsOperationContext::InsideLiveDir { ino: _ } => {
                 ops::read::read_live(self, ino, offset, buf, fh)
             }
-            FsOperationContext::InsideGitDir { ino } => {
+            FsOperationContext::InsideGitDir { ino: _ } => {
                 ops::read::read_git(self, ino, offset, buf, fh)
             }
         }

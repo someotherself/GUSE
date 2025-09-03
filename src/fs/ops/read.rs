@@ -1,12 +1,14 @@
 use std::os::unix::fs::FileExt;
 
 use anyhow::{anyhow, bail};
+use tracing::{Level, instrument};
 
-use crate::fs::GitFs;
+use crate::{fs::GitFs, inodes::Inodes};
 
+#[instrument(level = "debug", skip(fs), fields(ino), ret(level = Level::DEBUG), err(Display))]
 pub fn read_live(
     fs: &GitFs,
-    ino: u64,
+    ino: Inodes,
     offset: u64,
     buf: &mut [u8],
     fh: u64,
@@ -18,7 +20,7 @@ pub fn read_live(
     if !ctx.file.is_file() {
         bail!("Invalid handle.")
     }
-    if ctx.ino != ino {
+    if ctx.ino != *ino {
         bail!("Invalid filehandle")
     }
 
@@ -33,9 +35,10 @@ pub fn read_live(
     Ok(n)
 }
 
+#[instrument(level = "debug", skip(fs), fields(ino), ret(level = Level::DEBUG), err(Display))]
 pub fn read_git(
     fs: &GitFs,
-    ino: u64,
+    ino: Inodes,
     offset: u64,
     buf: &mut [u8],
     fh: u64,
@@ -47,7 +50,7 @@ pub fn read_git(
     if !ctx.file.is_blob() {
         bail!("Invalid handle.")
     }
-    if ctx.ino != ino {
+    if ctx.ino != *ino {
         bail!("Invalid filehandle")
     }
     Ok(ctx.file.read_at(buf, offset)?)
