@@ -480,6 +480,7 @@ impl GitFs {
         }
     }
 
+    #[instrument(level = "debug", skip(self), fields(ino), ret(level = Level::DEBUG), err(Display))]
     pub fn release(&self, fh: u64) -> anyhow::Result<bool> {
         let mut guard = self.handles.write().map_err(|_| anyhow!("Lock poisoned"))?;
         Ok(guard.remove(&fh).is_some())
@@ -536,7 +537,6 @@ impl GitFs {
     pub fn getattr(&self, target: u64) -> anyhow::Result<FileAttr> {
         let perms = 0o775;
         let st_mode = libc::S_IFDIR | perms;
-        info!(target);
 
         let ino: Inodes = target.into();
 
@@ -550,14 +550,8 @@ impl GitFs {
             FsOperationContext::RepoDir { ino: _ } => {
                 let attr = build_attr_dir(ino.to_u64_n(), st_mode);
                 match ino {
-                    Inodes::NormalIno(_) => {
-                        info!("Inode {ino} is normal");
-                        Ok(attr)
-                    }
-                    Inodes::VirtualIno(_) => {
-                        info!("Inode {ino} is virtual");
-                        self.prepare_virtual_file(attr)
-                    }
+                    Inodes::NormalIno(_) => Ok(attr),
+                    Inodes::VirtualIno(_) => self.prepare_virtual_file(attr),
                 }
             }
             FsOperationContext::InsideLiveDir { ino: _ } => match ino {
@@ -870,20 +864,16 @@ impl GitFs {
         match ctx? {
             FsOperationContext::Root => ops::lookup::lookup_root(self, name),
             FsOperationContext::RepoDir { ino: _ } => {
-                info!("Lookup inside repo dir for {name}");
                 let Some(attr) = ops::lookup::lookup_repo(self, parent.to_u64_n(), name)? else {
                     return Ok(None);
                 };
-                info!("{}", spec.is_virtual());
                 if spec.is_virtual() && attr.kind == FileType::Directory {
-                    info!("repo dir - preparing v_file");
                     return Ok(Some(self.prepare_virtual_file(attr)?));
                 }
                 return Ok(Some(attr));
             }
             FsOperationContext::InsideLiveDir { ino: _ } => {
                 // If the target has is a virtual, either File or Dir
-                info!("Lookup inside live dir for {name}");
                 if spec.is_virtual() {
                     let Some(attr) = ops::lookup::lookup_live(self, parent.to_norm(), name)? else {
                         return Ok(None);
@@ -909,28 +899,21 @@ impl GitFs {
                 }
             }
             FsOperationContext::InsideGitDir { ino: _ } => {
-                info!("Lookup inside git dir for {name}");
                 if spec.is_virtual() {
-                    info!("Lookup inside is_virtual");
                     let attr = match ops::lookup::lookup_git(self, parent.to_norm(), name)? {
                         Some(attr) => attr,
                         None => return Ok(None),
                     };
                     match attr.kind {
                         FileType::RegularFile => {
-                            info!("Lookup virt for RegFile");
                             return Ok(Some(self.prepare_virtual_folder(attr)?));
                         }
-                        FileType::Directory => {
-                            info!("Lookup virt for Dir");
-                            return Ok(Some(self.prepare_virtual_file(attr)?));
-                        }
+                        FileType::Directory => return Ok(Some(self.prepare_virtual_file(attr)?)),
                         _ => bail!("Invalid attr"),
                     }
                 }
                 match parent {
                     Inodes::NormalIno(_) => {
-                        debug!("Looking up {} {}", parent.to_norm().0, name);
                         let attr = match ops::lookup::lookup_git(self, parent.to_norm(), name)? {
                             Some(attr) => attr,
                             None => return Ok(None),

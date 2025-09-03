@@ -540,12 +540,16 @@ impl fuser::Filesystem for GitFsAdapter {
         };
         let mut buf = vec![0u8; size as usize];
         let res = fs.read(ino, offset as u64, &mut buf, fh);
+        drop(fs);
         match res {
             Ok(n) => {
-                drop(fs);
+                debug!("Read {n} bytes");
                 reply.data(&buf[..n])
             }
-            Err(e) => reply.error(errno_from_anyhow(&e)),
+            Err(e) => {
+                error!(e = %e);
+                reply.error(errno_from_anyhow(&e))
+            }
         }
     }
 
