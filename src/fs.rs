@@ -382,7 +382,7 @@ impl GitFs {
         if !write && !read {
             bail!("Read and write cannot be false at the same time");
         }
-        if self.is_dir(ino.to_u64_n())? {
+        if self.is_dir(ino)? {
             bail!("Target is a directory");
         }
 
@@ -584,7 +584,7 @@ impl GitFs {
         if !self.exists(parent)? {
             bail!(format!("Parent {} does not exist", parent));
         }
-        if !self.is_dir(parent.to_u64_n())? {
+        if !self.is_dir(parent)? {
             bail!(format!("Parent {} is not a directory", parent));
         }
         let name = os_name
@@ -836,18 +836,28 @@ impl GitFs {
         if !self.exists(parent)? {
             bail!(format!("Parent {} does not exist", parent));
         }
-        if !self.is_dir(u64::from(&parent))? {
+        if !self.is_dir(parent)? {
             bail!(format!("Parent {} is not a directory", parent));
         }
-
-        info!("Find attr for parent {} {}", parent, name);
 
         let ctx = FsOperationContext::get_operation(self, parent);
         match ctx? {
             FsOperationContext::Root => ops::lookup::lookup_root(self, name),
-            FsOperationContext::RepoDir { ino } => ops::lookup::lookup_repo(self, ino, name),
+            FsOperationContext::RepoDir { ino: _ } => {
+                info!("Lookup inside repo dir for {name}");
+                let Some(attr) = ops::lookup::lookup_repo(self, parent.to_u64_n(), name)? else {
+                    return Ok(None);
+                };
+                info!("{}", spec.is_virtual());
+                if spec.is_virtual() && attr.kind == FileType::Directory {
+                    info!("repo dir - preparing v_file");
+                    return Ok(Some(self.prepare_virtual_file(attr)?));
+                }
+                return Ok(Some(attr));
+            }
             FsOperationContext::InsideLiveDir { ino: _ } => {
                 // If the target has is a virtual, either File or Dir
+                info!("Lookup inside live dir for {name}");
                 if spec.is_virtual() {
                     let Some(attr) = ops::lookup::lookup_live(self, parent.to_norm(), name)? else {
                         return Ok(None);
@@ -1265,20 +1275,29 @@ impl GitFs {
     }
 
     /// Needs to be passed the actual u64 inode
-    fn is_dir(&self, ino: u64) -> anyhow::Result<bool> {
-        if self.is_virtual(ino) {
-            return Ok(true);
-        };
-        let ino = self.clear_vdir_bit(ino);
+    fn is_dir(&self, ino: Inodes) -> anyhow::Result<bool> {
+        // let ino = self.clear_vdir_bit(ino);
         if ino == ROOT_INO {
             return Ok(true);
         }
-        let repo_id = GitFs::ino_to_repo_id(ino);
+        let repo_id = GitFs::ino_to_repo_id(ino.to_u64_n());
         if ino == GitFs::repo_id_to_ino(repo_id) {
             return Ok(true);
         }
-        let mode = self.get_mode_from_db(ino)?;
-        Ok(mode == FileMode::Tree || mode == FileMode::Commit)
+        let mode = self.get_mode_from_db(ino.to_u64_n())?;
+        info!("{:?}", mode);
+        let ino: Inodes = ino.into();
+        match mode {
+            FileMode::Tree | FileMode::Commit => match ino {
+                Inodes::NormalIno(_) => Ok(true),
+                Inodes::VirtualIno(_) => Ok(false),
+            },
+            FileMode::Blob | FileMode::BlobExecutable => match ino {
+                Inodes::NormalIno(_) => Ok(false),
+                Inodes::VirtualIno(_) => Ok(true),
+            },
+            _ => Ok(false),
+        }
     }
 
     /// Needs to be passed the actual u64 inode

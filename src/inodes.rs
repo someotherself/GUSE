@@ -166,6 +166,14 @@ impl Display for VirtualIno {
     }
 }
 
+impl PartialEq<u64> for Inodes {
+    fn eq(&self, other: &u64) -> bool {
+        match self {
+            Inodes::NormalIno(ino) | Inodes::VirtualIno(ino) => ino == other,
+        }
+    }
+}
+
 impl PartialEq for NormalIno {
     fn eq(&self, other: &Self) -> bool {
         self.0 == other.0
