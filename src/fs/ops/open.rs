@@ -162,19 +162,9 @@ fn build_commits_text(fs: &GitFs, entries: Vec<ObjectAttr>, ino: u64) -> anyhow:
         let (subject, committer) = {
             let repo = fs.get_repo(ino)?;
             let repo = repo.lock().map_err(|_| anyhow!("Lock poisoned"))?;
-            let subject = repo
-                .inner
-                .find_commit(e.oid)
-                .ok()
-                .and_then(|c| c.summary().map(|s| s.to_string()))
-                .unwrap_or_default();
-            let committer = repo
-                .inner
-                .find_commit(e.oid)?
-                .committer()
-                .name()
-                .unwrap_or("Missing author")
-                .to_owned();
+            let commit = repo.inner.find_commit(e.oid)?;
+            let subject = commit.summary().unwrap_or_default().to_owned();
+            let committer = commit.committer().name().unwrap_or_default().to_string();
             (subject, committer)
         };
 
