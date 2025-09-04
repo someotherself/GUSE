@@ -22,8 +22,8 @@ use crate::fs::fileattr::{CreateFileAttr, FileAttr, FileType, ObjectAttr, build_
 use crate::fs::meta_db::MetaDb;
 use crate::fs::ops::readdir::{DirectoryEntry, DirectoryEntryPlus};
 use crate::fs::repo::{GitRepo, VirtualNode};
-use crate::inodes::Inodes;
-use crate::mount;
+use crate::inodes::{Inodes, VirtualIno};
+use crate::mount::{self, file_attr};
 use crate::namespec::NameSpec;
 
 pub mod fileattr;
@@ -112,6 +112,7 @@ pub struct GitFs {
     current_handle: AtomicU64,
     handles: RwLock<HashMap<u64, Handle>>, // (fh, Handle)
     read_only: bool,
+    vfile_entry: RwLock<HashMap<VirtualIno, VFileEntry>>,
     pub notifier: Arc<OnceLock<fuser::Notifier>>,
 }
 
@@ -125,6 +126,23 @@ struct Handle {
 enum SourceTypes {
     RealFile(File),
     RoBlob { oid: Oid, data: Arc<Vec<u8>> },
+}
+
+/// Used for creating virtual files.
+///
+/// These files are made usign commit data.
+/// Data generated during getattr/lookup, served during open/read, deleted at release.
+///
+/// To read the files correctly, getattr and lookup needs the content size
+enum VFile {
+    Month,
+    Commit,
+}
+
+struct VFileEntry {
+    kind: VFile,
+    len: u64,
+    data: OnceLock<Arc<Vec<u8>>>,
 }
 
 impl SourceTypes {
@@ -183,6 +201,7 @@ impl GitFs {
             handles: RwLock::new(HashMap::new()),
             current_handle: AtomicU64::new(1),
             next_inode: HashMap::new(),
+            vfile_entry: RwLock::new(HashMap::new()),
             notifier,
         };
         fs.ensure_base_dirs_exist()?;
