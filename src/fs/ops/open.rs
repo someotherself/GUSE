@@ -91,7 +91,7 @@ pub fn open_vfile(fs: &GitFs, ino: Inodes, read: bool, write: bool) -> anyhow::R
 /// Saved the file in the vfile_entry and returns the size of the content
 pub fn create_vfile_entry(fs: &GitFs, ino: Inodes) -> anyhow::Result<u64> {
     let res = classify_inode(fs, ino.to_u64_v())?;
-    match res {
+    let (entry, len) = match res {
         DirCase::Month { year, month } => {
             let entries = {
                 let repo = fs.get_repo(ino.to_u64_n())?;
@@ -107,19 +107,33 @@ pub fn create_vfile_entry(fs: &GitFs, ino: Inodes) -> anyhow::Result<u64> {
                 len,
                 data,
             };
-            {
-                let mut guard = fs
-                    .vfile_entry
-                    .write()
-                    .map_err(|_| anyhow!("Lock poisoned"))?;
-                guard.insert(ino.to_virt(), entry);
-            }
-            Ok(len)
+            (entry, len)
         }
         DirCase::Commit { oid } => {
-            todo!()
+            let summary = {
+                let repo = fs.get_repo(ino.to_u64_n())?;
+                let repo = repo.lock().map_err(|_| anyhow!("Lock poisoned"))?;
+                let commit = repo.inner.find_commit(oid)?;
+                commit.summary().unwrap_or_default().to_owned()
+            };
+            let data = OnceLock::new();
+            let len = summary.len() as u64;
+            let entry = VFileEntry {
+                kind: crate::fs::VFile::Commit,
+                len,
+                data,
+            };
+            (entry, len)
         }
+    };
+    {
+        let mut guard = fs
+            .vfile_entry
+            .write()
+            .map_err(|_| anyhow!("Lock poisoned"))?;
+        guard.insert(ino.to_virt(), entry);
     }
+    Ok(len)
 }
 
 #[instrument(level = "debug", skip(fs), fields(ino), ret(level = Level::DEBUG), err(Display))]
