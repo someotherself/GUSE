@@ -964,10 +964,12 @@ impl GitFs {
 
     pub fn prepare_virtual_file(&self, attr: FileAttr) -> anyhow::Result<FileAttr> {
         let mut new_attr: FileAttr = file_attr().into();
+
         let ino: Inodes = attr.ino.into();
+        let size = ops::open::create_vfile_entry(self, ino)?;
         let v_ino = ino.to_u64_v();
 
-        new_attr.size = 512;
+        new_attr.size = size;
         new_attr.mode = 0o100444;
         new_attr.kind = FileType::RegularFile;
         new_attr.perm = 0o444;
