@@ -168,12 +168,22 @@ fn build_commits_text(fs: &GitFs, entries: Vec<ObjectAttr>, ino: u64) -> anyhow:
                 .and_then(|c| c.summary().map(|s| s.to_string()))
                 .unwrap_or_default()
         };
+        let committer = {
+            let repo = fs.get_repo(ino)?;
+            let repo = repo.lock().map_err(|_| anyhow!("Lock poisoned"))?;
+            repo.inner
+                .find_commit(e.oid)?
+                .committer()
+                .name()
+                .unwrap_or("Missing author")
+                .to_owned()
+        };
 
         // sanitize tabs/newlines so TSV stays one-line/row
         let clean_name = e.name.replace(['\n', '\t'], " ");
         let clean_subject = subject.replace(['\n', '\t'], " ");
 
-        let row = format!("{ts}\t{soid}\t{clean_name}\t{clean_subject}\n");
+        let row = format!("{ts}\t{soid}\t{clean_name}\t{committer}\t{clean_subject}\n");
         contents.extend_from_slice(row.as_bytes());
     }
 
