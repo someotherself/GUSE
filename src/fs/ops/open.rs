@@ -258,7 +258,7 @@ fn build_commits_text(
             let repo = repo.lock().map_err(|_| anyhow!("Lock poisoned"))?;
             let commit = repo.inner.find_commit(e.oid)?;
             let subject = commit.summary().unwrap_or_default().to_owned();
-            let committer = commit.committer().name().unwrap_or_default().to_owned();
+            let committer = commit.author().name().unwrap_or_default().to_owned();
             (subject, committer)
         };
 

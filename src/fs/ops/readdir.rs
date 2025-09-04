@@ -272,6 +272,11 @@ pub fn read_virtual_dir(fs: &GitFs, ino: VirtualIno) -> anyhow::Result<Vec<Direc
     drop(repo);
 
     let mut dir_entries = vec![];
+    let parent = fs.get_path_from_db(ino.to_virt_u64())?;
+    let file_ext = match parent.extension().unwrap_or_default().to_str() {
+        Some(e) => format!(".{e}"),
+        None => String::new(),
+    };
 
     if is_empty {
         let mut nodes: Vec<(u64, String, FileAttr)> = vec![];
@@ -283,6 +288,7 @@ pub fn read_virtual_dir(fs: &GitFs, ino: VirtualIno) -> anyhow::Result<Vec<Direc
             None => bail!("Oid missing"),
         };
         for (name, entry) in log_entries {
+            let name = format!("{name}{file_ext}");
             if !v_node.log.contains_key(&name) {
                 v_node.log.insert(name.clone(), entry.clone());
                 let mut attr = fs.object_to_file_attr(entry.0, &entry.1.clone())?;
