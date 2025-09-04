@@ -2,13 +2,13 @@ use std::{fmt::Display, ops::Deref};
 
 use crate::fs::VDIR_BIT;
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Hash, PartialEq)]
 pub enum Inodes {
     NormalIno(u64),
     VirtualIno(u64),
 }
 
-#[derive(Debug, Clone, Copy, Eq)]
+#[derive(Debug, Clone, Copy, Eq, Hash, PartialEq)]
 pub struct NormalIno(pub u64);
 
 impl NormalIno {
@@ -25,7 +25,7 @@ impl NormalIno {
     }
 }
 
-#[derive(Debug, Clone, Copy, Eq)]
+#[derive(Debug, Clone, Copy, Eq, Hash, PartialEq)]
 pub struct VirtualIno(pub u64);
 
 impl VirtualIno {
@@ -171,18 +171,6 @@ impl PartialEq<u64> for Inodes {
         match self {
             Inodes::NormalIno(ino) | Inodes::VirtualIno(ino) => ino == other,
         }
-    }
-}
-
-impl PartialEq for NormalIno {
-    fn eq(&self, other: &Self) -> bool {
-        self.0 == other.0
-    }
-}
-
-impl PartialEq for VirtualIno {
-    fn eq(&self, other: &Self) -> bool {
-        self.0 == other.0
     }
 }
 
