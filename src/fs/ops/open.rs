@@ -164,7 +164,7 @@ fn build_commits_text(fs: &GitFs, entries: Vec<ObjectAttr>, ino: u64) -> anyhow:
             let repo = repo.lock().map_err(|_| anyhow!("Lock poisoned"))?;
             let commit = repo.inner.find_commit(e.oid)?;
             let subject = commit.summary().unwrap_or_default().to_owned();
-            let committer = commit.committer().name().unwrap_or_default().to_string();
+            let committer = commit.committer().name().unwrap_or_default().to_owned();
             (subject, committer)
         };
 
@@ -175,6 +175,5 @@ fn build_commits_text(fs: &GitFs, entries: Vec<ObjectAttr>, ino: u64) -> anyhow:
         contents.extend_from_slice(row.as_bytes());
     }
 
-    // Ok(out.into_bytes())
     Ok(contents)
 }
