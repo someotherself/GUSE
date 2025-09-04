@@ -1,7 +1,7 @@
 #![allow(unused_variables)]
 use std::{
     fs::OpenOptions,
-    sync::Arc,
+    sync::{Arc, OnceLock},
     time::{Duration, UNIX_EPOCH},
 };
 
@@ -11,7 +11,7 @@ use tracing::{Level, instrument};
 
 use crate::{
     fs::{
-        GitFs, Handle, SourceTypes,
+        GitFs, Handle, SourceTypes, VFileEntry,
         fileattr::ObjectAttr,
         ops::readdir::{DirCase, classify_inode},
     },
@@ -81,6 +81,40 @@ pub fn open_vfile(fs: &GitFs, ino: Inodes, read: bool, write: bool) -> anyhow::R
                 guard.insert(fh, handle);
             }
             Ok(fh)
+        }
+        DirCase::Commit { oid } => {
+            todo!()
+        }
+    }
+}
+
+/// Saved the file in the vfile_entry and returns the size of the content
+pub fn create_vfile_entry(fs: &GitFs, ino: Inodes) -> anyhow::Result<u64> {
+    let res = classify_inode(fs, ino.to_u64_v())?;
+    match res {
+        DirCase::Month { year, month } => {
+            let entries = {
+                let repo = fs.get_repo(ino.to_u64_n())?;
+                let repo = repo.lock().map_err(|_| anyhow!("Lock poisoned"))?;
+                repo.month_commits(&format!("{year:04}-{month:02}"))?
+            };
+            let contents = build_commits_text(fs, entries, ino.to_u64_n())?;
+            let data = OnceLock::new();
+            let _ = data.set(Arc::new(contents.clone()));
+            let len = contents.len() as u64;
+            let entry = VFileEntry {
+                kind: crate::fs::VFile::Month,
+                len,
+                data,
+            };
+            {
+                let mut guard = fs
+                    .vfile_entry
+                    .write()
+                    .map_err(|_| anyhow!("Lock poisoned"))?;
+                guard.insert(ino.to_virt(), entry);
+            }
+            Ok(len)
         }
         DirCase::Commit { oid } => {
             todo!()
