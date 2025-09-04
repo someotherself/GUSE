@@ -59,15 +59,25 @@ pub fn open_vfile(fs: &GitFs, ino: Inodes, read: bool, write: bool) -> anyhow::R
     let res = classify_inode(fs, ino.to_u64_v())?;
     match res {
         DirCase::Month { year, month } => {
-            let entries = {
-                let repo = fs.get_repo(ino.to_u64_n())?;
-                let repo = repo.lock().map_err(|_| anyhow!("Lock poisoned"))?;
-                repo.month_commits(&format!("{year:04}-{month:02}"))?
+            let mut contents = {
+                let map = fs
+                    .vfile_entry
+                    .read()
+                    .map_err(|_| anyhow!("Lock poisoned"))?;
+                map.get(&ino.to_virt()).and_then(|e| e.data.get()).cloned()
             };
-            let contents = build_commits_text(fs, entries, ino.to_u64_n())?;
+            if contents.is_none() {
+                let entries = {
+                    let repo = fs.get_repo(ino.to_u64_n())?;
+                    let repo = repo.lock().map_err(|_| anyhow!("Lock poisoned"))?;
+                    repo.month_commits(&format!("{year:04}-{month:02}"))?
+                };
+                contents = Some(build_commits_text(fs, entries, ino.to_u64_n())?);
+            }
+            let data = contents.ok_or_else(|| anyhow!("No data"))?;
             let blob_file = SourceTypes::RoBlob {
                 oid: Oid::zero(),
-                data: Arc::new(contents),
+                data,
             };
             let fh = fs.next_file_handle();
             let handle = Handle {
@@ -89,18 +99,18 @@ pub fn open_vfile(fs: &GitFs, ino: Inodes, read: bool, write: bool) -> anyhow::R
 }
 
 /// Saved the file in the vfile_entry and returns the size of the content
-pub fn create_vfile_entry(fs: &GitFs, ino: Inodes) -> anyhow::Result<u64> {
-    let res = classify_inode(fs, ino.to_u64_v())?;
+pub fn create_vfile_entry(fs: &GitFs, ino: VirtualIno) -> anyhow::Result<u64> {
+    let res = classify_inode(fs, ino.to_virt_u64())?;
     let (entry, len) = match res {
         DirCase::Month { year, month } => {
             let entries = {
-                let repo = fs.get_repo(ino.to_u64_n())?;
+                let repo = fs.get_repo(ino.to_norm_u64())?;
                 let repo = repo.lock().map_err(|_| anyhow!("Lock poisoned"))?;
                 repo.month_commits(&format!("{year:04}-{month:02}"))?
             };
-            let contents = build_commits_text(fs, entries, ino.to_u64_n())?;
+            let contents = build_commits_text(fs, entries, ino.to_norm_u64())?;
             let data = OnceLock::new();
-            let _ = data.set(Arc::new(contents.clone()));
+            let _ = data.set(contents.clone());
             let len = contents.len() as u64;
             let entry = VFileEntry {
                 kind: crate::fs::VFile::Month,
@@ -111,7 +121,7 @@ pub fn create_vfile_entry(fs: &GitFs, ino: Inodes) -> anyhow::Result<u64> {
         }
         DirCase::Commit { oid } => {
             let summary = {
-                let repo = fs.get_repo(ino.to_u64_n())?;
+                let repo = fs.get_repo(ino.to_norm_u64())?;
                 let repo = repo.lock().map_err(|_| anyhow!("Lock poisoned"))?;
                 let commit = repo.inner.find_commit(oid)?;
                 commit.summary().unwrap_or_default().to_owned()
@@ -131,7 +141,7 @@ pub fn create_vfile_entry(fs: &GitFs, ino: Inodes) -> anyhow::Result<u64> {
             .vfile_entry
             .write()
             .map_err(|_| anyhow!("Lock poisoned"))?;
-        guard.insert(ino.to_virt(), entry);
+        guard.insert(ino, entry);
     }
     Ok(len)
 }
@@ -201,7 +211,11 @@ fn git_commit_time(t: Time) -> String {
     dt.to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
 }
 
-fn build_commits_text(fs: &GitFs, entries: Vec<ObjectAttr>, ino: u64) -> anyhow::Result<Vec<u8>> {
+fn build_commits_text(
+    fs: &GitFs,
+    entries: Vec<ObjectAttr>,
+    ino: u64,
+) -> anyhow::Result<Arc<Vec<u8>>> {
     let mut contents: Vec<u8> = Vec::new();
 
     for e in entries {
@@ -223,5 +237,5 @@ fn build_commits_text(fs: &GitFs, entries: Vec<ObjectAttr>, ino: u64) -> anyhow:
         contents.extend_from_slice(row.as_bytes());
     }
 
-    Ok(contents)
+    Ok(Arc::new(contents))
 }
