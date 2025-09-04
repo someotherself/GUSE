@@ -568,22 +568,24 @@ impl GitFs {
             FsOperationContext::Root => Ok(build_attr_dir(ROOT_INO, st_mode)),
             FsOperationContext::RepoDir { ino: _ } => {
                 let attr = build_attr_dir(ino.to_u64_n(), st_mode);
+                let ino: Inodes = attr.ino.into();
                 match ino {
                     Inodes::NormalIno(_) => Ok(attr),
-                    Inodes::VirtualIno(_) => self.prepare_virtual_file(attr),
+                    Inodes::VirtualIno(_) => self.prepare_virtual_file(ino.to_virt()),
                 }
             }
             FsOperationContext::InsideLiveDir { ino: _ } => match ino {
                 Inodes::NormalIno(_) => ops::getattr::getattr_live_dir(self, ino.to_norm()),
                 Inodes::VirtualIno(_) => {
                     let attr = ops::getattr::getattr_live_dir(self, ino.to_norm())?;
+                    let ino: Inodes = attr.ino.into();
                     match attr.kind {
                         // If original is a file, create a virtual directory
                         // Used when trying to cd into a file
                         FileType::RegularFile => self.prepare_virtual_folder(attr),
                         // If original is a directory, create a virtual file
                         // Used when trying to cat a directory
-                        FileType::Directory => self.prepare_virtual_file(attr),
+                        FileType::Directory => self.prepare_virtual_file(ino.to_virt()),
                         _ => bail!("Invalid attr"),
                     }
                 }
@@ -592,13 +594,14 @@ impl GitFs {
                 Inodes::NormalIno(_) => ops::getattr::getattr_git_dir(self, ino.to_norm()),
                 Inodes::VirtualIno(_) => {
                     let attr = ops::getattr::getattr_git_dir(self, ino.to_norm())?;
+                    let ino: Inodes = attr.ino.into();
                     match attr.kind {
                         // If original is a file, create a virtual directory
                         // Used when trying to cd into a file
                         FileType::RegularFile => self.prepare_virtual_folder(attr),
                         // If original is a directory, create a virtual file
                         // Used when trying to cat a directory
-                        FileType::Directory => self.prepare_virtual_file(attr),
+                        FileType::Directory => self.prepare_virtual_file(ino.to_virt()),
                         _ => bail!("Invalid attr"),
                     }
                 }
@@ -887,7 +890,8 @@ impl GitFs {
                     return Ok(None);
                 };
                 if spec.is_virtual() && attr.kind == FileType::Directory {
-                    return Ok(Some(self.prepare_virtual_file(attr)?));
+                    let ino: Inodes = attr.ino.into();
+                    return Ok(Some(self.prepare_virtual_file(ino.to_virt())?));
                 }
                 return Ok(Some(attr));
             }
@@ -897,11 +901,14 @@ impl GitFs {
                     let Some(attr) = ops::lookup::lookup_live(self, parent.to_norm(), name)? else {
                         return Ok(None);
                     };
+                    let ino: Inodes = attr.ino.into();
                     match attr.kind {
                         FileType::RegularFile => {
                             return Ok(Some(self.prepare_virtual_folder(attr)?));
                         }
-                        FileType::Directory => return Ok(Some(self.prepare_virtual_file(attr)?)),
+                        FileType::Directory => {
+                            return Ok(Some(self.prepare_virtual_file(ino.to_virt())?));
+                        }
                         _ => bail!("Invalid attr"),
                     }
                 }
@@ -923,11 +930,14 @@ impl GitFs {
                         Some(attr) => attr,
                         None => return Ok(None),
                     };
+                    let ino: Inodes = attr.ino.into();
                     match attr.kind {
                         FileType::RegularFile => {
                             return Ok(Some(self.prepare_virtual_folder(attr)?));
                         }
-                        FileType::Directory => return Ok(Some(self.prepare_virtual_file(attr)?)),
+                        FileType::Directory => {
+                            return Ok(Some(self.prepare_virtual_file(ino.to_virt())?));
+                        }
                         _ => bail!("Invalid attr"),
                     }
                 }
@@ -962,12 +972,25 @@ impl GitFs {
         }
     }
 
-    pub fn prepare_virtual_file(&self, attr: FileAttr) -> anyhow::Result<FileAttr> {
+    pub fn prepare_virtual_file(&self, ino: VirtualIno) -> anyhow::Result<FileAttr> {
+        if let Some(size) = {
+            let guard = self
+                .vfile_entry
+                .read()
+                .map_err(|_| anyhow!("Lock poisoned"))?;
+            guard.get(&ino).map(|e| e.len)
+        } {
+            return self.create_vfile_attr(ino, size);
+        }
+
+        let size = ops::open::create_vfile_entry(self, ino)?;
+        self.create_vfile_attr(ino, size)
+    }
+
+    fn create_vfile_attr(&self, ino: VirtualIno, size: u64) -> anyhow::Result<FileAttr> {
         let mut new_attr: FileAttr = file_attr().into();
 
-        let ino: Inodes = attr.ino.into();
-        let size = ops::open::create_vfile_entry(self, ino)?;
-        let v_ino = ino.to_u64_v();
+        let v_ino = ino.to_virt_u64();
 
         new_attr.size = size;
         new_attr.mode = 0o100444;
