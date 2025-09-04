@@ -11,6 +11,9 @@ This project uses [libgit2](https://libgit2.org/) (via the `git2` crate) and
 ## OS
 This project has support for linux/macOS. On windows, consider using WSL2.
 
+## How to install and use
+- [Usage](Readme/usage.md)
+
 ## INFO
 GUSE is a learning project. It is built to allows user to interact with git directly from the filesystem, using commands such as cd, ls, mkdir, touch, cat etc
 
