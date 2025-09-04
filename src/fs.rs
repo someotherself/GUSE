@@ -1012,7 +1012,7 @@ impl GitFs {
         new_attr.perm = 0o444;
         new_attr.nlink = 1;
         new_attr.ino = v_ino;
-        new_attr.blksize = 4096;
+        new_attr.blksize = size.div_ceil(512) as u32;
 
         Ok(new_attr)
     }
