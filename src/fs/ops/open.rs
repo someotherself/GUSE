@@ -154,9 +154,7 @@ fn git_commit_time(t: Time) -> String {
 }
 
 fn build_commits_text(fs: &GitFs, entries: Vec<ObjectAttr>, ino: u64) -> anyhow::Result<Vec<u8>> {
-    // Pre-size roughly: header + ~100 bytes/row
-    let mut out = String::with_capacity(64 + entries.len() * 128);
-    out.push_str("iso8601_utc\tshort_oid\tfolder_name\tsubject\n");
+    let mut contents: Vec<u8> = Vec::new();
 
     for e in entries {
         let ts = git_commit_time(e.commit_time);
@@ -175,8 +173,10 @@ fn build_commits_text(fs: &GitFs, entries: Vec<ObjectAttr>, ino: u64) -> anyhow:
         let clean_name = e.name.replace(['\n', '\t'], " ");
         let clean_subject = subject.replace(['\n', '\t'], " ");
 
-        out.push_str("{ts}\t{soid}\t{clean_name}\t{clean_subject}");
+        let row = format!("{ts}\t{soid}\t{clean_name}\t{clean_subject}\n");
+        contents.extend_from_slice(row.as_bytes());
     }
 
-    Ok(out.into_bytes())
+    // Ok(out.into_bytes())
+    Ok(contents)
 }
