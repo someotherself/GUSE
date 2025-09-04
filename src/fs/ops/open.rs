@@ -93,7 +93,39 @@ pub fn open_vfile(fs: &GitFs, ino: Inodes, read: bool, write: bool) -> anyhow::R
             Ok(fh)
         }
         DirCase::Commit { oid } => {
-            todo!()
+            let mut contents = {
+                let map = fs
+                    .vfile_entry
+                    .read()
+                    .map_err(|_| anyhow!("Lock poisoned"))?;
+                map.get(&ino.to_virt()).and_then(|e| e.data.get()).cloned()
+            };
+            if contents.is_none() {
+                let summary = {
+                    let repo = fs.get_repo(ino.to_u64_n())?;
+                    let repo = repo.lock().map_err(|_| anyhow!("Lock poisoned"))?;
+                    let commit = repo.inner.find_commit(oid)?;
+                    commit.summary().unwrap_or_default().to_owned()
+                };
+                contents = Some(Arc::new(Vec::from(summary.as_bytes())));
+            }
+            let data = contents.ok_or_else(|| anyhow!("No data"))?;
+            let blob_file = SourceTypes::RoBlob {
+                oid: Oid::zero(),
+                data,
+            };
+            let fh = fs.next_file_handle();
+            let handle = Handle {
+                ino: ino.to_u64_v(),
+                file: blob_file,
+                read,
+                write: false,
+            };
+            {
+                let mut guard = fs.handles.write().map_err(|_| anyhow!("Lock poisoned"))?;
+                guard.insert(fh, handle);
+            }
+            Ok(fh)
         }
     }
 }
