@@ -501,8 +501,22 @@ impl GitFs {
 
     #[instrument(level = "debug", skip(self), fields(ino), ret(level = Level::DEBUG), err(Display))]
     pub fn release(&self, fh: u64) -> anyhow::Result<bool> {
-        let mut guard = self.handles.write().map_err(|_| anyhow!("Lock poisoned"))?;
-        Ok(guard.remove(&fh).is_some())
+        let ino = {
+            let mut guard = self.handles.write().map_err(|_| anyhow!("Lock poisoned"))?;
+            match guard.remove(&fh) {
+                Some(h) => h.ino,
+                None => return Ok(false),
+            }
+        };
+        {
+            let mut guard = self
+                .vfile_entry
+                .write()
+                .map_err(|_| anyhow!("Lock poisoned"))?;
+            let ino: Inodes = ino.into();
+            guard.remove(&ino.to_virt());
+        };
+        Ok(true)
     }
 
     fn object_to_file_attr(&self, ino: u64, git_attr: &ObjectAttr) -> anyhow::Result<FileAttr> {
