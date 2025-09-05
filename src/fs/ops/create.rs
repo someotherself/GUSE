@@ -3,7 +3,12 @@ use std::{fs::File, os::unix::fs::PermissionsExt};
 use anyhow::{anyhow, bail};
 
 use crate::{
-    fs::{GitFs, fileattr::FileAttr},
+    fs::{
+        GitFs,
+        fileattr::FileAttr,
+        ops::readdir::{DirCase, classify_inode},
+    },
+    inodes::NormalIno,
     mount::file_attr,
 };
 
@@ -32,4 +37,22 @@ pub fn create_live(
 
     let fh = fs.open(ino, read, write, false)?;
     Ok((attr, fh))
+}
+
+pub fn create_git(
+    fs: &GitFs,
+    parent: NormalIno,
+    _name: &str,
+    _read: bool,
+    _write: bool,
+) -> anyhow::Result<(FileAttr, u64)> {
+    let res = classify_inode(fs, parent.to_norm_u64())?;
+    match res {
+        DirCase::Month { year: _, month: _ } => {
+            bail!("This folder is read only!")
+        }
+        DirCase::Commit { oid: _ } => {
+            todo!()
+        }
+    }
 }

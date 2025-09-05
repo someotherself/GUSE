@@ -504,8 +504,8 @@ impl GitFs {
             FsOperationContext::InsideLiveDir { ino } => {
                 ops::write::write_live(self, ino, offset, buf, fh)
             }
-            FsOperationContext::InsideGitDir { ino } => {
-                ops::write::write_git(self, ino, offset, buf, fh)
+            FsOperationContext::InsideGitDir { ino: _ } => {
+                ops::write::write_git(self, ino.to_norm(), offset, buf, fh)
             }
         }
     }
@@ -704,7 +704,7 @@ impl GitFs {
                 ops::create::create_live(self, ino, name, read, write)
             }
             FsOperationContext::InsideGitDir { ino: _ } => {
-                bail!("This directory is read only")
+                ops::create::create_git(self, parent.to_norm(), name, read, write)
             }
         }
     }

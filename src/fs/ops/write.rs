@@ -2,7 +2,13 @@ use std::os::unix::fs::FileExt;
 
 use anyhow::{anyhow, bail};
 
-use crate::fs::GitFs;
+use crate::{
+    fs::{
+        GitFs,
+        ops::readdir::{DirCase, classify_inode},
+    },
+    inodes::NormalIno,
+};
 
 pub fn write_live(fs: &GitFs, ino: u64, offset: u64, buf: &[u8], fh: u64) -> anyhow::Result<usize> {
     let guard = fs.handles.read().map_err(|_| anyhow!("Lock poisoned."))?;
@@ -24,11 +30,19 @@ pub fn write_live(fs: &GitFs, ino: u64, offset: u64, buf: &[u8], fh: u64) -> any
 }
 
 pub fn write_git(
-    _fs: &GitFs,
-    _ino: u64,
+    fs: &GitFs,
+    ino: NormalIno,
     _offset: u64,
     _buf: &[u8],
     _fh: u64,
 ) -> anyhow::Result<usize> {
-    bail!("This folder is read only!")
+    let res = classify_inode(fs, ino.to_norm_u64())?;
+    match res {
+        DirCase::Month { year: _, month: _ } => {
+            bail!("This folder is read only!")
+        }
+        DirCase::Commit { oid: _ } => {
+            todo!()
+        }
+    }
 }
