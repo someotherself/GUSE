@@ -18,9 +18,11 @@ fn main() -> anyhow::Result<()> {
             start_app(m)?;
         }
         Some(("repo", _)) => {
-            todo!()
+            tracing::error!("Not implemented!")
         }
-        _ => unreachable!(),
+        _ => {
+            tracing::error!("Wrong command!")
+        },
     };
     Ok(())
 }
