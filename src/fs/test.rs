@@ -191,7 +191,7 @@ fn test_mkdir_normal() -> anyhow::Result<()> {
             let create_attr = dir_attr();
             let dir_name1 = OsStr::new("dir_in_live_1");
             let dir1_attr = fs.mkdir(live_attr.ino, dir_name1, create_attr)?;
-            let dir1_ino = LIVE_DIR_INO + 1;
+            let dir1_ino = LIVE_DIR_INO + 2;
 
             let dir1attr_ino: Inodes = dir1_attr.ino.into();
             assert!(fs.exists(dir1attr_ino)?);

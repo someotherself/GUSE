@@ -289,21 +289,33 @@ impl GitFs {
         let mut nodes: Vec<(u64, String, FileAttr)> = vec![(ROOT_INO, repo_name.into(), repo_attr)];
 
         let live_ino = self.next_inode_raw(repo_ino)?;
+        let build_ino = self.next_inode_raw(repo_ino)?;
 
-        let repo = git2::Repository::init(repo_path)?;
+        let repo = git2::Repository::init(&repo_path)?;
 
         let live_name = "live".to_string();
+        let build_name = "build".to_string();
+        let build_path = self.repos_dir.join(repo_name).join(&build_name);
+        std::fs::create_dir(&build_path)?;
+        std::fs::set_permissions(&build_path, std::fs::Permissions::from_mode(0o775))?;
 
         let perms = 0o775;
         let st_mode = libc::S_IFDIR | perms;
         let live_attr = build_attr_dir(live_ino, st_mode);
+        let build_attr = build_attr_dir(build_ino, st_mode);
+
+        let mut res_inodes = HashSet::new();
+
+        res_inodes.insert(live_ino);
+        res_inodes.insert(build_ino);
 
         nodes.push((repo_ino, live_name, live_attr));
+        nodes.push((repo_ino, build_name, build_attr));
         connection.write_inodes_to_db(nodes)?;
 
         let connection = Arc::from(Mutex::from(connection));
 
-        let mut git_repo = GitRepo {
+        let git_repo = GitRepo {
             connection,
             repo_dir: repo_name.to_owned(),
             repo_id,
@@ -311,11 +323,10 @@ impl GitFs {
             inner: repo,
             head: None,
             snapshots: BTreeMap::new(),
-            res_inodes: HashSet::new(),
+            res_inodes,
             vdir_cache: BTreeMap::new(),
         };
 
-        git_repo.res_inodes.insert(live_ino);
         let repo_rc = Arc::from(Mutex::from(git_repo));
         self.repos_list.insert(repo_id, repo_rc.clone());
         Ok(repo_rc)
