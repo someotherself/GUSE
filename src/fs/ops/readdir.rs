@@ -76,23 +76,16 @@ pub fn readdir_repo_dir(fs: &GitFs, ino: u64) -> anyhow::Result<Vec<DirectoryEnt
 
     let mut entries: Vec<DirectoryEntry> = vec![];
 
-    let live_exists = {
-        let repo = fs.get_repo(ino)?;
-        let repo = repo.lock().map_err(|_| anyhow!("Lock poisoned"))?;
-        repo.live_exists
-    };
-    if live_exists {
-        let live_ino = fs.get_ino_from_db(ino, "live")?;
-        let live_entry = DirectoryEntry::new(
-            live_ino,
-            Oid::zero(),
-            "live".to_string(),
-            FileType::Directory,
-            libc::S_IFDIR,
-        );
+    let live_ino = fs.get_ino_from_db(ino, "live")?;
+    let live_entry = DirectoryEntry::new(
+        live_ino,
+        Oid::zero(),
+        "live".to_string(),
+        FileType::Directory,
+        libc::S_IFDIR,
+    );
 
-        entries.push(live_entry);
-    };
+    entries.push(live_entry);
 
     let object_entries = {
         let repo = fs.get_repo(ino)?;

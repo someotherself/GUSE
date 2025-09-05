@@ -22,7 +22,6 @@ pub struct GitRepo {
     pub repo_dir: String,
     pub repo_id: u16,
     pub inner: Repository,
-    pub live_exists: bool,
     pub head: Option<Oid>,
     /// i64 -> commit_time -> seconds since EPOCH
     ///

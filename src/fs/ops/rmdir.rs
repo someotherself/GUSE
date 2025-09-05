@@ -29,11 +29,6 @@ pub fn rmdir_repo(fs: &GitFs, parent: u64, name: &str) -> anyhow::Result<()> {
     }
     let live_ino = fs.get_live_ino(parent);
     if attr.ino == live_ino {
-        {
-            let repo = fs.get_repo(parent)?;
-            let mut repo = repo.lock().map_err(|_| anyhow!("Lock poisoned"))?;
-            repo.live_exists = false;
-        }
         return Ok(());
     }
 
