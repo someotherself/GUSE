@@ -12,7 +12,7 @@ fn main() -> anyhow::Result<()> {
 
     match matches.subcommand() {
         Some(("run", m)) => {
-            let log_level = m.get_count("verbose") as u8;
+            let log_level = m.get_count("verbose");
             logging::init_logging(log_level);
 
             start_app(m)?;
