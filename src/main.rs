@@ -3,17 +3,25 @@
 use std::{path::PathBuf, thread};
 
 use anyhow::anyhow;
-use clap::{Arg, ArgAction, ArgMatches, command, crate_authors, crate_version};
+use clap::{Arg, ArgAction, ArgMatches, Command, command, crate_authors, crate_version};
 
 use guse::{logging, mount, tui};
 
 fn main() -> anyhow::Result<()> {
     let matches = handle_cli_args();
 
-    let log_level = matches.get_count("verbose") as u8;
-    logging::init_logging(log_level);
+    match matches.subcommand() {
+        Some(("run", m)) => {
+            let log_level = m.get_count("verbose") as u8;
+            logging::init_logging(log_level);
 
-    start_app(&matches)?;
+            start_app(m)?;
+        }
+        Some(("repo", _)) => {
+            todo!()
+        }
+        _ => unreachable!(),
+    };
     Ok(())
 }
 
@@ -27,51 +35,64 @@ fn handle_cli_args() -> ArgMatches {
     command!()
         .version(crate_version!())
         .author(crate_authors!())
-        .arg(
-            Arg::new("mount-point")
-                .required(true)
-                .short('m')
-                .long("mount-point")
-                .value_name("MOUNT_POINT")
-                .help("The path where FUSE will be mounted."),
+        .subcommand(
+            Command::new("run")
+                .about("Mount the FUSE filesystem")
+                .arg(
+                    Arg::new("mount-point")
+                        .value_name("MOUNT_POINT")
+                        .help("The path where FUSE will be mounted.")
+                        .index(1),
+                )
+                .arg(
+                    Arg::new("repos-dir")
+                        .help("The folder where the repositories will be stored")
+                        .value_name("REPOS_DIR")
+                        .index(2),
+                )
+                .arg(
+                    Arg::new("read-only")
+                        .long("read-only")
+                        .short('s')
+                        .action(ArgAction::SetTrue)
+                        .requires("mount-point")
+                        .help("Set the filesystem read-only."),
+                )
+                .arg(
+                    Arg::new("allow-root")
+                        .long("allow-root")
+                        .short('r')
+                        .action(ArgAction::SetTrue)
+                        .requires("mount-point")
+                        .help("Allow the root user to access filesystem."),
+                )
+                .arg(
+                    Arg::new("allow-other")
+                        .long("allow-other")
+                        .short('o')
+                        .action(ArgAction::SetTrue)
+                        .requires("mount-point")
+                        .help("Allow other users to access filesystem."),
+                )
+                .arg(
+                    Arg::new("verbose")
+                        .short('v')
+                        .action(ArgAction::Count)
+                        .global(true)
+                        .help("Increase log verbosity (can be used multiple times)"),
+                ),
         )
-        .arg(
-            Arg::new("repos-dir")
-                .help("The folder where the repositories will be stored")
-                .value_name("REPOS_DIR")
-                .required(true)
-                .index(1),
-        )
-        .arg(
-            Arg::new("read-only")
-                .long("read-only")
-                .short('s')
-                .action(ArgAction::SetTrue)
-                .requires("mount-point")
-                .help("Set the filesystem read-only."),
-        )
-        .arg(
-            Arg::new("allow-root")
-                .long("allow-root")
-                .short('r')
-                .action(ArgAction::SetTrue)
-                .requires("mount-point")
-                .help("Allow the root user to access filesystem."),
-        )
-        .arg(
-            Arg::new("allow-other")
-                .long("allow-other")
-                .short('o')
-                .action(ArgAction::SetTrue)
-                .requires("mount-point")
-                .help("Allow other users to access filesystem."),
-        )
-        .arg(
-            Arg::new("verbose")
-                .short('v')
-                .long("verbose")
-                .action(ArgAction::Count)
-                .help("Increase log verbosity (can be used multiple times)"),
+        .subcommand(
+            Command::new("repo")
+                .about("Manage repositories in the running daemon")
+                .subcommand_required(true)
+                .arg_required_else_help(true)
+                .short_flag('p')
+                .subcommand(
+                    Command::new("remove")
+                        .about("Delete a repository by name")
+                        .arg(Arg::new("name").required(true).value_name("NAME")),
+                ),
         )
         .get_matches()
 }
