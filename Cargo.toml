@@ -13,16 +13,16 @@ name = "guse"
 path = "src/main.rs"
 
 [dependencies]
-clap = { version = "4.5.42", features = ["cargo"] }
-libc = "0.2.174"
+clap = { version = "4.5.47", features = ["cargo"] }
+libc = "0.2.175"
 tracing = { version = "0.1.41", features = ["max_level_trace", "release_max_level_info"] }
-tracing-subscriber = { version = "0.3.19", features = ["env-filter"] }
+tracing-subscriber = { version = "0.3.20", features = ["env-filter"] }
 git2 = { version = "0.20.2", features = ["vendored-openssl"] }
 fuser = { version = "0.15.1", features = ["abi-7-12"] }
 rusqlite = { version = "0.37.0", features = ["bundled"] }
 ratatui = "0.29.0"
 thread_local = "1.1.9"
 chrono = "0.4.41"
-tempfile = "3.20.0"
+tempfile = "3.21.0"
 anyhow = "1.0.99"
 ctrlc = "3.4.7"
