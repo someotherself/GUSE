@@ -16,7 +16,7 @@ use std::{
 use anyhow::{Context, anyhow, bail};
 use git2::{FileMode, ObjectType, Oid, Repository};
 use rusqlite::{Connection, OptionalExtension, params};
-use tracing::{Level, debug, field, info, instrument};
+use tracing::{Level, field, info, instrument};
 
 use crate::fs::fileattr::{CreateFileAttr, FileAttr, FileType, ObjectAttr, build_attr_dir};
 use crate::fs::meta_db::MetaDb;
@@ -972,10 +972,7 @@ impl GitFs {
                         };
                         Ok(Some(attr))
                     }
-                    Inodes::VirtualIno(_) => {
-                        debug!("Looking up {} {}", parent.to_virt().0, name);
-                        ops::lookup::lookup_vdir(self, parent.to_virt(), name)
-                    }
+                    Inodes::VirtualIno(_) => ops::lookup::lookup_vdir(self, parent.to_virt(), name),
                 }
             }
         }
