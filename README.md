@@ -14,7 +14,7 @@ This project has support for linux/macOS. On windows, consider using WSL2.
 - [Usage](Readme/usage.md)
 
 ## INFO
-GUSE is a learning project. It is built to allows user to interact with git directly from the filesystem, using commands such as cd, ls, mkdir, touch, cat etc
+GUSE is a learning project. It is built to allow user to interact with git directly from the filesystem, using commands such as cd, ls, mkdir, touch, cat etc
 
 Inspired by [rencfs](https://github.com/xoriors/rencfs)
 
