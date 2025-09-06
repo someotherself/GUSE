@@ -105,10 +105,15 @@ pub fn lookup_git(fs: &GitFs, parent: NormalIno, name: &str) -> anyhow::Result<O
     let repo = fs.get_repo(parent)?;
     let child_ino = {
         let repo = repo.lock().map_err(|_| anyhow!("Lock poisoned"))?;
-        repo.connection
+        let Ok(child_ino) = repo
+            .connection
             .lock()
             .map_err(|_| anyhow!("Lock poisoned"))?
-            .get_ino_from_db(parent, name)?
+            .get_ino_from_db(parent, name)
+        else {
+            return Ok(None);
+        };
+        child_ino
     };
 
     let oid = fs.get_oid_from_db(parent)?;
