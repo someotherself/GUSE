@@ -213,15 +213,15 @@ impl GitFs {
             if !repo_path.join(META_STORE).exists() {
                 continue;
             }
-            let repo = fs.load_repo(repo_name)?;
-            let repo_id = repo.lock().map_err(|_| anyhow!("Lock poisoned"))?.repo_id;
-            fs.repos_list.insert(repo_id, repo);
-            info!("Repo {repo_name} added with id {repo_id}");
+            fs.load_repo(repo_name)?;
+            // let repo_id = repo.lock().map_err(|_| anyhow!("Lock poisoned"))?.repo_id;
+            // fs.repos_list.insert(repo_id, repo);
+            // info!("Repo {repo_name} added with id {repo_id}");
         }
         Ok(Arc::from(Mutex::new(fs)))
     }
 
-    pub fn load_repo(&mut self, repo_name: &str) -> anyhow::Result<Arc<Mutex<GitRepo>>> {
+    pub fn load_repo(&mut self, repo_name: &str) -> anyhow::Result<()> {
         let repo_path = self.repos_dir.join(repo_name);
 
         let mut connection = self.init_meta_db(repo_name)?;
@@ -265,8 +265,9 @@ impl GitFs {
         }
 
         let repo_rc = Arc::from(Mutex::from(git_repo));
-        self.repos_list.insert(repo_id, repo_rc.clone());
-        Ok(repo_rc)
+        self.repos_list.insert(repo_id, repo_rc);
+        info!("Repo {repo_name} added with id {repo_id}");
+        Ok(())
     }
 
     pub fn new_repo(&mut self, repo_name: &str) -> anyhow::Result<Arc<Mutex<GitRepo>>> {
