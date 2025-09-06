@@ -27,32 +27,32 @@ data_dir (Root folder. Can be renamed)
                     ├── user_file1.md
                     └── user_file2.md
             ├── YYYY-MM/                # a list of months where commits were made
-                    ├── Snaps_on_MM.DD.YYYY/   #  list of days where commits were made
-                    └── Snaps_on_MM.DD.YYYY/
+                    ├── Snap_001_HASH/   #  list of commits for the respective month
                         ├── user_file1.md   # previous versions of the live files. Read only versions
                         └── user_file2.md
+                    └── Snap_002_HASH/
             ├── YYYY-MM/               
-                    ├── Snaps_on_MM.DD.YYYY/
-                    └── Snaps_on_MM.DD.YYYY/
+                    ├── Snap_001_HASH/
                         ├── user_file1.md
                         └── user_file2.md
+                    └── Snap_002_HASH/
             ├── YYYY-MM/                
-                    ├── Snaps_on_MM.DD.YYYY/
-                    └── Snaps_on_MM.DD.YYYY/
+                    ├── Snaps_on_HASH/
                         ├── user_file1.md
                         └── user_file2.md
+                    └── Snaps_on_HASH/
             ...
     ├── repository_2/
             ├── live
-            ├── snap_1_date
-            ├── snap_2_date
-            ├── snap_3_date
+            ├── YYYY-MM/
+            ├── YYYY-MM/
+            ├── YYYY-MM/
             ...
     ├── repository_3/
             ├── live
-            ├── snap_1_date
-            ├── snap_2_date
-            ├── snap_3_date
+            ├── YYYY-MM/
+            ├── YYYY-MM/
+            ├── YYYY-MM/
             ...
 ```
 
