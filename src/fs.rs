@@ -18,12 +18,13 @@ use git2::{FileMode, ObjectType, Oid, Repository};
 use rusqlite::{Connection, OptionalExtension, params};
 use tracing::{Level, field, info, instrument};
 
-use crate::fs::fileattr::{CreateFileAttr, FileAttr, FileType, ObjectAttr, build_attr_dir};
+use crate::fs::fileattr::{
+    CreateFileAttr, FileAttr, FileType, ObjectAttr, build_attr_dir, dir_attr, file_attr,
+};
 use crate::fs::meta_db::MetaDb;
 use crate::fs::ops::readdir::{DirectoryEntry, DirectoryEntryPlus};
 use crate::fs::repo::{GitRepo, VirtualNode};
 use crate::inodes::{Inodes, VirtualIno};
-use crate::mount::{self, file_attr};
 use crate::namespec::NameSpec;
 
 pub mod fileattr;
@@ -284,7 +285,7 @@ impl GitFs {
         self.next_inode
             .insert(repo_id, AtomicU64::from(repo_ino + 1));
 
-        let mut repo_attr: FileAttr = mount::dir_attr().into();
+        let mut repo_attr: FileAttr = dir_attr().into();
         repo_attr.ino = repo_ino;
         let mut nodes: Vec<(u64, String, FileAttr)> = vec![(ROOT_INO, repo_name.into(), repo_attr)];
 

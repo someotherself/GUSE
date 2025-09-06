@@ -2,9 +2,11 @@ use anyhow::anyhow;
 use git2::Oid;
 
 use crate::{
-    fs::{FileAttr, GitFs},
+    fs::{
+        FileAttr, GitFs,
+        fileattr::{dir_attr, file_attr},
+    },
     inodes::NormalIno,
-    mount::{dir_attr, file_attr},
 };
 
 pub fn getattr_live_dir(fs: &GitFs, ino: NormalIno) -> anyhow::Result<FileAttr> {

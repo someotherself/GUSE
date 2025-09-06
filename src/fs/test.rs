@@ -4,9 +4,9 @@ use anyhow::anyhow;
 use git2::Oid;
 
 use crate::{
+    fs::fileattr::dir_attr,
     fs::{FileType, GitFs, REPO_SHIFT},
     inodes::Inodes,
-    mount::dir_attr,
     test_setup::{TestSetup, get_fs, run_test},
 };
 

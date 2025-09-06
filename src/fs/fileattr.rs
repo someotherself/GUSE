@@ -54,6 +54,30 @@ impl FileType {
     }
 }
 
+pub const fn dir_attr() -> CreateFileAttr {
+    CreateFileAttr {
+        kind: FileType::Directory,
+        perm: 0o775,
+        uid: 0,
+        mode: libc::S_IFDIR,
+        gid: 0,
+        rdev: 0,
+        flags: 0,
+    }
+}
+
+pub const fn file_attr() -> CreateFileAttr {
+    CreateFileAttr {
+        kind: FileType::RegularFile,
+        perm: 0o655,
+        uid: 0,
+        mode: libc::S_IFREG,
+        gid: 0,
+        rdev: 0,
+        flags: 0,
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct CreateFileAttr {
     pub kind: FileType,

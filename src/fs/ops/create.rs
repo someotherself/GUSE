@@ -5,11 +5,10 @@ use anyhow::{anyhow, bail};
 use crate::{
     fs::{
         GitFs,
-        fileattr::FileAttr,
+        fileattr::{FileAttr, file_attr},
         ops::readdir::{DirCase, classify_inode},
     },
     inodes::NormalIno,
-    mount::file_attr,
 };
 
 pub fn create_live(

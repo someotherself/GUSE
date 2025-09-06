@@ -5,9 +5,11 @@ use git2::Oid;
 use anyhow::anyhow;
 
 use crate::{
-    fs::{FileAttr, GitFs, REPO_SHIFT, build_attr_dir},
+    fs::{
+        FileAttr, GitFs, REPO_SHIFT, build_attr_dir,
+        fileattr::{dir_attr, file_attr},
+    },
     inodes::{NormalIno, VirtualIno},
-    mount::{dir_attr, file_attr},
 };
 
 pub fn lookup_root(fs: &GitFs, name: &str) -> anyhow::Result<Option<FileAttr>> {

@@ -22,7 +22,7 @@ use std::thread;
 use std::time::{Duration, SystemTime};
 use std::{num::NonZeroU32, path::PathBuf};
 
-use crate::fs::fileattr::{CreateFileAttr, FileAttr, FileType};
+use crate::fs::fileattr::{CreateFileAttr, FileAttr, FileType, dir_attr};
 use crate::fs::ops::readdir::{DirectoryEntry, DirectoryEntryPlus};
 use crate::fs::{GitFs, REPO_SHIFT, ROOT_INO, repo};
 use crate::internals::sock::{socket_path, start_control_server};
@@ -765,30 +765,6 @@ impl From<FileAttr> for fuser::FileAttr {
             flags: from.flags,
             blksize: from.blksize,
         }
-    }
-}
-
-pub const fn dir_attr() -> CreateFileAttr {
-    CreateFileAttr {
-        kind: FileType::Directory,
-        perm: 0o775,
-        uid: 0,
-        mode: libc::S_IFDIR,
-        gid: 0,
-        rdev: 0,
-        flags: 0,
-    }
-}
-
-pub const fn file_attr() -> CreateFileAttr {
-    CreateFileAttr {
-        kind: FileType::RegularFile,
-        perm: 0o655,
-        uid: 0,
-        mode: libc::S_IFREG,
-        gid: 0,
-        rdev: 0,
-        flags: 0,
     }
 }
 
