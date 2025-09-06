@@ -1,4 +1,4 @@
-use std::ffi::OsString;
+use std::{collections::btree_map::Entry, ffi::OsString};
 
 use anyhow::{anyhow, bail};
 use git2::{FileMode, Oid};
@@ -282,8 +282,8 @@ pub fn read_virtual_dir(fs: &GitFs, ino: VirtualIno) -> anyhow::Result<Vec<Direc
         };
         for (name, entry) in log_entries {
             let name = format!("{name}{file_ext}");
-            if !v_node.log.contains_key(&name) {
-                v_node.log.insert(name.clone(), entry.clone());
+            if let Entry::Vacant(e) = v_node.log.entry(name.clone()) {
+                e.insert(entry.clone());
                 let mut attr = fs.object_to_file_attr(entry.0, &entry.1.clone())?;
                 attr.perm = 0o555;
                 nodes.push((ino.to_norm_u64(), name.clone(), attr));
@@ -306,10 +306,11 @@ pub fn read_virtual_dir(fs: &GitFs, ino: VirtualIno) -> anyhow::Result<Vec<Direc
             None => bail!("Oid missing"),
         };
         for (ino, entry) in v_node.log.values() {
+            let name = format!("{}{file_ext}", entry.name);
             dir_entries.push(DirectoryEntry::new(
                 *ino,
                 entry.oid,
-                entry.name.clone(),
+                name.clone(),
                 FileType::RegularFile,
                 entry.filemode,
             ));
