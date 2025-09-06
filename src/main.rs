@@ -5,7 +5,10 @@ use std::{path::PathBuf, thread};
 use anyhow::anyhow;
 use clap::{Arg, ArgAction, ArgMatches, Command, command, crate_authors, crate_version};
 
-use guse::{logging, mount, tui};
+use guse::{
+    internals::sock::{ControlReq, send_req, socket_path},
+    logging, tui,
+};
 
 fn main() -> anyhow::Result<()> {
     let matches = handle_cli_args();
@@ -17,12 +20,26 @@ fn main() -> anyhow::Result<()> {
 
             start_app(m)?;
         }
-        Some(("repo", _)) => {
-            tracing::error!("Not implemented!")
-        }
-        _ => {
-            tracing::error!("Wrong command!")
+        Some(("repo", r)) => match r.subcommand() {
+            Some(("remove", rm)) => {
+                let repo_name = rm
+                    .get_one::<String>("repo-name")
+                    .ok_or_else(|| anyhow!("Cannot parse argument"))?;
+                let sock = socket_path()?;
+                let req = ControlReq::RepoDelete {
+                    name: repo_name.clone(),
+                };
+                send_req(&sock, &req)?;
+            }
+            _ => {
+                dbg!("Wrong command!");
+                tracing::error!("Wrong command!")
+            }
         },
+        _ => {
+            dbg!("Wrong command!");
+            tracing::error!("Wrong command!")
+        }
     };
     Ok(())
 }
@@ -93,7 +110,7 @@ fn handle_cli_args() -> ArgMatches {
                 .subcommand(
                     Command::new("remove")
                         .about("Delete a repository by name")
-                        .arg(Arg::new("name").required(true).value_name("NAME")),
+                        .arg(Arg::new("repo-name").value_name("REPO_NAME").global(true)),
                 ),
         )
         .get_matches()
@@ -112,8 +129,8 @@ fn run_mount(matches: &ArgMatches) -> anyhow::Result<()> {
     let allow_other = matches.get_flag("allow-other");
     let allow_root = matches.get_flag("allow-root");
     let mount_point =
-        mount::MountPoint::new(mountpoint, repos_dir, read_only, allow_root, allow_other);
-    mount::mount_fuse(mount_point)?;
+        guse::mount::MountPoint::new(mountpoint, repos_dir, read_only, allow_root, allow_other);
+    guse::mount::mount_fuse(mount_point)?;
     Ok(())
 }
 
@@ -130,12 +147,12 @@ fn setup_tui(matches: &ArgMatches) -> anyhow::Result<()> {
     let allow_other = matches.get_flag("allow-other");
     let allow_root = matches.get_flag("allow-root");
     let mount_point =
-        mount::MountPoint::new(mountpoint, repos_dir, read_only, allow_root, allow_other);
+        guse::mount::MountPoint::new(mountpoint, repos_dir, read_only, allow_root, allow_other);
     let handle = thread::spawn(move || -> anyhow::Result<()> {
         tui::run_tui_app()?;
         Ok(())
     });
-    mount::mount_fuse(mount_point)?;
+    guse::mount::mount_fuse(mount_point)?;
 
     handle.join().unwrap()?;
     Ok(())

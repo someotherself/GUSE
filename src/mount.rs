@@ -1,16 +1,21 @@
 #![allow(unused_imports, unused_variables)]
 
+use anyhow::{Context, anyhow};
 use fuser::{
     BackgroundSession, MountOption, ReplyAttr, ReplyData, ReplyEntry, ReplyOpen, ReplyWrite,
 };
 use git2::Oid;
 use libc::{EACCES, EIO, EISDIR, ENOENT, ENOTDIR, O_DIRECTORY};
+use ratatui::crossterm::style::Stylize;
 use tracing::{Level, Span, info};
 use tracing::{debug, error, instrument, trace, warn};
 
 use std::ffi::OsStr;
-use std::io::{BufRead, BufReader, ErrorKind};
+use std::io::{BufRead, BufReader, ErrorKind, Read, Write};
 use std::iter::Skip;
+use std::os::linux::fs;
+use std::os::unix::fs::PermissionsExt;
+use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::Path;
 use std::sync::{Arc, Mutex, OnceLock};
 use std::thread;
@@ -20,9 +25,9 @@ use std::{num::NonZeroU32, path::PathBuf};
 use crate::fs::fileattr::{CreateFileAttr, FileAttr, FileType};
 use crate::fs::ops::readdir::{DirectoryEntry, DirectoryEntryPlus};
 use crate::fs::{GitFs, REPO_SHIFT, ROOT_INO, repo};
+use crate::internals::sock::{socket_path, start_control_server};
 
 const TTL: Duration = Duration::from_secs(1);
-const FMODE_EXEC: i32 = 0x20;
 
 pub struct MountPoint {
     mountpoint: PathBuf,
@@ -80,16 +85,22 @@ pub fn mount_fuse(opts: MountPoint) -> anyhow::Result<()> {
     }
 
     let notif = Arc::new(OnceLock::new());
-    let fs = GitFsAdapter::new(repos_dir, opts.read_only, notif.clone())?;
+    let fs = GitFsAdapter::new(repos_dir.clone(), opts.read_only, notif.clone())?;
+
+    let fs_arc = Arc::new(fs.clone());
+
+    let socket_path = socket_path()?;
+
+    start_control_server(
+        fs_arc.clone(),
+        socket_path,
+        mountpoint.to_string_lossy().into(),
+    )?;
 
     let mut session = fuser::Session::new(fs, mountpoint, &options)?;
-    // let mut unmounter = session.unmount_callable();
     let notifier = session.notifier();
     let _ = notif.set(notifier);
 
-    // ctrlc::set_handler(move || {
-    //     let _ = unmounter.unmount();
-    // })?;
     session.run()?;
     Ok(())
 }
@@ -104,7 +115,8 @@ fn fuse_allow_other_enabled() -> std::io::Result<bool> {
     Ok(false)
 }
 
-struct GitFsAdapter {
+#[derive(Clone)]
+pub struct GitFsAdapter {
     inner: Arc<Mutex<GitFs>>,
 }
 
