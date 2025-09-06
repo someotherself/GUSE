@@ -1084,8 +1084,8 @@ impl GitFs {
         repo_name: &str,
         repo_id: u16,
     ) -> anyhow::Result<()> {
-        if !self.repos_list.contains_key(&repo_id) {
-            self.repos_list.insert(repo_id, repo.clone());
+        if let Entry::Vacant(entry) = self.repos_list.entry(repo_id) {
+            entry.insert(repo.clone());
             self.repos_map.insert(repo_name.to_string(), repo_id);
             info!("Repo {repo_name} added with id {repo_id}");
         } else {

@@ -11,7 +11,7 @@ use crate::{
 };
 
 use crate::fs::ROOT_INO;
-const REPO_DIR_INO: u64 = (1 as u64) << REPO_SHIFT;
+const REPO_DIR_INO: u64 = (1u64) << REPO_SHIFT;
 const LIVE_DIR_INO: u64 = REPO_DIR_INO + 1;
 
 #[test]
