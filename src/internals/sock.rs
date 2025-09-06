@@ -86,7 +86,7 @@ fn handle_client(
                 let fs = inner.getfs();
                 let mut fs = fs.lock().map_err(|_| anyhow!("Lock poisoned"))?;
                 let Ok(_) = fs.delete_repo(&name) else {
-                    return Ok(ControlRes::Ok)
+                    return Ok(ControlRes::Ok);
                 };
                 let repo_path = fs.repos_dir.join(&name);
                 if repo_path.exists() {
