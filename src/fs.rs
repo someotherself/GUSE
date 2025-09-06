@@ -107,13 +107,16 @@ impl FsOperationContext {
 // repo_id from ino     = (ino >> REPO_SHIFT) as u16
 pub struct GitFs {
     pub repos_dir: PathBuf,
-    pub repos_list: BTreeMap<u16, Arc<Mutex<GitRepo>>>, // <repo_id, repo>
-    next_inode: HashMap<u16, AtomicU64>,                // Each Repo has a set of inodes
+    /// Use helpers `self.insert_repo` and `self.delete_repo`
+    repos_list: BTreeMap<u16, Arc<Mutex<GitRepo>>>, // <repo_id, repo>
+    /// Use helpers `self.insert_repo` and `self.delete_repo`
+    repos_map: HashMap<String, u16>, // <repo_name, repo_id>
+    next_inode: HashMap<u16, AtomicU64>, // Each Repo has a set of inodes
     current_handle: AtomicU64,
     handles: RwLock<HashMap<u64, Handle>>, // (fh, Handle)
     read_only: bool,
     vfile_entry: RwLock<HashMap<VirtualIno, VFileEntry>>,
-    pub notifier: Arc<OnceLock<fuser::Notifier>>,
+    notifier: Arc<OnceLock<fuser::Notifier>>, // not used atm
 }
 
 struct Handle {
@@ -197,6 +200,7 @@ impl GitFs {
         let mut fs = Self {
             repos_dir,
             repos_list: BTreeMap::new(),
+            repos_map: HashMap::new(),
             read_only,
             handles: RwLock::new(HashMap::new()),
             current_handle: AtomicU64::new(1),
@@ -214,9 +218,6 @@ impl GitFs {
                 continue;
             }
             fs.load_repo(repo_name)?;
-            // let repo_id = repo.lock().map_err(|_| anyhow!("Lock poisoned"))?.repo_id;
-            // fs.repos_list.insert(repo_id, repo);
-            // info!("Repo {repo_name} added with id {repo_id}");
         }
         Ok(Arc::from(Mutex::new(fs)))
     }
@@ -265,8 +266,7 @@ impl GitFs {
         }
 
         let repo_rc = Arc::from(Mutex::from(git_repo));
-        self.repos_list.insert(repo_id, repo_rc);
-        info!("Repo {repo_name} added with id {repo_id}");
+        self.insert_repo(repo_rc, repo_name, repo_id)?;
         Ok(())
     }
 
@@ -327,7 +327,7 @@ impl GitFs {
         };
 
         let repo_rc = Arc::from(Mutex::from(git_repo));
-        self.repos_list.insert(repo_id, repo_rc.clone());
+        self.insert_repo(repo_rc.clone(), repo_name, repo_id)?;
         Ok(repo_rc)
     }
 
@@ -1078,6 +1078,32 @@ impl GitFs {
 
 // gitfs_helpers
 impl GitFs {
+    pub fn insert_repo(
+        &mut self,
+        repo: Arc<Mutex<GitRepo>>,
+        repo_name: &str,
+        repo_id: u16,
+    ) -> anyhow::Result<()> {
+        if !self.repos_list.contains_key(&repo_id) {
+            self.repos_list.insert(repo_id, repo.clone());
+            self.repos_map.insert(repo_name.to_string(), repo_id);
+            info!("Repo {repo_name} added with id {repo_id}");
+        } else {
+            bail!("Repo id already exists");
+        }
+        Ok(())
+    }
+
+    pub fn delete_repo(&mut self, repo_name: &str) -> anyhow::Result<()> {
+        if let Some(repo_id) = self.repos_map.get(repo_name) {
+            self.repos_list.remove(repo_id);
+        } else {
+            bail!("Repo does not exist");
+        }
+        self.repos_map.remove(repo_name);
+        Ok(())
+    }
+
     pub fn set_vdir_bit(&self, ino: u64) -> u64 {
         ino | VDIR_BIT
     }
