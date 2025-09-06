@@ -29,7 +29,7 @@ GUSE will create 2 folders. In this example they are called:
 ## Run the app
 
 ```bash
-guse -m MOUNT data_dir -o -vv
+guse run MOUNT data_dir -o -vv
 ```
 
 ## How to create repositories
@@ -160,7 +160,7 @@ This will create a folder with all the versions of that file from the commit his
 ```bash
 cd MOUNT
 mkdir github.tokio-rs.tokio.git
-cd 2025-01/Snap023_21a13f9/src/tokio/src/net/
+cd 2025-01/Snap023_21a13f9/tokio/src/net/
 ls
 addr.rs  lookup_host.rs  mod.rs  tcp  udp.rs  unix  windows
 cd udp.rs@

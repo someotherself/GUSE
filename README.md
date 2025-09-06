@@ -1,7 +1,6 @@
 # GUSE (goo͞s) is a git based filesystem, written in rust and mouted with FUSE.
 
-# Work in progress
-
+## Under development. See Usage for current functionality
 
 ## Dependencies
 
