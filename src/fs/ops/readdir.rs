@@ -85,7 +85,17 @@ pub fn readdir_repo_dir(fs: &GitFs, ino: u64) -> anyhow::Result<Vec<DirectoryEnt
         libc::S_IFDIR,
     );
 
+    let build_ino = fs.get_ino_from_db(ino, "build")?;
+    let build_entry = DirectoryEntry::new(
+        build_ino,
+        Oid::zero(),
+        "build".to_string(),
+        FileType::Directory,
+        libc::S_IFDIR,
+    );
+
     entries.push(live_entry);
+    entries.push(build_entry);
 
     let object_entries = {
         let repo = fs.get_repo(ino)?;

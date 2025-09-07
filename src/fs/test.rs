@@ -58,7 +58,7 @@ fn test_mkdir_fetch() -> anyhow::Result<()> {
             // READ DIR REPO_DIR
             let read_dir_repo = fs.readdir(REPO_DIR_INO)?;
             assert_eq!(read_dir_repo[0].name, "live");
-            assert_eq!(read_dir_repo.len(), 3);
+            assert_eq!(read_dir_repo.len(), 4);
             let snap_1_parent = &read_dir_repo[1];
             let snap_1_parent_name: &String = &snap_1_parent.name;
             let parent_snap_attr = fs.lookup(REPO_DIR_INO, snap_1_parent_name)?.unwrap();
@@ -184,7 +184,7 @@ fn test_mkdir_normal() -> anyhow::Result<()> {
             let _folder_attr = fs.lookup(ROOT_INO, "new_repo")?.unwrap();
 
             let read_dir = fs.readdir(REPO_DIR_INO)?;
-            assert_eq!(read_dir.len(), 1);
+            assert_eq!(read_dir.len(), 2);
 
             assert_eq!(read_dir[0].name, "live");
 
