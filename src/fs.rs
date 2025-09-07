@@ -1250,7 +1250,8 @@ impl GitFs {
 
     fn is_in_live(&self, ino: u64) -> bool {
         let live_ino = self.get_live_ino(ino);
-        if live_ino == ino || self.is_virtual(ino) {
+        let build_ino = live_ino + 1;
+        if live_ino == ino || build_ino == ino || self.is_virtual(ino) {
             return true;
         }
         let mut target_ino = ino;
@@ -1260,7 +1261,7 @@ impl GitFs {
                 Ok(p) => p,
                 Err(_) => return false,
             };
-            if parent == live_ino {
+            if parent == live_ino || parent == build_ino {
                 return true;
             }
             target_ino = parent;
