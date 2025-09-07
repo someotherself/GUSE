@@ -539,7 +539,7 @@ impl GitRepo {
         let blob = repo.find_blob(oid)?;
         let filemode = entry.filemode() as u32;
         let commit_time = commit.time();
-        let name = format!("{count:04}_{}", commit.id());
+        let name = format!("{count:04}_{:.7}", commit.id());
 
         Ok(Some(ObjectAttr {
             name,
