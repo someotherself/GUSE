@@ -37,6 +37,7 @@ guse run MOUNT data_dir -o -vv
 There are 2 ways to start new reposities.
 ### 1. Empty repositories
 ```bash
+Open a new cli after starting the app
 cd MOUNT
 mkdir my_new_repository
 ls my_new_repository
@@ -69,6 +70,7 @@ Snap001_6fd06aa
 ```
 
 ```bash
+Open a new cli after starting the app
 cd MOUNT
 mkdir github.tokio-rs.tokio.git
 ls tokio
