@@ -87,8 +87,14 @@ pub fn mkdir_git(
         }
         DirCase::Commit { oid } => {
             if oid == Oid::zero() {
-                // TODO: FIX PATH
-                let dir_path = fs.full_path_build_folder(parent)?;
+                let temp_dir = {
+                    let repo = fs.get_repo(parent.to_norm_u64())?;
+                    let mut repo = repo.lock().map_err(|_| anyhow!("Lock poisoned"))?;
+                    let oid = fs.parent_commit_build_session(parent)?;
+                    repo.get_build_state(oid)?
+                };
+                let dir_path = fs.full_path_build_folder(parent, &temp_dir)?;
+
                 std::fs::create_dir(&dir_path)?;
                 std::fs::set_permissions(dir_path, std::fs::Permissions::from_mode(0o775))?;
                 let new_ino = fs.next_inode_checked(parent.to_norm_u64())?;
@@ -108,7 +114,13 @@ pub fn mkdir_git(
                 repo.inner.find_commit(oid).is_ok()
             };
             if res {
-                let dir_path = fs.path_to_build_folder(parent)?.join(name);
+                let temp_dir = {
+                    let repo = fs.get_repo(parent.to_norm_u64())?;
+                    let mut repo = repo.lock().map_err(|_| anyhow!("Lock poisoned"))?;
+                    repo.get_build_state(oid)?
+                };
+                let dir_path = fs.path_to_build_folder(parent, &temp_dir)?.join(name);
+
                 std::fs::create_dir(&dir_path)?;
                 std::fs::set_permissions(dir_path, std::fs::Permissions::from_mode(0o775))?;
                 let new_ino = fs.next_inode_checked(parent.to_norm_u64())?;

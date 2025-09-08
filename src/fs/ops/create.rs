@@ -59,8 +59,15 @@ pub fn create_git(
                 let ino = fs.next_inode_checked(parent.to_norm_u64())?;
                 let mut attr: FileAttr = file_attr().into();
                 attr.ino = ino;
-                // TODO: FIX PATH
-                let file_path = fs.full_path_build_folder(parent)?.join(name);
+
+                let temp_dir = {
+                    let repo = fs.get_repo(parent.to_norm_u64())?;
+                    let mut repo = repo.lock().map_err(|_| anyhow!("Lock poisoned"))?;
+                    let oid = fs.parent_commit_build_session(parent)?;
+                    repo.get_build_state(oid)?
+                };
+
+                let file_path = fs.full_path_build_folder(parent, &temp_dir)?.join(name);
 
                 let file = std::fs::File::create_new(&file_path)?;
                 std::fs::set_permissions(&file_path, std::fs::Permissions::from_mode(0o775))?;
@@ -82,7 +89,13 @@ pub fn create_git(
                 let ino = fs.next_inode_checked(parent.to_norm_u64())?;
                 let mut attr: FileAttr = file_attr().into();
                 attr.ino = ino;
-                let file_path = fs.path_to_build_folder(parent)?.join(name);
+                let temp_dir = {
+                    let repo = fs.get_repo(parent.to_norm_u64())?;
+                    let mut repo = repo.lock().map_err(|_| anyhow!("Lock poisoned"))?;
+                    repo.get_build_state(oid)?
+                };
+
+                let file_path = fs.path_to_build_folder(parent, &temp_dir)?.join(name);
 
                 let file = std::fs::File::create_new(&file_path)?;
                 std::fs::set_permissions(&file_path, std::fs::Permissions::from_mode(0o775))?;

@@ -1465,19 +1465,31 @@ impl GitFs {
         conn.remove_db_record(self.clear_vdir_bit(ino))
     }
 
-    fn path_to_build_folder(&self, ino: NormalIno) -> anyhow::Result<PathBuf> {
+    pub fn parent_commit_build_session(&self, ino: NormalIno) -> anyhow::Result<Oid> {
+        let build_ino = self.get_build_ino(ino)?;
+        let mut cur_ino = ino.to_norm_u64();
+        let mut parent_ino = self.get_parent_ino(ino.to_norm_u64())?;
+        loop {
+            if parent_ino == build_ino {
+                break
+            }
+            cur_ino = parent_ino;
+            parent_ino = self.get_parent_ino(cur_ino)?;
+        }
+        self.get_oid_from_db(cur_ino)
+    }
+
+    fn path_to_build_folder(&self, ino: NormalIno, temp_dir: &Path) -> anyhow::Result<PathBuf> {
         let repo_dir = {
             let repo = self.get_repo(ino.to_norm_u64())?;
             let repo = repo.lock().map_err(|_| anyhow!("Lock poisoned"))?;
             repo.repo_dir.clone()
         };
-        let repo_dir_path = self.repos_dir.join(repo_dir);
-        tracing::info!("{}", repo_dir_path.display());
-        let build_path = repo_dir_path.join("build");
-        Ok(build_path)
+        let repo_dir_path = self.repos_dir.join(repo_dir).join("build").join(temp_dir);
+        Ok(repo_dir_path)
     }
 
-    fn full_path_build_folder(&self, ino: NormalIno) -> anyhow::Result<PathBuf> {
+    fn full_path_build_folder(&self, ino: NormalIno, temp_dir: &Path) -> anyhow::Result<PathBuf> {
         let mut components = vec![];
 
         let build_ino = self.get_build_ino(ino)?;
@@ -1488,6 +1500,7 @@ impl GitFs {
 
             let parent = self.get_parent_ino(cur)?;
             if parent == build_ino {
+                components.push(temp_dir.to_string_lossy().into());
                 break
             }
             cur = parent;
