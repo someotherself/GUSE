@@ -24,7 +24,7 @@ use crate::fs::fileattr::{
 use crate::fs::meta_db::MetaDb;
 use crate::fs::ops::readdir::{DirectoryEntry, DirectoryEntryPlus};
 use crate::fs::repo::{GitRepo, VirtualNode};
-use crate::inodes::{Inodes, VirtualIno};
+use crate::inodes::{Inodes, NormalIno, VirtualIno};
 use crate::namespec::NameSpec;
 
 pub mod fileattr;
@@ -542,10 +542,7 @@ impl GitFs {
             ObjectType::Commit => FileType::Directory,
             _ => FileType::RegularFile,
         };
-        let mut perm = 0o555;
-        if kind != FileType::Directory {
-            perm = 0o655
-        }
+        let perm = 0o775;
 
         let nlink = if kind == FileType::Directory { 2 } else { 1 };
 
@@ -636,6 +633,7 @@ impl GitFs {
     // When fetching a repo takes name as:
     // website.accoount.repo_name
     // example:github.tokio.tokio-rs.git -> https://github.com/tokio-rs/tokio.git
+    #[instrument(level = "debug", skip(self), fields(ino), ret(level = Level::DEBUG), err(Display))]
     pub fn mkdir(
         &mut self,
         parent: u64,
@@ -643,7 +641,6 @@ impl GitFs {
         create_attr: CreateFileAttr,
     ) -> anyhow::Result<FileAttr> {
         let parent: Inodes = parent.into();
-
         if self.read_only {
             bail!("Filesystem is in read only");
         }
@@ -666,8 +663,8 @@ impl GitFs {
             FsOperationContext::InsideLiveDir { ino } => {
                 ops::mkdir::mkdir_live(self, ino, name, create_attr)
             }
-            FsOperationContext::InsideGitDir { ino } => {
-                ops::mkdir::mkdir_git(self, ino, name, create_attr)
+            FsOperationContext::InsideGitDir { ino: _ } => {
+                ops::mkdir::mkdir_git(self, parent.to_norm(), name, create_attr)
             }
         }
     }

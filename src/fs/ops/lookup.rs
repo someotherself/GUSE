@@ -62,7 +62,6 @@ pub fn lookup_repo(fs: &GitFs, parent: u64, name: &str) -> anyhow::Result<Option
         };
         let mut attr: FileAttr = dir_attr().into();
         attr.ino = child_ino;
-        attr.perm = 0o555;
         attr
     };
     Ok(Some(attr))
@@ -140,7 +139,6 @@ pub fn lookup_git(fs: &GitFs, parent: NormalIno, name: &str) -> anyhow::Result<O
         fs.object_to_file_attr(child_ino, &object_attr)?
     };
     attr.ino = child_ino;
-    attr.perm = 0o555;
     Ok(Some(attr))
 }
 
@@ -155,7 +153,6 @@ pub fn lookup_vdir(fs: &GitFs, parent: VirtualIno, name: &str) -> anyhow::Result
     let Some((entry_ino, object)) = v_node.log.get(name) else {
         return Ok(None);
     };
-    let mut attr = fs.object_to_file_attr(*entry_ino, object)?;
-    attr.perm = 0o555;
+    let attr = fs.object_to_file_attr(*entry_ino, object)?;
     Ok(Some(attr))
 }

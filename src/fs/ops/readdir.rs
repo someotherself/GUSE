@@ -6,7 +6,7 @@ use git2::{FileMode, Oid};
 use crate::{
     fs::{
         FileAttr, GitFs, REPO_SHIFT,
-        fileattr::{FileType, ObjectAttr},
+        fileattr::{FileType, ObjectAttr}
     },
     inodes::{NormalIno, VirtualIno},
 };
@@ -212,20 +212,15 @@ pub fn readdir_git_dir(fs: &GitFs, ino: NormalIno) -> anyhow::Result<Vec<Directo
 
     let mut entries: Vec<DirectoryEntry> = vec![];
     for entry in git_objects {
+
         let dir_entry = match fs.exists_by_name(ino, &entry.name)? {
             Some(i) => {
-                let mut attr = fs.object_to_file_attr(i, &entry)?;
-                if attr.kind == FileType::Directory {
-                    attr.perm = 0o555;
-                }
+                let attr = fs.object_to_file_attr(i, &entry)?;
                 DirectoryEntry::new(i, entry.oid, entry.name.clone(), attr.kind, entry.filemode)
             }
             None => {
                 let entry_ino = fs.next_inode_checked(ino)?;
-                let mut attr = fs.object_to_file_attr(entry_ino, &entry)?;
-                if attr.kind == FileType::Directory {
-                    attr.perm = 0o555;
-                }
+                let attr = fs.object_to_file_attr(entry_ino, &entry)?;
                 nodes.push((ino, entry.name.clone(), attr));
                 DirectoryEntry::new(
                     entry_ino,

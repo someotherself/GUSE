@@ -1,14 +1,9 @@
 use std::os::unix::fs::FileExt;
 
 use anyhow::{anyhow, bail};
+use git2::Oid;
 
-use crate::{
-    fs::{
-        GitFs,
-        ops::readdir::{DirCase, classify_inode},
-    },
-    inodes::NormalIno,
-};
+use crate::{fs::GitFs, inodes::NormalIno};
 
 pub fn write_live(fs: &GitFs, ino: u64, offset: u64, buf: &[u8], fh: u64) -> anyhow::Result<usize> {
     let guard = fs.handles.read().map_err(|_| anyhow!("Lock poisoned."))?;

@@ -28,7 +28,7 @@ pub fn getattr_git_dir(fs: &GitFs, ino: NormalIno) -> anyhow::Result<FileAttr> {
     if target_oid == Oid::zero() {
         let mut attr: FileAttr = dir_attr().into();
         attr.ino = ino;
-        attr.perm = 0o555;
+        // attr.perm = 0o555;
         Ok(attr)
     } else {
         let repo = fs.get_repo(ino)?;
