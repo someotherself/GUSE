@@ -1,9 +1,13 @@
 use std::os::unix::fs::PermissionsExt;
 
 use anyhow::{anyhow, bail};
+use git2::Oid;
+use libc::EACCES;
 
 use crate::fs::fileattr::FileAttr;
+use crate::fs::ops::readdir::{DirCase, classify_inode};
 use crate::fs::{CreateFileAttr, GitFs, REPO_SHIFT, repo};
+use crate::inodes::NormalIno;
 
 pub fn mkdir_root(
     fs: &mut GitFs,
@@ -72,10 +76,54 @@ pub fn mkdir_live(
 }
 
 pub fn mkdir_git(
-    _fs: &GitFs,
-    _parent: u64,
-    _name: &str,
-    _create_attr: CreateFileAttr,
+    fs: &GitFs,
+    parent: NormalIno,
+    name: &str,
+    create_attr: CreateFileAttr,
 ) -> anyhow::Result<FileAttr> {
-    bail!("This directory is read only")
+    match classify_inode(fs, parent.to_norm_u64())? {
+        DirCase::Month { year: _, month: _ } => {
+            bail!(std::io::Error::from_raw_os_error(EACCES))
+        }
+        DirCase::Commit { oid } => {
+            if oid == Oid::zero() {
+                // TODO: FIX PATH
+                let dir_path = fs.full_path_build_folder(parent)?;
+                std::fs::create_dir(&dir_path)?;
+                std::fs::set_permissions(dir_path, std::fs::Permissions::from_mode(0o775))?;
+                let new_ino = fs.next_inode_checked(parent.to_norm_u64())?;
+
+                let mut attr: FileAttr = create_attr.into();
+
+                attr.ino = new_ino;
+
+                let nodes = vec![(parent.to_norm_u64(), name.into(), attr)];
+                fs.write_inodes_to_db(nodes)?;
+
+                return Ok(attr);
+            }
+            let res = {
+                let repo = fs.get_repo(parent.to_norm_u64())?;
+                let repo = repo.lock().map_err(|_| anyhow!("Lock poisoned"))?;
+                repo.inner.find_commit(oid).is_ok()
+            };
+            if res {
+                let dir_path = fs.path_to_build_folder(parent)?.join(name);
+                std::fs::create_dir(&dir_path)?;
+                std::fs::set_permissions(dir_path, std::fs::Permissions::from_mode(0o775))?;
+                let new_ino = fs.next_inode_checked(parent.to_norm_u64())?;
+
+                let mut attr: FileAttr = create_attr.into();
+
+                attr.ino = new_ino;
+
+                let nodes = vec![(parent.to_norm_u64(), name.into(), attr)];
+                fs.write_inodes_to_db(nodes)?;
+
+                Ok(attr)
+            } else {
+                bail!(std::io::Error::from_raw_os_error(EACCES))
+            }
+        }
+    }
 }
