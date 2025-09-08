@@ -6,12 +6,16 @@ use git2::{
     TreeWalkResult,
 };
 use std::{
-    collections::{BTreeMap, HashMap, HashSet},
-    sync::{Arc, Mutex},
+    collections::{BTreeMap, HashMap, HashSet, hash_map::Entry},
+    path::PathBuf,
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicBool, AtomicUsize},
+    },
 };
 
 use crate::{
-    fs::{ObjectAttr, meta_db::MetaDb},
+    fs::{ObjectAttr, builds::BuildSession, meta_db::MetaDb},
     inodes::VirtualIno,
 };
 
@@ -30,9 +34,12 @@ pub struct GitRepo {
     /// Used inodes to prevent reading from DB
     ///
     /// Gets populated from DB when loading a repo
+    /// TODO: Remove inodes of virtual files at startup
     pub res_inodes: HashSet<u64>,
     /// key: inode of the virtual directory
     pub vdir_cache: BTreeMap<VirtualIno, VirtualNode>,
+    /// Oid = Commit Oid
+    pub build_sessions: HashMap<Oid, Arc<BuildSession>>,
 }
 
 /// Insert/get a node during getattr/lookup
@@ -679,6 +686,29 @@ impl GitRepo {
 
     fn head_tree(&self) -> anyhow::Result<Tree<'_>> {
         Ok(self.head_commit()?.tree()?)
+    }
+
+    fn get_build_state(&mut self, commit_oid: Oid) -> anyhow::Result<PathBuf> {
+        match self.build_sessions.entry(commit_oid) {
+            Entry::Occupied(entry) => {
+                let session = entry.get();
+                Ok(session.folder.path().into())
+            }
+            Entry::Vacant(slot) => {
+                let folder = tempfile::Builder::new()
+                    .prefix(&format!("build_{}", &commit_oid.to_string()[..=7]))
+                    .rand_bytes(4)
+                    .tempdir()?;
+                let folder_name = folder.path().to_path_buf();
+                let session = BuildSession {
+                    folder,
+                    open_count: AtomicUsize::new(0),
+                    pinned: AtomicBool::new(false),
+                };
+                slot.insert(Arc::new(session));
+                Ok(folder_name)
+            }
+        }
     }
 }
 
