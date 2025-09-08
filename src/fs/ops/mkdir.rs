@@ -2,7 +2,7 @@ use std::os::unix::fs::PermissionsExt;
 
 use anyhow::{anyhow, bail};
 use git2::Oid;
-use libc::EACCES;
+use libc::EPERM;
 
 use crate::fs::fileattr::FileAttr;
 use crate::fs::ops::readdir::{DirCase, classify_inode};
@@ -83,7 +83,7 @@ pub fn mkdir_git(
 ) -> anyhow::Result<FileAttr> {
     match classify_inode(fs, parent.to_norm_u64())? {
         DirCase::Month { year: _, month: _ } => {
-            bail!(std::io::Error::from_raw_os_error(EACCES))
+            bail!(std::io::Error::from_raw_os_error(EPERM))
         }
         DirCase::Commit { oid } => {
             if oid == Oid::zero() {
@@ -122,7 +122,7 @@ pub fn mkdir_git(
 
                 Ok(attr)
             } else {
-                bail!(std::io::Error::from_raw_os_error(EACCES))
+                bail!(std::io::Error::from_raw_os_error(EPERM))
             }
         }
     }

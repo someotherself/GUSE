@@ -2,7 +2,7 @@ use std::{fs::File, os::unix::fs::PermissionsExt};
 
 use anyhow::{anyhow, bail};
 use git2::Oid;
-use libc::EACCES;
+use libc::EPERM;
 
 use crate::{
     fs::{
@@ -52,7 +52,7 @@ pub fn create_git(
     };
     match classify_inode(fs, parent.to_norm_u64())? {
         DirCase::Month { year: _, month: _ } => {
-            bail!(std::io::Error::from_raw_os_error(EACCES))
+            bail!(std::io::Error::from_raw_os_error(EPERM))
         }
         DirCase::Commit { oid } => {
             if oid == Oid::zero() {
@@ -95,7 +95,7 @@ pub fn create_git(
                 let fh = fs.open(ino, read, write, false)?;
                 return Ok((attr, fh));
             } else {
-                bail!("This folder is read only!")
+                bail!(std::io::Error::from_raw_os_error(EPERM))
             }
         }
     };
