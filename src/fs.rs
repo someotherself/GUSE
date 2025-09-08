@@ -1466,13 +1466,11 @@ impl GitFs {
     }
 
     fn path_to_build_folder(&self, ino: NormalIno) -> anyhow::Result<PathBuf> {
-        tracing::info!("Calling build folder path - 1");
         let repo_dir = {
             let repo = self.get_repo(ino.to_norm_u64())?;
             let repo = repo.lock().map_err(|_| anyhow!("Lock poisoned"))?;
             repo.repo_dir.clone()
         };
-        tracing::info!("Calling build folder path - 2");
         let repo_dir_path = self.repos_dir.join(repo_dir);
         tracing::info!("{}", repo_dir_path.display());
         let build_path = repo_dir_path.join("build");
