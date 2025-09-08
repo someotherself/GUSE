@@ -9,7 +9,7 @@ pub enum Inodes {
 }
 
 #[derive(Debug, Clone, Copy, Eq, Hash, PartialEq)]
-pub struct NormalIno(pub u64);
+pub struct NormalIno(u64);
 
 impl NormalIno {
     pub fn to_virt(&self) -> VirtualIno {
@@ -26,7 +26,7 @@ impl NormalIno {
 }
 
 #[derive(Debug, Clone, Copy, Eq, Hash, PartialEq)]
-pub struct VirtualIno(pub u64);
+pub struct VirtualIno(u64);
 
 impl VirtualIno {
     pub fn to_norm(self) -> NormalIno {
