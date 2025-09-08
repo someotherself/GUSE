@@ -1249,6 +1249,25 @@ impl GitFs {
         Ok((oid, self.get_name_from_db(cur)?))
     }
 
+    fn is_in_build(&self, ino: NormalIno) -> anyhow::Result<bool> {
+        let build_ino = self.get_build_ino(ino)?;
+        if build_ino == ino.to_norm_u64() {
+            return Ok(true);
+        }
+        let mut target_ino = ino.to_norm_u64();
+
+        loop {
+            let parent = match self.get_parent_ino(target_ino) {
+                Ok(p) => p,
+                Err(_) => return Ok(false),
+            };
+            if parent == build_ino {
+                return Ok(true);
+            }
+            target_ino = parent;
+        }
+    }
+
     fn is_in_live(&self, ino: u64) -> bool {
         let live_ino = self.get_live_ino(ino);
         let build_ino = live_ino + 1;
