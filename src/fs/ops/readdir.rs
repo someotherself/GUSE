@@ -6,7 +6,7 @@ use git2::{FileMode, Oid};
 use crate::{
     fs::{
         FileAttr, GitFs, REPO_SHIFT,
-        fileattr::{FileType, ObjectAttr}
+        fileattr::{FileType, ObjectAttr},
     },
     inodes::{NormalIno, VirtualIno},
 };
@@ -212,7 +212,6 @@ pub fn readdir_git_dir(fs: &GitFs, ino: NormalIno) -> anyhow::Result<Vec<Directo
 
     let mut entries: Vec<DirectoryEntry> = vec![];
     for entry in git_objects {
-
         let dir_entry = match fs.exists_by_name(ino, &entry.name)? {
             Some(i) => {
                 let attr = fs.object_to_file_attr(i, &entry)?;
