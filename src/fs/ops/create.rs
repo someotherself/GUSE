@@ -1,6 +1,8 @@
 use std::{fs::File, os::unix::fs::PermissionsExt};
 
 use anyhow::{anyhow, bail};
+use git2::Oid;
+use libc::EACCES;
 
 use crate::{
     fs::{
@@ -41,17 +43,60 @@ pub fn create_live(
 pub fn create_git(
     fs: &GitFs,
     parent: NormalIno,
-    _name: &str,
-    _read: bool,
-    _write: bool,
+    name: &str,
+    read: bool,
+    write: bool,
 ) -> anyhow::Result<(FileAttr, u64)> {
-    let res = classify_inode(fs, parent.to_norm_u64())?;
-    match res {
+    if !read && !write {
+        bail!("read and write cannot be false at the same time")
+    };
+    match classify_inode(fs, parent.to_norm_u64())? {
         DirCase::Month { year: _, month: _ } => {
-            bail!("This folder is read only!")
+            bail!(std::io::Error::from_raw_os_error(EACCES))
         }
-        DirCase::Commit { oid: _ } => {
-            todo!()
+        DirCase::Commit { oid } => {
+            if oid == Oid::zero() {
+                let ino = fs.next_inode_checked(parent.to_norm_u64())?;
+                let mut attr: FileAttr = file_attr().into();
+                attr.ino = ino;
+                // TODO: FIX PATH
+                let file_path = fs.full_path_build_folder(parent)?.join(name);
+
+                let file = std::fs::File::create_new(&file_path)?;
+                std::fs::set_permissions(&file_path, std::fs::Permissions::from_mode(0o775))?;
+                file.sync_all()?;
+                File::open(file_path.parent().ok_or_else(|| anyhow!("No parent"))?)?.sync_all()?;
+
+                let nodes = vec![(parent.to_norm_u64(), name.into(), attr)];
+                fs.write_inodes_to_db(nodes)?;
+
+                let fh = fs.open(ino, read, write, false)?;
+                return Ok((attr, fh));
+            }
+            let res = {
+                let repo = fs.get_repo(parent.to_norm_u64())?;
+                let repo = repo.lock().map_err(|_| anyhow!("Lock poisoned"))?;
+                repo.inner.find_commit(oid).is_ok()
+            };
+            if res {
+                let ino = fs.next_inode_checked(parent.to_norm_u64())?;
+                let mut attr: FileAttr = file_attr().into();
+                attr.ino = ino;
+                let file_path = fs.path_to_build_folder(parent)?.join(name);
+
+                let file = std::fs::File::create_new(&file_path)?;
+                std::fs::set_permissions(&file_path, std::fs::Permissions::from_mode(0o775))?;
+                file.sync_all()?;
+                File::open(file_path.parent().ok_or_else(|| anyhow!("No parent"))?)?.sync_all()?;
+
+                let nodes = vec![(parent.to_norm_u64(), name.into(), attr)];
+                fs.write_inodes_to_db(nodes)?;
+
+                let fh = fs.open(ino, read, write, false)?;
+                return Ok((attr, fh));
+            } else {
+                bail!("This folder is read only!")
+            }
         }
-    }
+    };
 }
