@@ -27,6 +27,7 @@ use crate::fs::repo::{GitRepo, VirtualNode};
 use crate::inodes::{Inodes, NormalIno, VirtualIno};
 use crate::namespec::NameSpec;
 
+pub mod builds;
 pub mod fileattr;
 pub mod meta_db;
 pub mod ops;
@@ -254,6 +255,7 @@ impl GitFs {
             snapshots: BTreeMap::new(),
             res_inodes,
             vdir_cache: BTreeMap::new(),
+            build_sessions: HashMap::new(),
         };
 
         {
@@ -325,6 +327,7 @@ impl GitFs {
             snapshots: BTreeMap::new(),
             res_inodes,
             vdir_cache: BTreeMap::new(),
+            build_sessions: HashMap::new(),
         };
 
         let repo_rc = Arc::from(Mutex::from(git_repo));
@@ -359,6 +362,7 @@ impl GitFs {
             snapshots: BTreeMap::new(),
             res_inodes: HashSet::new(),
             vdir_cache: BTreeMap::new(),
+            build_sessions: HashMap::new(),
         })
     }
 
