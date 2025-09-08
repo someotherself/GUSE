@@ -1358,6 +1358,11 @@ impl GitFs {
         repo_ino + 1
     }
 
+    fn get_build_ino(&self, ino: NormalIno) -> anyhow::Result<u64> {
+        let repo_ino = self.get_repo_ino(ino.to_norm_u64())?;
+        self.get_ino_from_db(repo_ino, "build")
+    }
+
     fn exists_by_name(&self, parent: u64, name: &str) -> anyhow::Result<Option<u64>> {
         let conn_arc = {
             let repo = &self.get_repo(parent)?;
