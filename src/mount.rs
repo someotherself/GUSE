@@ -261,7 +261,7 @@ impl fuser::Filesystem for GitFsAdapter {
             Ok(attr) => reply.entry(&TTL, &attr.into(), 0),
             Err(e) => {
                 error!(?e);
-                reply.error(ENOENT)
+                reply.error(errno_from_anyhow(&e))
             }
         }
     }
@@ -734,7 +734,7 @@ impl fuser::Filesystem for GitFsAdapter {
         let (attr, fh) = match fs.create(parent, name, read, write) {
             Ok((a, h)) => (a, h),
             Err(e) => {
-                return reply.error(libc::ENOENT);
+                return reply.error(errno_from_anyhow(&e));
             }
         };
 
