@@ -1480,9 +1480,24 @@ impl GitFs {
     }
 
     fn full_path_build_folder(&self, ino: NormalIno) -> anyhow::Result<PathBuf> {
-        let build_path = self.path_to_build_folder(ino)?;
-        let db_path = self.build_full_path(ino.to_norm_u64())?;
-        Ok(build_path.join(db_path))
+        let mut components = vec![];
+
+        let build_ino = self.get_build_ino(ino)?;
+        let mut cur = ino.to_norm_u64();
+        loop {
+            let parent_name = self.get_name_from_db(cur)?;
+            components.push(parent_name);
+
+            let parent = self.get_parent_ino(cur)?;
+            if parent == build_ino {
+                break
+            }
+            cur = parent;
+        }
+
+        components.reverse();
+
+        Ok(components.iter().collect::<PathBuf>())
     }
 
     // TODO: Change to check live_ino instead of live name
