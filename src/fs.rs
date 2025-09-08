@@ -1459,6 +1459,27 @@ impl GitFs {
         conn.remove_db_record(self.clear_vdir_bit(ino))
     }
 
+    fn path_to_build_folder(&self, ino: NormalIno) -> anyhow::Result<PathBuf> {
+        tracing::info!("Calling build folder path - 1");
+        let repo_dir = {
+            let repo = self.get_repo(ino.to_norm_u64())?;
+            let repo = repo.lock().map_err(|_| anyhow!("Lock poisoned"))?;
+            repo.repo_dir.clone()
+        };
+        tracing::info!("Calling build folder path - 2");
+        let repo_dir_path = self.repos_dir.join(repo_dir);
+        tracing::info!("{}", repo_dir_path.display());
+        let build_path = repo_dir_path.join("build");
+        Ok(build_path)
+    }
+
+    fn full_path_build_folder(&self, ino: NormalIno) -> anyhow::Result<PathBuf> {
+        let build_path = self.path_to_build_folder(ino)?;
+        let db_path = self.build_full_path(ino.to_norm_u64())?;
+        Ok(build_path.join(db_path))
+    }
+
+    // TODO: Change to check live_ino instead of live name
     fn build_full_path(&self, ino: u64) -> anyhow::Result<PathBuf> {
         let ino = self.clear_vdir_bit(ino);
         let repo_ino = {
