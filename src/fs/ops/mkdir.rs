@@ -4,6 +4,7 @@ use anyhow::{anyhow, bail};
 use git2::Oid;
 use libc::EPERM;
 
+use crate::fs::builds::BuildOperationCtx;
 use crate::fs::fileattr::FileAttr;
 use crate::fs::ops::readdir::{DirCase, classify_inode};
 use crate::fs::{CreateFileAttr, GitFs, REPO_SHIFT, repo};
@@ -81,63 +82,21 @@ pub fn mkdir_git(
     name: &str,
     create_attr: CreateFileAttr,
 ) -> anyhow::Result<FileAttr> {
-    match classify_inode(fs, parent.to_norm_u64())? {
-        DirCase::Month { year: _, month: _ } => {
-            bail!(std::io::Error::from_raw_os_error(EPERM))
-        }
-        DirCase::Commit { oid } => {
-            if oid == Oid::zero() {
-                let temp_dir = {
-                    let build_folder = fs.get_path_to_build_folder(parent)?;
-                    let repo = fs.get_repo(parent.to_norm_u64())?;
-                    let mut repo = repo.lock().map_err(|_| anyhow!("Lock poisoned"))?;
-                    let oid = fs.parent_commit_build_session(parent)?;
-                    repo.get_build_state(oid, &build_folder)?
-                };
-                let dir_path = fs.full_path_build_folder(parent, &temp_dir)?;
+    let Some(ctx) = BuildOperationCtx::new(fs, parent)? else {
+        bail!(std::io::Error::from_raw_os_error(EPERM))
+    };
+    let dir_path = ctx.child_in_temp(name);
 
-                std::fs::create_dir(&dir_path)?;
-                std::fs::set_permissions(dir_path, std::fs::Permissions::from_mode(0o775))?;
-                let new_ino = fs.next_inode_checked(parent.to_norm_u64())?;
+    std::fs::create_dir(&dir_path)?;
+    std::fs::set_permissions(dir_path, std::fs::Permissions::from_mode(0o775))?;
+    let new_ino = fs.next_inode_checked(parent.to_norm_u64())?;
 
-                let mut attr: FileAttr = create_attr.into();
+    let mut attr: FileAttr = create_attr.into();
 
-                attr.ino = new_ino;
+    attr.ino = new_ino;
 
-                let nodes = vec![(parent.to_norm_u64(), name.into(), attr)];
-                fs.write_inodes_to_db(nodes)?;
+    let nodes = vec![(parent.to_norm_u64(), name.into(), attr)];
+    fs.write_inodes_to_db(nodes)?;
 
-                return Ok(attr);
-            }
-            let res = {
-                let repo = fs.get_repo(parent.to_norm_u64())?;
-                let repo = repo.lock().map_err(|_| anyhow!("Lock poisoned"))?;
-                repo.inner.find_commit(oid).is_ok()
-            };
-            if res {
-                let build_folder = fs.get_path_to_build_folder(parent)?;
-                let temp_dir = {
-                    let repo = fs.get_repo(parent.to_norm_u64())?;
-                    let mut repo = repo.lock().map_err(|_| anyhow!("Lock poisoned"))?;
-                    repo.get_build_state(oid, &build_folder)?
-                };
-                let dir_path = build_folder.join(temp_dir).join(name);
-
-                std::fs::create_dir(&dir_path)?;
-                std::fs::set_permissions(dir_path, std::fs::Permissions::from_mode(0o775))?;
-                let new_ino = fs.next_inode_checked(parent.to_norm_u64())?;
-
-                let mut attr: FileAttr = create_attr.into();
-
-                attr.ino = new_ino;
-
-                let nodes = vec![(parent.to_norm_u64(), name.into(), attr)];
-                fs.write_inodes_to_db(nodes)?;
-
-                Ok(attr)
-            } else {
-                bail!(std::io::Error::from_raw_os_error(EPERM))
-            }
-        }
-    }
+    Ok(attr)
 }
