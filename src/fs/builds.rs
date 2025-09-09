@@ -1,10 +1,19 @@
-use std::{path::{Path, PathBuf}, sync::atomic::{AtomicBool, AtomicUsize}};
+use std::{
+    path::{Path, PathBuf},
+    sync::atomic::{AtomicBool, AtomicUsize},
+};
 
 use anyhow::anyhow;
 use git2::Oid;
 use tempfile::TempDir;
 
-use crate::{fs::{ops::readdir::{classify_inode, DirCase}, GitFs}, inodes::NormalIno};
+use crate::{
+    fs::{
+        GitFs,
+        ops::readdir::{DirCase, classify_inode},
+    },
+    inodes::NormalIno,
+};
 
 pub struct BuildSession {
     pub folder: TempDir,
@@ -14,9 +23,10 @@ pub struct BuildSession {
 
 enum TargetCommit {
     BuildHead(Oid),
-    Commit(Oid)
+    Commit(Oid),
 }
 
+/// Used by readdir, create and mkdir
 pub struct BuildOperationCtx {
     ino: NormalIno,
     target: TargetCommit,
@@ -28,8 +38,8 @@ impl BuildOperationCtx {
     pub fn new(fs: &GitFs, ino: NormalIno) -> anyhow::Result<Option<Self>> {
         let case = classify_inode(fs, ino.to_norm_u64())?;
 
-        let  DirCase::Commit { oid }  = case else {
-            return Ok(None)
+        let DirCase::Commit { oid } = case else {
+            return Ok(None);
         };
 
         let target = if oid == Oid::zero() {
@@ -42,7 +52,7 @@ impl BuildOperationCtx {
                 repo.inner.find_commit(oid).is_ok()
             };
             if !exists {
-                return Ok(None)
+                return Ok(None);
             }
             TargetCommit::Commit(oid)
         };
@@ -51,7 +61,7 @@ impl BuildOperationCtx {
 
         let temp_dir = {
             let oid = match target {
-                TargetCommit::BuildHead(o) | TargetCommit::Commit(o) => o
+                TargetCommit::BuildHead(o) | TargetCommit::Commit(o) => o,
             };
             let repo = fs.get_repo(ino.to_norm_u64())?;
             let mut repo = repo.lock().map_err(|_| anyhow!("Lock poisoned"))?;
@@ -62,7 +72,7 @@ impl BuildOperationCtx {
             ino,
             target,
             build_root,
-            temp_dir
+            temp_dir,
         }))
     }
 
