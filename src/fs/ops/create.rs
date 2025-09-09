@@ -65,5 +65,5 @@ pub fn create_git(
     fs.write_inodes_to_db(nodes)?;
 
     let fh = fs.open(ino, read, write, false)?;
-    return Ok((attr, fh));
+    Ok((attr, fh))
 }
