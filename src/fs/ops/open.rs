@@ -7,7 +7,7 @@ use std::{
 
 use anyhow::{anyhow, bail};
 use git2::{Oid, Time};
-use tracing::{Level, instrument};
+use tracing::{info, instrument, Level};
 
 use crate::{
     fs::{
@@ -18,7 +18,7 @@ use crate::{
     inodes::{Inodes, NormalIno, VirtualIno},
 };
 
-#[instrument(level = "debug", skip(fs), fields(ino), ret(level = Level::DEBUG), err(Display))]
+#[instrument(level = "debug", skip(fs), fields(ino = %ino), ret(level = Level::DEBUG), err(Display))]
 pub fn open_live(
     fs: &GitFs,
     ino: NormalIno,
@@ -47,14 +47,54 @@ pub fn open_live(
     Ok(fh)
 }
 
-#[instrument(level = "debug", skip(fs), fields(ino), ret(level = Level::DEBUG), err(Display))]
-pub fn open_git(fs: &GitFs, ino: NormalIno, read: bool, write: bool) -> anyhow::Result<u64> {
-    let ino = u64::from(ino);
-    let oid = fs.get_oid_from_db(ino)?;
-    open_blob(fs, oid, ino, read)
+#[instrument(level = "debug", skip(fs), fields(ino = %ino), ret(level = Level::DEBUG), err(Display))]
+pub fn open_git(
+    fs: &GitFs,
+    ino: NormalIno,
+    read: bool,
+    write: bool,
+    truncate: bool,
+) -> anyhow::Result<u64> {
+    let oid = fs.get_oid_from_db(ino.to_norm_u64())?;
+    if oid == Oid::zero() {
+        tracing::info!("Opening ino {ino}");
+        let parent_oid = fs.parent_commit_build_session(ino)?;
+        let build_root = fs.get_path_to_build_folder(ino)?;
+
+        let temp_dir = {
+            let repo = fs.get_repo(ino.to_norm_u64())?;
+            let mut repo = repo.lock().map_err(|_| anyhow!("Lock poisoned"))?;
+            repo.get_build_state(parent_oid, &build_root)?
+        };
+        info!("session path {}", temp_dir.display());
+        // let path = fs.full_path_build_folder(ino, &temp_dir)?;
+
+        let name = fs.get_name_from_db(ino.to_norm_u64())?;
+        let path = temp_dir.join(name);
+        let file = OpenOptions::new()
+            .read(read)
+            .write(write)
+            .truncate(truncate)
+            .open(path)?;
+        let fh = fs.next_file_handle();
+        let handle = Handle {
+            ino: ino.to_norm_u64(),
+            file: SourceTypes::RealFile(file),
+            read,
+            write,
+        };
+        tracing::info!("5");
+        {
+            let mut guard = fs.handles.write().map_err(|_| anyhow!("Lock poisoned"))?;
+            guard.insert(fh, handle);
+        }
+        tracing::info!("6");
+        return Ok(fh);
+    }
+    open_blob(fs, oid, ino.to_norm_u64(), read)
 }
 
-#[instrument(level = "debug", skip(fs), fields(ino), ret(level = Level::DEBUG), err(Display))]
+#[instrument(level = "debug", skip(fs), fields(ino = %ino), ret(level = Level::DEBUG), err(Display))]
 pub fn open_vfile(fs: &GitFs, ino: Inodes, read: bool, write: bool) -> anyhow::Result<u64> {
     let res = classify_inode(fs, ino.to_u64_v())?;
     match res {
@@ -178,7 +218,7 @@ pub fn create_vfile_entry(fs: &GitFs, ino: VirtualIno) -> anyhow::Result<u64> {
     Ok(len)
 }
 
-#[instrument(level = "debug", skip(fs), fields(ino), ret(level = Level::DEBUG), err(Display))]
+#[instrument(level = "debug", skip(fs), fields(ino = %ino), ret(level = Level::DEBUG), err(Display))]
 pub fn open_vdir(
     fs: &GitFs,
     ino: NormalIno,
@@ -205,7 +245,7 @@ pub fn open_vdir(
     open_blob(fs, oid, ino, read)
 }
 
-#[instrument(level = "debug", skip(fs), fields(ino), ret(level = Level::DEBUG), err(Display))]
+#[instrument(level = "debug", skip(fs), fields(ino = %ino), ret(level = Level::DEBUG), err(Display))]
 fn open_blob(fs: &GitFs, oid: Oid, ino: u64, read: bool) -> anyhow::Result<u64> {
     let buf = {
         let repo = fs.get_repo(ino)?;
