@@ -980,20 +980,6 @@ impl GitFs {
         }
     }
 
-    pub fn name_selection(&self, attr: FileAttr, spec: NameSpec) -> anyhow::Result<FileAttr> {
-        if attr.oid == Oid::zero() && attr.kind != FileType::RegularFile {
-            return Ok(attr);
-        }
-
-        match spec.line {
-            Some(Some(_)) => {
-                todo!()
-            }
-            Some(None) => self.prepare_virtual_folder(attr),
-            None => Ok(attr),
-        }
-    }
-
     pub fn prepare_virtual_file(&self, ino: VirtualIno) -> anyhow::Result<FileAttr> {
         if let Some(size) = {
             let guard = self
