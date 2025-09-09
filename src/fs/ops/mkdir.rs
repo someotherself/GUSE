@@ -1,12 +1,10 @@
 use std::os::unix::fs::PermissionsExt;
 
 use anyhow::{anyhow, bail};
-use git2::Oid;
 use libc::EPERM;
 
 use crate::fs::builds::BuildOperationCtx;
 use crate::fs::fileattr::FileAttr;
-use crate::fs::ops::readdir::{DirCase, classify_inode};
 use crate::fs::{CreateFileAttr, GitFs, REPO_SHIFT, repo};
 use crate::inodes::NormalIno;
 

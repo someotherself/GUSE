@@ -5,7 +5,9 @@ use libc::EPERM;
 
 use crate::{
     fs::{
-        builds::BuildOperationCtx, fileattr::{file_attr, FileAttr}, GitFs
+        GitFs,
+        builds::BuildOperationCtx,
+        fileattr::{FileAttr, file_attr},
     },
     inodes::NormalIno,
 };
