@@ -1538,7 +1538,7 @@ impl GitFs {
         let mut parent_ino = self.get_parent_ino(ino.to_norm_u64())?;
         loop {
             if parent_ino == build_ino {
-                break
+                break;
             }
             cur_ino = parent_ino;
             parent_ino = self.get_parent_ino(cur_ino)?;
