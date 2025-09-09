@@ -1,4 +1,4 @@
-use std::{path::PathBuf, sync::atomic::{AtomicBool, AtomicUsize}};
+use std::{path::{Path, PathBuf}, sync::atomic::{AtomicBool, AtomicUsize}};
 
 use anyhow::anyhow;
 use git2::Oid;
@@ -25,7 +25,7 @@ pub struct BuildOperationCtx {
 }
 
 impl BuildOperationCtx {
-    fn new(fs: &GitFs, ino: NormalIno) -> anyhow::Result<Option<Self>> {
+    pub fn new(fs: &GitFs, ino: NormalIno) -> anyhow::Result<Option<Self>> {
         let case = classify_inode(fs, ino.to_norm_u64())?;
 
         let  DirCase::Commit { oid }  = case else {
@@ -64,5 +64,13 @@ impl BuildOperationCtx {
             build_root,
             temp_dir
         }))
+    }
+
+    pub fn temp_dir_path(&self) -> PathBuf {
+        self.build_root.join(&self.temp_dir)
+    }
+
+    pub fn child_in_temp<P: AsRef<Path>>(&self, p: P) -> PathBuf {
+        self.temp_dir_path().join(p)
     }
 }
