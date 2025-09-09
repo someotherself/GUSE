@@ -43,8 +43,10 @@ pub struct DirectoryEntryPlus {
 
 #[derive(Debug)]
 pub enum DirCase {
+    /// The month folders
     Month { year: i32, month: u32 },
-    // Day { year: i32, month: u32, day: u32 },
+    /// Everything else
+    /// Can be a commit, tree or Oid::zero()
     Commit { oid: Oid },
 }
 
