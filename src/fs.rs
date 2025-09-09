@@ -405,7 +405,7 @@ impl GitFs {
         Ok(MetaDb { conn })
     }
 
-    #[instrument(level = "debug", skip(self), fields(ino), ret(level = Level::DEBUG), err(Display))]
+    #[instrument(level = "debug", skip(self), fields(ino = %ino), ret(level = Level::DEBUG), err(Display))]
     pub fn open(&self, ino: u64, read: bool, write: bool, truncate: bool) -> anyhow::Result<u64> {
         let ino: Inodes = ino.into();
 
@@ -482,10 +482,7 @@ impl GitFs {
     pub fn read(&self, ino: u64, offset: u64, buf: &mut [u8], fh: u64) -> anyhow::Result<usize> {
         let ino: Inodes = ino.into();
         let ctx = FsOperationContext::get_operation(self, ino);
-        // let parent = self.get_parent_ino(ino)?;
-        // let if self.is_file(parent) {
 
-        // }
         match ctx? {
             FsOperationContext::Root => bail!("Not allowed"),
             FsOperationContext::RepoDir { ino: _ } => bail!("Not allowed"),
@@ -513,7 +510,7 @@ impl GitFs {
         }
     }
 
-    #[instrument(level = "debug", skip(self), fields(ino), ret(level = Level::DEBUG), err(Display))]
+    #[instrument(level = "debug", skip(self), ret(level = Level::DEBUG), err(Display))]
     pub fn release(&self, fh: u64) -> anyhow::Result<bool> {
         let ino = {
             let mut guard = self.handles.write().map_err(|_| anyhow!("Lock poisoned"))?;
@@ -577,7 +574,7 @@ impl GitFs {
         })
     }
 
-    #[instrument(level = "debug", skip(self), fields(ino), ret(level = Level::DEBUG), err(Display))]
+    #[instrument(level = "debug", skip(self), fields(target = %target), ret(level = Level::DEBUG), err(Display))]
     pub fn getattr(&self, target: u64) -> anyhow::Result<FileAttr> {
         let perms = 0o775;
         let st_mode = libc::S_IFDIR | perms;
@@ -637,7 +634,7 @@ impl GitFs {
     // When fetching a repo takes name as:
     // website.accoount.repo_name
     // example:github.tokio.tokio-rs.git -> https://github.com/tokio-rs/tokio.git
-    #[instrument(level = "debug", skip(self), fields(ino), ret(level = Level::DEBUG), err(Display))]
+    #[instrument(level = "debug", skip(self), fields(parent = %parent), ret(level = Level::DEBUG), err(Display))]
     pub fn mkdir(
         &mut self,
         parent: u64,
@@ -1064,6 +1061,7 @@ impl GitFs {
 // gitfs_path_builders
 impl GitFs {
     /// Build path to a folder or file that exists in the live folder
+    #[instrument(level = "debug", skip(self), fields(parent = %parent, parent = %parent), ret(level = Level::DEBUG), err(Display))]
     fn get_path_by_name_in_live(&self, parent: u64, name: &str) -> anyhow::Result<PathBuf> {
         let parent = self.clear_vdir_bit(parent);
         let repo_name = {
@@ -1396,6 +1394,9 @@ impl GitFs {
     }
 
     pub fn get_parent_ino(&self, ino: u64) -> anyhow::Result<u64> {
+        if ino == ROOT_INO {
+            bail!("Target is ROOT_INO");
+        }
         let conn_arc = {
             let repo = &self.get_repo(ino)?;
             let repo = repo.lock().map_err(|_| anyhow!("Lock poisoned"))?;

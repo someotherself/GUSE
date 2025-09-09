@@ -1,7 +1,6 @@
 use std::os::unix::fs::FileExt;
 
 use anyhow::{anyhow, bail};
-use git2::Oid;
 
 use crate::{fs::GitFs, inodes::NormalIno};
 

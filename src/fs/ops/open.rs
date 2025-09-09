@@ -7,7 +7,7 @@ use std::{
 
 use anyhow::{anyhow, bail};
 use git2::{Oid, Time};
-use tracing::{info, instrument, Level};
+use tracing::{Level, info, instrument};
 
 use crate::{
     fs::{

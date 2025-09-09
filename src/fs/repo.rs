@@ -13,6 +13,7 @@ use std::{
         atomic::{AtomicBool, AtomicUsize},
     },
 };
+use tracing::{Level, instrument};
 
 use crate::{
     fs::{ObjectAttr, builds::BuildSession, meta_db::MetaDb},
@@ -688,6 +689,7 @@ impl GitRepo {
         Ok(self.head_commit()?.tree()?)
     }
 
+    #[instrument(level = "debug", skip(self), fields(commit_oid = %commit_oid), ret(level = Level::DEBUG), err(Display))]
     pub fn get_build_state(
         &mut self,
         commit_oid: Oid,

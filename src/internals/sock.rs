@@ -68,7 +68,7 @@ pub fn start_control_server(
     Ok(())
 }
 
-#[instrument(level = "debug", skip(inner), fields(ino), ret(level = Level::DEBUG), err(Display))]
+#[instrument(level = "debug", skip(inner), ret(level = Level::DEBUG), err(Display))]
 #[allow(unused_variables)]
 fn handle_client(
     inner: Arc<GitFsAdapter>,
@@ -132,7 +132,7 @@ fn bind_socket(socket_path: &Path) -> anyhow::Result<UnixListener> {
     Ok(listener)
 }
 
-#[instrument(level = "debug", fields(ino), ret(level = Level::DEBUG), err(Display))]
+#[instrument(level = "debug", ret(level = Level::DEBUG), err(Display))]
 pub fn send_req(sock: &Path, req: &ControlReq) -> anyhow::Result<ControlRes> {
     let mut s = UnixStream::connect(sock).map_err(|_| anyhow!("Daemon not running!"))?;
     let data = serde_json::to_vec(req)?;

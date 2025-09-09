@@ -228,7 +228,6 @@ pub fn lookup_git(fs: &GitFs, parent: NormalIno, name: &str) -> anyhow::Result<O
     Ok(Some(attr))
 }
 
-
 #[instrument(level = "debug", skip(fs), fields(parent = %parent), err(Display))]
 pub fn lookup_vdir(fs: &GitFs, parent: VirtualIno, name: &str) -> anyhow::Result<Option<FileAttr>> {
     let repo = fs.get_repo(u64::from(parent))?;
