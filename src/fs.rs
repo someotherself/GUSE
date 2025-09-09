@@ -62,7 +62,7 @@ impl FsOperationContext {
         } else if ino & mask == 0 && fs.repos_list.contains_key(&repo_dir) {
             // If the least significant 48 bits are 0
             Ok(FsOperationContext::RepoDir { ino })
-        } else if fs.is_in_live_or_build(ino) {
+        } else if fs.is_in_live(ino) {
             Ok(FsOperationContext::InsideLiveDir { ino })
         } else {
             Ok(FsOperationContext::InsideGitDir { ino })
@@ -1316,22 +1316,29 @@ impl GitFs {
         }
     }
 
-    fn is_in_live_or_build(&self, ino: u64) -> bool {
+    fn is_in_live(&self, ino: u64) -> bool {
         let live_ino = self.get_live_ino(ino);
-        let build_ino = live_ino + 1;
-        if live_ino == ino || build_ino == ino || self.is_virtual(ino) {
+        if live_ino == ino || self.is_virtual(ino) {
             return true;
         }
         let mut target_ino = ino;
 
         loop {
+            if target_ino == ROOT_INO {
+                return false
+            }
             let parent = match self.get_parent_ino(target_ino) {
                 Ok(p) => p,
                 Err(_) => return false,
             };
-            if parent == live_ino || parent == build_ino {
+            if parent == live_ino {
                 return true;
             }
+
+            if parent == target_ino {
+                return false;
+            }
+
             target_ino = parent;
         }
     }
