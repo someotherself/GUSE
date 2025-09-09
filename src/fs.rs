@@ -458,7 +458,7 @@ impl GitFs {
                     FileType::Directory => match target_kind {
                         // and target is a file, open the blob as normal
                         FileType::RegularFile => {
-                            ops::open::open_git(self, ino.to_norm(), read, write)
+                            ops::open::open_git(self, ino.to_norm(), read, write, truncate)
                         }
                         // and target is a directory, open as vfile (to create commit summary etc)
                         FileType::Directory => ops::open::open_vfile(self, ino, read, write),
