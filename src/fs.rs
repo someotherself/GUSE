@@ -1103,10 +1103,12 @@ impl GitFs {
         Ok(())
     }
 
+    // TODO: Phase out
     pub fn set_vdir_bit(&self, ino: u64) -> u64 {
         ino | VDIR_BIT
     }
 
+    // TODO: Phase out
     pub fn clear_vdir_bit(&self, ino: u64) -> u64 {
         ino & !VDIR_BIT
     }
