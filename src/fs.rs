@@ -1088,7 +1088,7 @@ impl GitFs {
         Ok(PathBuf::from(&self.repos_dir).join(db_path).join(name))
     }
 
-    fn path_to_build_folder(&self, ino: NormalIno) -> anyhow::Result<PathBuf> {
+    fn get_path_to_build_folder(&self, ino: NormalIno) -> anyhow::Result<PathBuf> {
         let repo_dir = {
             let repo = self.get_repo(ino.to_norm_u64())?;
             let repo = repo.lock().map_err(|_| anyhow!("Lock poisoned"))?;

@@ -1,4 +1,4 @@
-use std::{collections::btree_map::Entry, ffi::OsString};
+use std::{collections::btree_map::Entry, ffi::OsString, path::Path};
 
 use anyhow::{anyhow, bail};
 use git2::{FileMode, Oid};

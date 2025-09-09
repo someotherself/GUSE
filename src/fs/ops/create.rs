@@ -56,7 +56,7 @@ pub fn create_git(
         }
         DirCase::Commit { oid } => {
             if oid == Oid::zero() {
-                let build_folder = fs.path_to_build_folder(parent)?;
+                let build_folder = fs.get_path_to_build_folder(parent)?;
                 let ino = fs.next_inode_checked(parent.to_norm_u64())?;
                 let mut attr: FileAttr = file_attr().into();
                 attr.ino = ino;
@@ -87,16 +87,17 @@ pub fn create_git(
                 repo.inner.find_commit(oid).is_ok()
             };
             if res {
+                let build_folder = fs.get_path_to_build_folder(parent)?;
                 let ino = fs.next_inode_checked(parent.to_norm_u64())?;
                 let mut attr: FileAttr = file_attr().into();
                 attr.ino = ino;
                 let temp_dir = {
                     let repo = fs.get_repo(parent.to_norm_u64())?;
                     let mut repo = repo.lock().map_err(|_| anyhow!("Lock poisoned"))?;
-                    repo.get_build_state(oid)?
+                    repo.get_build_state(oid, &build_folder)?
                 };
 
-                let file_path = fs.path_to_build_folder(parent, &temp_dir)?.join(name);
+                let file_path = build_folder.join(temp_dir).join(name);
 
                 let file = std::fs::File::create_new(&file_path)?;
                 std::fs::set_permissions(&file_path, std::fs::Permissions::from_mode(0o775))?;
