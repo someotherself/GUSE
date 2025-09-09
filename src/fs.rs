@@ -1064,7 +1064,7 @@ impl GitFs {
 // gitfs_path_builders
 impl GitFs {
     /// Build path to a folder or file that exists in the live folder
-    fn get_path_in_live(&self, parent: u64, name: &str) -> anyhow::Result<PathBuf> {
+    fn get_path_by_name_in_live(&self, parent: u64, name: &str) -> anyhow::Result<PathBuf> {
         let parent = self.clear_vdir_bit(parent);
         let repo_name = {
             let repo = &self.get_repo(parent)?;
@@ -1121,6 +1121,7 @@ impl GitFs {
     }
 
     // TODO: Change to check live_ino instead of live name
+    // As "live" does not exist on disk, it will remove it from the path
     fn build_full_path(&self, ino: u64) -> anyhow::Result<PathBuf> {
         let ino = self.clear_vdir_bit(ino);
         let repo_ino = {
@@ -1135,8 +1136,10 @@ impl GitFs {
         let db_path = &self.get_path_from_db(ino)?;
         let filename = db_path.file_name().ok_or_else(|| anyhow!("No filename"))?;
         if filename == OsStr::new("live") {
+            // If path ends with the live dir, remove it.
             Ok(path)
         } else {
+            // Otherwise, use the path from DB, as meta_db will remove live by itself
             Ok(path.join(db_path))
         }
     }

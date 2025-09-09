@@ -26,7 +26,7 @@ pub fn create_live(
     let ino = fs.next_inode_checked(parent)?;
     let mut attr: FileAttr = file_attr().into();
     attr.ino = ino;
-    let file_path = fs.get_path_in_live(parent, name)?;
+    let file_path = fs.get_path_by_name_in_live(parent, name)?;
 
     let file = std::fs::File::create_new(&file_path)?;
     std::fs::set_permissions(&file_path, std::fs::Permissions::from_mode(0o775))?;
