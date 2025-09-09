@@ -1,4 +1,4 @@
-use std::os::unix::fs::MetadataExt;
+use std::{os::unix::fs::MetadataExt, path::PathBuf};
 
 use git2::Oid;
 
@@ -8,9 +8,84 @@ use crate::{
     fs::{
         FileAttr, GitFs, REPO_SHIFT, build_attr_dir,
         fileattr::{dir_attr, file_attr},
+        ops::readdir::{DirCase, classify_inode},
     },
     inodes::{NormalIno, VirtualIno},
 };
+
+struct LookupOperationCtx {
+    ino: NormalIno,
+    parent_tree: Oid,
+    parent_commit: Oid,
+    snap_name: String,
+    build_root: PathBuf,
+    temp_dir: PathBuf,
+}
+
+impl LookupOperationCtx {
+    fn new(fs: &GitFs, ino: NormalIno) -> anyhow::Result<Self> {
+        let res = classify_inode(fs, ino.to_norm_u64())?;
+        match res {
+            DirCase::Month { year: _, month: _ } => Ok(Self {
+                ino,
+                parent_tree: Oid::zero(),
+                parent_commit: Oid::zero(),
+                snap_name: String::new(),
+                build_root: PathBuf::new(),
+                temp_dir: PathBuf::new(),
+            }),
+            DirCase::Commit { oid } => {
+                if oid == Oid::zero() {
+                    // We are in the build folder
+                    let parent_oid = fs.parent_commit_build_session(ino)?;
+                    let build_root = fs.get_path_to_build_folder(ino)?;
+
+                    let temp_dir = {
+                        let repo = fs.get_repo(ino.to_norm_u64())?;
+                        let mut repo = repo.lock().map_err(|_| anyhow!("Lock poisoned"))?;
+                        repo.get_build_state(parent_oid, &build_root)?
+                    };
+                    return Ok(Self {
+                        ino,
+                        parent_tree: Oid::zero(),
+                        parent_commit: Oid::zero(),
+                        snap_name: String::new(),
+                        build_root,
+                        temp_dir,
+                    });
+                }
+
+                let (parent_commit, _) = fs.get_parent_commit(ino.to_norm_u64())?;
+                let parent_tree = if oid == parent_commit {
+                    let repo = fs.get_repo(ino.to_norm_u64())?;
+                    let repo = repo.lock().map_err(|_| anyhow!("Lock poisoned"))?;
+                    let commit = repo.inner.find_commit(parent_commit)?;
+                    commit.tree_id()
+                } else {
+                    // else, get parent oid from db
+                    fs.get_oid_from_db(ino.to_norm_u64())?
+                };
+
+                Ok(Self {
+                    ino,
+                    parent_tree,
+                    parent_commit,
+                    snap_name: String::new(),
+                    build_root: PathBuf::new(),
+                    temp_dir: PathBuf::new(),
+                })
+            }
+        }
+    }
+
+    fn is_month(&self) -> bool {
+        self.parent_commit == Oid::zero() && self.parent_tree == Oid::zero()
+    }
+
+    fn is_in_build(&self) -> bool {
+        self.build_root != PathBuf::new() && self.temp_dir != PathBuf::new()
+    }
+}
 
 pub fn lookup_root(fs: &GitFs, name: &str) -> anyhow::Result<Option<FileAttr>> {
     // Handle a look-up for url -> github.tokio-rs.tokio.git
@@ -99,9 +174,87 @@ pub fn lookup_live(fs: &GitFs, parent: NormalIno, name: &str) -> anyhow::Result<
     Ok(Some(attr))
 }
 
+// pub fn lookup_git(fs: &GitFs, parent: NormalIno, name: &str) -> anyhow::Result<Option<FileAttr>> {
+//     // If oid == zero, folder is yyyy-mm-dd.
+//     // else oid is commit_id or tree_id
+
+//     let ctx = AttrOperationCtx::new(fs, parent)?;
+
+//     let child_ino = {
+//         let repo = fs.get_repo(parent.to_norm_u64())?;
+//         let repo = repo.lock().map_err(|_| anyhow!("Lock poisoned"))?;
+//         let Ok(child_ino) = repo
+//             .connection
+//             .lock()
+//             .map_err(|_| anyhow!("Lock poisoned"))?
+//             .get_ino_from_db(parent.to_norm_u64(), name)
+//         else {
+//             return Ok(None);
+//         };
+//         child_ino
+//     };
+
+//     if !ctx.is_git_object() {
+//         // Dir or RefFile type?
+//         let mut attr: FileAttr = dir_attr().into();
+//         attr.ino = child_ino;
+//         return Ok(Some(attr))
+//     }
+
 pub fn lookup_git(fs: &GitFs, parent: NormalIno, name: &str) -> anyhow::Result<Option<FileAttr>> {
-    // If oid == zero, folder is yyyy-mm-dd.
+    let ctx = LookupOperationCtx::new(fs, parent)?;
+    let child_ino = {
+        let repo = fs.get_repo(parent.to_norm_u64())?;
+        let repo = repo.lock().map_err(|_| anyhow!("Lock poisoned"))?;
+        let Ok(child_ino) = repo
+            .connection
+            .lock()
+            .map_err(|_| anyhow!("Lock poisoned"))?
+            .get_ino_from_db(parent.to_norm_u64(), name)
+        else {
+            return Ok(None);
+        };
+        child_ino
+    };
+    if ctx.is_month() {
+        let mut attr: FileAttr = dir_attr().into();
+        attr.ino = child_ino;
+        return Ok(Some(attr));
+    }
+
+    if ctx.is_in_build() {
+        let path = fs.full_path_build_folder(parent, &ctx.temp_dir)?;
+        let mut attr = fs.attr_from_path(path)?;
+        attr.ino = child_ino;
+        return Ok(Some(attr));
+    }
+
+    let object_attr_res = {
+        let repo = fs.get_repo(parent.to_norm_u64())?;
+        let repo = repo.lock().map_err(|_| anyhow!("Lock poisoned"))?;
+        repo.find_by_name(ctx.parent_tree, name)
+    };
+    let mut attr = match object_attr_res {
+        // Target is in the git tree
+        Ok(obj_attr) => fs.object_to_file_attr(child_ino, &obj_attr)?,
+        // Target may be in the build folder
+        Err(_) => {
+            let filemode = fs.get_mode_from_db(child_ino)?;
+            match filemode {
+                git2::FileMode::Tree => dir_attr().into(),
+                git2::FileMode::Commit => dir_attr().into(),
+                _ => file_attr().into(),
+            }
+        }
+    };
+    attr.ino = child_ino;
+    Ok(Some(attr))
+}
+
+pub fn lookup_git_1(fs: &GitFs, parent: NormalIno, name: &str) -> anyhow::Result<Option<FileAttr>> {
+    // If oid == zero, folder is yyyy-mm-dd or build folder
     // else oid is commit_id or tree_id
+
     let parent = u64::from(parent);
     let repo = fs.get_repo(parent)?;
     let child_ino = {
