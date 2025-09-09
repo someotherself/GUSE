@@ -5,10 +5,9 @@ use git2::{FileMode, Oid};
 
 use crate::{
     fs::{
-        FileAttr, GitFs, REPO_SHIFT,
-        fileattr::{FileType, ObjectAttr},
+        builds::BuildOperationCtx, fileattr::{FileType, ObjectAttr}, FileAttr, GitFs, REPO_SHIFT
     },
-    inodes::{NormalIno, VirtualIno},
+    inodes::{Inodes, NormalIno, VirtualIno},
 };
 
 #[derive(Debug)]
@@ -185,8 +184,46 @@ pub fn classify_inode(fs: &GitFs, ino: u64) -> anyhow::Result<DirCase> {
     Ok(DirCase::Commit { oid })
 }
 
+fn read_build_dir(fs: &GitFs, ino: NormalIno) -> anyhow::Result<Vec<DirectoryEntry>> {
+    let mut out = Vec::new();
+
+    let Some(ctx) = BuildOperationCtx::new(fs, ino)? else {
+        return Ok(out);
+    };
+
+    let entries = populate_build_entries(fs, ino, &ctx.temp_dir_path())?;
+    out.extend(entries);
+    Ok(out)
+}
+
+fn populate_build_entries(
+    fs: &GitFs,
+    ino: NormalIno,
+    build_path: &Path,
+) -> anyhow::Result<Vec<DirectoryEntry>> {
+    let mut out: Vec<DirectoryEntry> = Vec::new();
+
+    for node in build_path.read_dir()? {
+        let node = node?;
+        let node_name = node.file_name();
+        let node_name_str = node_name.to_string_lossy();
+        let (kind, filemode) = if node.file_type()?.is_dir() {
+            (FileType::Directory, libc::S_IFDIR)
+        } else if node.file_type()?.is_file() {
+            (FileType::RegularFile, libc::S_IFREG)
+        } else {
+            (FileType::Symlink, libc::S_IFLNK)
+        };
+        let entry_ino = fs.get_ino_from_db(ino.to_norm_u64(), &node_name_str)?;
+        let entry =
+            DirectoryEntry::new(entry_ino, Oid::zero(), node_name_str.into(), kind, filemode);
+        out.push(entry);
+    }
+    Ok(out)
+}
+
 pub fn readdir_git_dir(fs: &GitFs, ino: NormalIno) -> anyhow::Result<Vec<DirectoryEntry>> {
-    let ino = u64::from(ino);
+    let ino = ino.to_norm_u64();
 
     let repo = fs.get_repo(ino)?;
     let git_objects = match classify_inode(fs, ino)? {
@@ -234,6 +271,12 @@ pub fn readdir_git_dir(fs: &GitFs, ino: NormalIno) -> anyhow::Result<Vec<Directo
         };
         entries.push(dir_entry);
     }
+    drop(repo);
+
+    let inode: Inodes = ino.into();
+    let build_nodes = read_build_dir(fs, inode.to_norm())?;
+    entries.extend(build_nodes);
+
     fs.write_inodes_to_db(nodes)?;
     Ok(entries)
 }
