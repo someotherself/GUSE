@@ -1569,18 +1569,24 @@ impl GitFs {
         conn.remove_db_record(self.clear_vdir_bit(ino))
     }
 
+    #[instrument(level = "debug", skip(self), fields(ino = %ino), ret(level = Level::DEBUG), err(Display))]
     pub fn parent_commit_build_session(&self, ino: NormalIno) -> anyhow::Result<Oid> {
-        let build_ino = self.get_build_ino(ino)?;
+        let oid = self.get_oid_from_db(ino.to_norm_u64())?;
+
+        let mut cur_oid = oid;
         let mut cur_ino = ino.to_norm_u64();
-        let mut parent_ino = self.get_parent_ino(ino.to_norm_u64())?;
-        loop {
-            if parent_ino == build_ino {
+
+        let max_loops = 1000;
+        for _ in 0..max_loops {
+            if cur_oid != Oid::zero() {
                 break;
             }
-            cur_ino = parent_ino;
-            parent_ino = self.get_parent_ino(cur_ino)?;
+
+            cur_ino = self.get_parent_ino(cur_ino)?;
+            cur_oid = self.get_oid_from_db(cur_ino)?;
         }
-        self.get_oid_from_db(cur_ino)
+
+        Ok(cur_oid)
     }
 
     fn get_path_from_db(&self, ino: u64) -> anyhow::Result<PathBuf> {
