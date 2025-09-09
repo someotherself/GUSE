@@ -12,7 +12,7 @@ pub fn rename_live(
     new_parent: NormalIno,
     new_name: &str,
 ) -> anyhow::Result<()> {
-    if !fs.is_in_live(new_parent.to_norm_u64()) {
+    if !fs.is_in_live_or_build(new_parent.to_norm_u64()) {
         bail!(format!("New parent {} not allowed", new_parent));
     }
 

@@ -60,7 +60,7 @@ pub fn mkdir_live(
     name: &str,
     create_attr: CreateFileAttr,
 ) -> anyhow::Result<FileAttr> {
-    let dir_path = fs.build_path(parent, name)?;
+    let dir_path = fs.get_path_in_live(parent, name)?;
     std::fs::create_dir(&dir_path)?;
     std::fs::set_permissions(dir_path, std::fs::Permissions::from_mode(0o775))?;
     let new_ino = fs.next_inode_checked(parent)?;

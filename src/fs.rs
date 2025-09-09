@@ -1075,6 +1075,87 @@ impl GitFs {
     }
 }
 
+// gitfs_path_builders
+impl GitFs {
+    /// Build path to a folder or file that exists in the live folder
+    fn get_path_in_live(&self, parent: u64, name: &str) -> anyhow::Result<PathBuf> {
+        let parent = self.clear_vdir_bit(parent);
+        let repo_name = {
+            let repo = &self.get_repo(parent)?;
+            let repo = repo.lock().map_err(|_| anyhow!("Lock poisoned"))?;
+            repo.repo_dir.clone()
+        };
+        let path_to_repo = PathBuf::from(&self.repos_dir).join(repo_name);
+
+        let live_ino = self.get_live_ino(parent);
+        if parent == live_ino {
+            return Ok(path_to_repo.join(name));
+        }
+
+        let conn_arc = {
+            let repo = &self.get_repo(parent)?;
+            let repo = repo.lock().map_err(|_| anyhow!("Lock poisoned"))?;
+            std::sync::Arc::clone(&repo.connection)
+        };
+        let conn = conn_arc.lock().map_err(|_| anyhow!("Lock poisoned"))?;
+        let db_path = conn.get_path_from_db(parent)?;
+        Ok(PathBuf::from(&self.repos_dir).join(db_path).join(name))
+    }
+
+    fn path_to_build_folder(&self, ino: NormalIno) -> anyhow::Result<PathBuf> {
+        let repo_dir = {
+            let repo = self.get_repo(ino.to_norm_u64())?;
+            let repo = repo.lock().map_err(|_| anyhow!("Lock poisoned"))?;
+            repo.repo_dir.clone()
+        };
+        let repo_dir_path = self.repos_dir.join(repo_dir).join("build");
+        Ok(repo_dir_path)
+    }
+
+    fn full_path_build_folder(&self, ino: NormalIno, temp_dir: &Path) -> anyhow::Result<PathBuf> {
+        let mut components = vec![];
+        let build_ino = self.get_build_ino(ino)?;
+
+        let mut cur = ino.to_norm_u64();
+        loop {
+            let parent_name = self.get_name_from_db(cur)?;
+            components.push(parent_name);
+
+            let parent = self.get_parent_ino(cur)?;
+            if parent == build_ino {
+                components.push(temp_dir.to_string_lossy().into());
+                break;
+            }
+            cur = parent;
+        }
+
+        components.reverse();
+
+        Ok(components.iter().collect::<PathBuf>())
+    }
+
+    // TODO: Change to check live_ino instead of live name
+    fn build_full_path(&self, ino: u64) -> anyhow::Result<PathBuf> {
+        let ino = self.clear_vdir_bit(ino);
+        let repo_ino = {
+            let repo = self.get_repo(ino)?;
+            let repo = repo.lock().map_err(|_| anyhow!("Lock poisoned"))?;
+            GitFs::repo_id_to_ino(repo.repo_id)
+        };
+        let path = PathBuf::from(&self.repos_dir);
+        if ino == repo_ino {
+            return Ok(path);
+        }
+        let db_path = &self.get_path_from_db(ino)?;
+        let filename = db_path.file_name().ok_or_else(|| anyhow!("No filename"))?;
+        if filename == OsStr::new("live") {
+            Ok(path)
+        } else {
+            Ok(path.join(db_path))
+        }
+    }
+}
+
 // gitfs_helpers
 impl GitFs {
     pub fn insert_repo(
@@ -1196,30 +1277,6 @@ impl GitFs {
             blksize: metadata.blksize() as u32,
             flags: 0,
         })
-    }
-
-    fn build_path(&self, parent: u64, name: &str) -> anyhow::Result<PathBuf> {
-        let parent = self.clear_vdir_bit(parent);
-        let repo_name = {
-            let repo = &self.get_repo(parent)?;
-            let repo = repo.lock().map_err(|_| anyhow!("Lock poisoned"))?;
-            repo.repo_dir.clone()
-        };
-        let path_to_repo = PathBuf::from(&self.repos_dir).join(repo_name);
-
-        let live_ino = self.get_live_ino(parent);
-        if parent == live_ino {
-            return Ok(path_to_repo.join(name));
-        }
-
-        let conn_arc = {
-            let repo = &self.get_repo(parent)?;
-            let repo = repo.lock().map_err(|_| anyhow!("Lock poisoned"))?;
-            std::sync::Arc::clone(&repo.connection)
-        };
-        let conn = conn_arc.lock().map_err(|_| anyhow!("Lock poisoned"))?;
-        let db_path = conn.get_path_from_db(parent)?;
-        Ok(PathBuf::from(&self.repos_dir).join(db_path).join(name))
     }
 
     fn get_repo(&self, ino: u64) -> anyhow::Result<Arc<Mutex<GitRepo>>> {
@@ -1498,59 +1555,6 @@ impl GitFs {
             parent_ino = self.get_parent_ino(cur_ino)?;
         }
         self.get_oid_from_db(cur_ino)
-    }
-
-    fn path_to_build_folder(&self, ino: NormalIno, temp_dir: &Path) -> anyhow::Result<PathBuf> {
-        let repo_dir = {
-            let repo = self.get_repo(ino.to_norm_u64())?;
-            let repo = repo.lock().map_err(|_| anyhow!("Lock poisoned"))?;
-            repo.repo_dir.clone()
-        };
-        let repo_dir_path = self.repos_dir.join(repo_dir).join("build").join(temp_dir);
-        Ok(repo_dir_path)
-    }
-
-    fn full_path_build_folder(&self, ino: NormalIno, temp_dir: &Path) -> anyhow::Result<PathBuf> {
-        let mut components = vec![];
-
-        let build_ino = self.get_build_ino(ino)?;
-        let mut cur = ino.to_norm_u64();
-        loop {
-            let parent_name = self.get_name_from_db(cur)?;
-            components.push(parent_name);
-
-            let parent = self.get_parent_ino(cur)?;
-            if parent == build_ino {
-                components.push(temp_dir.to_string_lossy().into());
-                break
-            }
-            cur = parent;
-        }
-
-        components.reverse();
-
-        Ok(components.iter().collect::<PathBuf>())
-    }
-
-    // TODO: Change to check live_ino instead of live name
-    fn build_full_path(&self, ino: u64) -> anyhow::Result<PathBuf> {
-        let ino = self.clear_vdir_bit(ino);
-        let repo_ino = {
-            let repo = self.get_repo(ino)?;
-            let repo = repo.lock().map_err(|_| anyhow!("Lock poisoned"))?;
-            GitFs::repo_id_to_ino(repo.repo_id)
-        };
-        let path = PathBuf::from(&self.repos_dir);
-        if ino == repo_ino {
-            return Ok(path);
-        }
-        let db_path = &self.get_path_from_db(ino)?;
-        let filename = db_path.file_name().ok_or_else(|| anyhow!("No filename"))?;
-        if filename == OsStr::new("live") {
-            Ok(path)
-        } else {
-            Ok(path.join(db_path))
-        }
     }
 
     fn get_path_from_db(&self, ino: u64) -> anyhow::Result<PathBuf> {
