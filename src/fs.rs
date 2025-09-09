@@ -1352,7 +1352,7 @@ impl GitFs {
 
         loop {
             if target_ino == ROOT_INO {
-                return false
+                return false;
             }
             let parent = match self.get_parent_ino(target_ino) {
                 Ok(p) => p,
