@@ -1307,22 +1307,40 @@ impl GitFs {
     }
 
     fn is_in_build(&self, ino: NormalIno) -> anyhow::Result<bool> {
-        let build_ino = self.get_build_ino(ino)?;
-        if build_ino == ino.to_norm_u64() {
+        // One of the parents is a commit
+        if self.is_in_live(ino.to_norm_u64()) {
+            return Ok(false);
+        };
+
+        let oid = self.get_oid_from_db(ino.to_norm_u64())?;
+        if self.is_commit(ino, oid)? {
             return Ok(true);
         }
-        let mut target_ino = ino.to_norm_u64();
+        if oid != Oid::zero() {
+            return Ok(false);
+        }
 
-        loop {
-            let parent = match self.get_parent_ino(target_ino) {
-                Ok(p) => p,
-                Err(_) => return Ok(false),
-            };
-            if parent == build_ino {
+        #[allow(unused_assignments)]
+        let mut cur_oid = oid;
+        let mut cur_ino = ino.to_norm_u64();
+
+        let max_loops = 1000;
+
+        for _ in 0..max_loops {
+            cur_ino = self.get_parent_ino(cur_ino)?;
+            cur_oid = self.get_oid_from_db(cur_ino)?;
+            if self.is_commit(ino, cur_oid)? {
                 return Ok(true);
             }
-            target_ino = parent;
         }
+
+        Ok(false)
+    }
+
+    fn is_commit(&self, ino: NormalIno, oid: Oid) -> anyhow::Result<bool> {
+        let repo_arc = self.get_repo(ino.to_norm_u64())?;
+        let repo = repo_arc.lock().map_err(|_| anyhow!("Lock poisoned"))?;
+        Ok(repo.inner.find_commit(oid).is_ok())
     }
 
     fn is_in_live(&self, ino: u64) -> bool {
