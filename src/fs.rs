@@ -1183,8 +1183,19 @@ impl GitFs {
         ino & !VDIR_BIT
     }
 
+#[instrument(level = "debug", skip(self), ret(level = Level::DEBUG), err(Display))]
     pub fn refresh_attr(&self, attr: &mut FileAttr) -> anyhow::Result<FileAttr> {
-        let path = self.build_full_path(attr.ino)?;
+        let ino = Inodes::NormalIno(attr.ino).to_norm();
+        let path = if self.is_in_build(ino)? {
+            let parent_oid = self.parent_commit_build_session(ino)?;
+            let build_root = self.get_path_to_build_folder(ino)?;
+
+            let repo = self.get_repo(attr.ino)?;
+            let mut repo = repo.lock().map_err(|_| anyhow!("Lock poisoned"))?;
+            repo.get_build_state(parent_oid, &build_root)?
+        } else {
+            self.build_full_path(attr.ino)?
+        };
         let metadata = path.metadata()?;
         let std_type = metadata.file_type();
         let actual = if std_type.is_dir() {
