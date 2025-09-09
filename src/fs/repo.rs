@@ -6,10 +6,11 @@ use git2::{
     TreeWalkResult,
 };
 use std::{
-    collections::{hash_map::Entry, BTreeMap, HashMap, HashSet},
+    collections::{BTreeMap, HashMap, HashSet, hash_map::Entry},
     path::{Path, PathBuf},
     sync::{
-        atomic::{AtomicBool, AtomicUsize}, Arc, Mutex
+        Arc, Mutex,
+        atomic::{AtomicBool, AtomicUsize},
     },
 };
 
@@ -687,7 +688,11 @@ impl GitRepo {
         Ok(self.head_commit()?.tree()?)
     }
 
-    pub fn get_build_state(&mut self, commit_oid: Oid, build_folder: &Path) -> anyhow::Result<PathBuf> {
+    pub fn get_build_state(
+        &mut self,
+        commit_oid: Oid,
+        build_folder: &Path,
+    ) -> anyhow::Result<PathBuf> {
         match self.build_sessions.entry(commit_oid) {
             Entry::Occupied(entry) => {
                 let session = entry.get();
