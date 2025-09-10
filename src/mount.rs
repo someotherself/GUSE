@@ -27,7 +27,7 @@ use crate::fs::ops::readdir::{DirectoryEntry, DirectoryEntryPlus};
 use crate::fs::{GitFs, REPO_SHIFT, ROOT_INO, repo};
 use crate::internals::sock::{socket_path, start_control_server};
 
-const TTL: Duration = Duration::from_secs(1);
+const TTL: Duration = Duration::from_millis(100);
 
 pub struct MountPoint {
     mountpoint: PathBuf,
