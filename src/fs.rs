@@ -746,9 +746,7 @@ impl GitFs {
                 bail!("Not allowed")
             }
             FsOperationContext::InsideLiveDir { ino } => ops::unlink::unlink_live(self, ino, name),
-            FsOperationContext::InsideGitDir { ino: _ } => {
-                bail!("This directory is read only")
-            }
+            FsOperationContext::InsideGitDir { ino: _ } => ops::unlink::unlink_build_dir(self, parent.to_norm(), name)
         }
     }
 
@@ -1394,7 +1392,6 @@ impl GitFs {
             let ino = self.next_inode_raw(parent)?;
 
             if repo.res_inodes.insert(ino) {
-                info!("Issuing ino {ino}");
                 return Ok(ino);
             }
         }
