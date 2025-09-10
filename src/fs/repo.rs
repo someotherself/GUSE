@@ -7,7 +7,7 @@ use git2::{
 };
 use std::{
     collections::{BTreeMap, HashMap, HashSet, hash_map::Entry},
-    path::{Path, PathBuf},
+    path::Path,
     sync::{
         Arc, Mutex,
         atomic::{AtomicBool, AtomicUsize},

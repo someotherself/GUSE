@@ -1186,6 +1186,7 @@ impl GitFs {
 
 #[instrument(level = "debug", skip(self), ret(level = Level::DEBUG), err(Display))]
     pub fn refresh_attr(&self, attr: &mut FileAttr) -> anyhow::Result<FileAttr> {
+        info!("{:?}", attr.kind);
         let ino = Inodes::NormalIno(attr.ino).to_norm();
         let path = if self.is_in_build(ino)? {
             let parent_oid = self.parent_commit_build_session(ino)?;
@@ -1194,7 +1195,8 @@ impl GitFs {
             let repo = self.get_repo(attr.ino)?;
             let mut repo = repo.lock().map_err(|_| anyhow!("Lock poisoned"))?;
             let session = repo.get_or_init_build_session(parent_oid, &build_root)?;
-            session.folder.path().to_path_buf()
+            drop(repo);
+            session.finish_path(self, ino)?
         } else {
             self.build_full_path(attr.ino)?
         };

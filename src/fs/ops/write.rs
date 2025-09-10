@@ -24,19 +24,23 @@ pub fn write_live(fs: &GitFs, ino: u64, offset: u64, buf: &[u8], fh: u64) -> any
 }
 
 pub fn write_git(
-    fs: &GitFs,
-    ino: NormalIno,
+    _fs: &GitFs,
+    _ino: NormalIno,
     _offset: u64,
     _buf: &[u8],
     _fh: u64,
 ) -> anyhow::Result<usize> {
-    let res = classify_inode(fs, ino.to_norm_u64())?;
-    match res {
-        DirCase::Month { year: _, month: _ } => {
-            bail!("This folder is read only!")
-        }
-        DirCase::Commit { oid: _ } => {
-            todo!()
-        }
-    }
+    // let oid = fs.get_oid_from_db(ino.to_norm_u64())?;
+    // if oid == Oid::zero() {
+    //     todo!()
+    // } else if {
+    //     let repo = fs.get_repo(ino.to_norm_u64())?;
+    //     let repo = repo.lock().map_err(|_| anyhow!("Lock poisoned"))?;
+    //     repo.inner.find_commit(oid).is_ok()
+    // } {
+    //     todo!()
+    // } else {
+    //     bail!("This folder is read only!")
+    // }
+    todo!()
 }

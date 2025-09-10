@@ -20,7 +20,7 @@ struct LookupOperationCtx {
     parent_commit: Oid,
     snap_name: String,
     build_root: PathBuf,
-    temp_dir: PathBuf,
+    path: PathBuf,
 }
 
 impl LookupOperationCtx {
@@ -33,7 +33,7 @@ impl LookupOperationCtx {
                 parent_commit: Oid::zero(),
                 snap_name: String::new(),
                 build_root: PathBuf::new(),
-                temp_dir: PathBuf::new(),
+                path: PathBuf::new(),
             }),
             DirCase::Commit { oid } => {
                 if oid == Oid::zero() {
@@ -46,14 +46,15 @@ impl LookupOperationCtx {
                         let mut repo = repo.lock().map_err(|_| anyhow!("Lock poisoned"))?;
                         repo.get_or_init_build_session(parent_oid, &build_root)?
                     };
-                    let temp_dir = build_session.folder.path().to_path_buf();
+                    // TODO: Does it need path file?
+                    let path = build_session.finish_path(fs, ino)?;
                     return Ok(Self {
                         ino,
                         parent_tree: Oid::zero(),
                         parent_commit: Oid::zero(),
                         snap_name: String::new(),
                         build_root,
-                        temp_dir,
+                        path,
                     });
                 }
 
@@ -74,7 +75,7 @@ impl LookupOperationCtx {
                     parent_commit,
                     snap_name: String::new(),
                     build_root: PathBuf::new(),
-                    temp_dir: PathBuf::new(),
+                    path: PathBuf::new(),
                 })
             }
         }
@@ -85,7 +86,7 @@ impl LookupOperationCtx {
     }
 
     fn is_in_build(&self) -> bool {
-        self.build_root != PathBuf::new() && self.temp_dir != PathBuf::new()
+        self.build_root != PathBuf::new() && self.path != PathBuf::new()
     }
 }
 
@@ -201,7 +202,7 @@ pub fn lookup_git(fs: &GitFs, parent: NormalIno, name: &str) -> anyhow::Result<O
     }
 
     if ctx.is_in_build() {
-        let path = fs.full_path_build_folder(parent, &ctx.temp_dir)?;
+        let path = ctx.path.join(name);
         let mut attr = fs.attr_from_path(path)?;
         attr.ino = child_ino;
         return Ok(Some(attr));

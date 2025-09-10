@@ -7,7 +7,7 @@ use std::{
 
 use anyhow::{anyhow, bail};
 use git2::{Oid, Time};
-use tracing::{Level, info, instrument};
+use tracing::{Level, instrument};
 
 use crate::{
     fs::{
@@ -57,7 +57,6 @@ pub fn open_git(
 ) -> anyhow::Result<u64> {
     let oid = fs.get_oid_from_db(ino.to_norm_u64())?;
     if oid == Oid::zero() {
-        tracing::info!("Opening ino {ino}");
         let parent_oid = fs.parent_commit_build_session(ino)?;
         let build_root = fs.get_path_to_build_folder(ino)?;
 
@@ -66,12 +65,7 @@ pub fn open_git(
             let mut repo = repo.lock().map_err(|_| anyhow!("Lock poisoned"))?;
             repo.get_or_init_build_session(parent_oid, &build_root)?
         };
-        let temp_dir = build_session.folder.path().to_path_buf();
-        info!("session path {}", temp_dir.display());
-        // let path = fs.full_path_build_folder(ino, &temp_dir)?;
-
-        let name = fs.get_name_from_db(ino.to_norm_u64())?;
-        let path = temp_dir.join(name);
+        let path = build_session.finish_path(fs, ino)?;
         let file = OpenOptions::new()
             .read(read)
             .write(write)
@@ -84,12 +78,10 @@ pub fn open_git(
             read,
             write,
         };
-        tracing::info!("5");
         {
             let mut guard = fs.handles.write().map_err(|_| anyhow!("Lock poisoned"))?;
             guard.insert(fh, handle);
         }
-        tracing::info!("6");
         return Ok(fh);
     }
     open_blob(fs, oid, ino.to_norm_u64(), read)

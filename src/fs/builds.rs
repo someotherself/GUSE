@@ -22,6 +22,34 @@ pub struct BuildSession {
     pub pinned: AtomicBool,
 }
 
+impl BuildSession {
+    pub fn finish_path(&self, fs: & GitFs, ino: NormalIno) -> anyhow::Result<PathBuf> {
+        let temp_dir_path = self.folder.path().to_path_buf();
+
+        let mut components = vec![];
+
+        let mut cur_ino = ino.to_norm_u64();
+        let mut cur_oid = fs.get_oid_from_db(cur_ino)?;
+
+        let max_loops = 1000;
+
+        for _ in 0..max_loops {
+            if cur_oid != Oid::zero() {
+                break;
+            }
+            components.push(fs.get_name_from_db(cur_ino)?);
+            cur_ino = fs.get_parent_ino(cur_ino)?;
+            cur_oid = fs.get_oid_from_db(cur_ino)?;
+        }
+
+        components.reverse();
+        let full_path = temp_dir_path.join(components.iter().collect::<PathBuf>());
+        tracing::info!("{}", full_path.display());
+
+        Ok(full_path)
+    }
+}
+
 enum TargetCommit {
     BuildHead(Oid),
     Commit(Oid),
@@ -86,3 +114,4 @@ impl BuildOperationCtx {
         self.temp_dir_path().join(p)
     }
 }
+
