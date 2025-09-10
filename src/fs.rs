@@ -1194,7 +1194,8 @@ impl GitFs {
             let mut repo = repo.lock().map_err(|_| anyhow!("Lock poisoned"))?;
             let session = repo.get_or_init_build_session(parent_oid, &build_root)?;
             drop(repo);
-            session.finish_path(self, ino)?
+            let build_path = session.finish_path(self, ino)?;
+            build_path
         } else {
             self.build_full_path(attr.ino)?
         };
@@ -1296,16 +1297,20 @@ impl GitFs {
 
         let mut cur = ino;
         let mut oid = self.get_oid_from_db(ino)?;
+        let max_steps = 1000;
+        let mut i = 0;
         while {
             let repo = repo_arc.lock().map_err(|_| anyhow!("Lock poisoned"))?;
             repo.inner.find_commit(oid).is_err()
         } {
+            i += 1;
             let parent_ino = self.get_parent_ino(cur)?;
             oid = self.get_oid_from_db(parent_ino)?;
-            if oid == Oid::zero() {
-                bail!("Parent commit not found");
-            }
+
             cur = parent_ino;
+            if i == max_steps {
+                bail!("Parent commit not found")
+            }
         }
         Ok((oid, self.get_name_from_db(cur)?))
     }
