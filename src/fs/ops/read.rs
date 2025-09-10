@@ -47,9 +47,6 @@ pub fn read_git(
     let ctx = guard
         .get(&fh)
         .ok_or_else(|| anyhow!("Handle does not exist"))?;
-    if !ctx.file.is_blob() {
-        bail!("Invalid handle - wrong file type")
-    }
     if ctx.ino != *ino {
         bail!("Invalid handle - wrong inode")
     }

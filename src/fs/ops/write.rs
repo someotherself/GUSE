@@ -24,23 +24,25 @@ pub fn write_live(fs: &GitFs, ino: u64, offset: u64, buf: &[u8], fh: u64) -> any
 }
 
 pub fn write_git(
-    _fs: &GitFs,
-    _ino: NormalIno,
-    _offset: u64,
-    _buf: &[u8],
-    _fh: u64,
+    fs: &GitFs,
+    ino: NormalIno,
+    offset: u64,
+    buf: &[u8],
+    fh: u64,
 ) -> anyhow::Result<usize> {
-    // let oid = fs.get_oid_from_db(ino.to_norm_u64())?;
-    // if oid == Oid::zero() {
-    //     todo!()
-    // } else if {
-    //     let repo = fs.get_repo(ino.to_norm_u64())?;
-    //     let repo = repo.lock().map_err(|_| anyhow!("Lock poisoned"))?;
-    //     repo.inner.find_commit(oid).is_ok()
-    // } {
-    //     todo!()
-    // } else {
-    //     bail!("This folder is read only!")
-    // }
-    todo!()
+    let guard = fs.handles.read().map_err(|_| anyhow!("Lock poisoned."))?;
+    let ctx = guard
+        .get(&fh)
+        .ok_or_else(|| anyhow!(format!("Handle {} for ino {} does not exist", fh, ino)))?;
+    if ctx.ino != ino.to_norm_u64() {
+        bail!("Invalid filehandle")
+    }
+    if ctx.file.is_blob() {
+        bail!("Cannot write to blobs")
+    }
+        if !ctx.write {
+        bail!("Write not permitted")
+    };
+    let bytes_written = ctx.file.write_at(buf, offset)?;
+    Ok(bytes_written)
 }
