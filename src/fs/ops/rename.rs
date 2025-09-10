@@ -1,5 +1,4 @@
 use anyhow::{anyhow, bail};
-use tracing::info;
 
 use crate::{
     fs::{FileAttr, GitFs, fileattr::FileType},
@@ -71,15 +70,12 @@ pub fn rename_git_build(
     if !dst_in_build && !is_commit_folder && !fs.is_in_live(new_parent.to_norm_u64()) {
         bail!(format!("New parent {} not allowed", new_parent));
     }
-    info!("rename - 1");
     let src_attr = fs
         .lookup(parent.to_norm_u64(), name)?
         .ok_or_else(|| anyhow!("Source does not exist"))?;
-    info!("rename - 1");
 
     let mut dest_exists = false;
     let mut dest_old_ino: u64 = 0;
-    info!("rename - 2");
 
     if let Some(dest_attr) = fs.lookup(new_parent.to_norm_u64(), new_name)? {
         dest_exists = true;
@@ -93,7 +89,6 @@ pub fn rename_git_build(
             bail!("Source and destination are not the same type")
         }
     }
-    info!("rename - 3");
 
     let src = {
         let ino = parent;
@@ -105,8 +100,6 @@ pub fn rename_git_build(
         drop(repo);
         session.finish_path(fs, ino)?.join(name)
     };
-    info!("rename - 4");
-    info!("src path {}", src.display());
 
     let dest = if dst_in_build {
         let ino = new_parent;
@@ -120,24 +113,18 @@ pub fn rename_git_build(
     } else {
         fs.build_full_path(new_parent.to_norm_u64())?.join(new_name)
     };
-    info!("rename - 5");
-    info!("src path {}", dest.display());
 
     std::fs::rename(src, &dest)?;
-    info!("rename - 6");
 
     fs.remove_db_record(src_attr.ino)?;
-    info!("rename - 7");
 
     if dest_exists {
         fs.remove_db_record(dest_old_ino)?;
     }
 
     let mut new_attr = fs.attr_from_path(dest)?;
-    info!("rename - 8");
     let new_ino = fs.next_inode_checked(new_parent.to_norm_u64())?;
     new_attr.ino = new_ino;
-    info!("rename - 9");
 
     let nodes: Vec<(u64, String, FileAttr)> =
         vec![(new_parent.to_norm_u64(), new_name.to_string(), new_attr)];
