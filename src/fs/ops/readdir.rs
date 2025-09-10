@@ -2,7 +2,7 @@ use std::{collections::btree_map::Entry, ffi::OsString, path::Path};
 
 use anyhow::{anyhow, bail};
 use git2::{FileMode, Oid};
-use tracing::{instrument, Level};
+use tracing::{Level, instrument};
 
 use crate::{
     fs::{
@@ -248,7 +248,8 @@ pub fn readdir_git_dir(fs: &GitFs, ino: NormalIno) -> anyhow::Result<Vec<Directo
                 // else, get parent oid from db
                 let tree_oid = oid;
                 let repo = repo.lock().map_err(|_| anyhow!("Lock poisoned"))?;
-                repo.list_tree(commit_oid, Some(tree_oid)).unwrap_or_default()
+                repo.list_tree(commit_oid, Some(tree_oid))
+                    .unwrap_or_default()
             }
         }
     };
