@@ -673,6 +673,7 @@ impl GitFs {
         }
     }
 
+    #[instrument(level = "debug", skip(self), fields(parent = %parent), ret(level = Level::DEBUG), err(Display))]
     pub fn create(
         &self,
         parent: u64,
@@ -751,6 +752,7 @@ impl GitFs {
         }
     }
 
+    #[instrument(level = "debug", skip(self), fields(parent = %parent, new_parent = %new_parent), ret(level = Level::DEBUG), err(Display))]
     pub fn rename(
         &self,
         parent: u64,
@@ -814,7 +816,13 @@ impl GitFs {
                 new_parent.to_norm(),
                 new_name,
             ),
-            FsOperationContext::InsideGitDir { ino: _ } => bail!("This directory is read only"),
+            FsOperationContext::InsideGitDir { ino: _ } => ops::rename::rename_git_build(
+                self,
+                parent.to_norm(),
+                name,
+                new_parent.to_norm(),
+                new_name,
+            ),
         }
     }
 
@@ -1194,8 +1202,7 @@ impl GitFs {
             let mut repo = repo.lock().map_err(|_| anyhow!("Lock poisoned"))?;
             let session = repo.get_or_init_build_session(parent_oid, &build_root)?;
             drop(repo);
-            let build_path = session.finish_path(self, ino)?;
-            build_path
+            session.finish_path(self, ino)?
         } else {
             self.build_full_path(attr.ino)?
         };
