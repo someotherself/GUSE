@@ -61,11 +61,12 @@ pub fn open_git(
         let parent_oid = fs.parent_commit_build_session(ino)?;
         let build_root = fs.get_path_to_build_folder(ino)?;
 
-        let temp_dir = {
+        let build_session = {
             let repo = fs.get_repo(ino.to_norm_u64())?;
             let mut repo = repo.lock().map_err(|_| anyhow!("Lock poisoned"))?;
-            repo.get_build_state(parent_oid, &build_root)?
+            repo.get_or_init_build_session(parent_oid, &build_root)?
         };
+        let temp_dir = build_session.folder.path().to_path_buf();
         info!("session path {}", temp_dir.display());
         // let path = fs.full_path_build_folder(ino, &temp_dir)?;
 

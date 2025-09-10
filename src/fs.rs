@@ -1190,7 +1190,8 @@ impl GitFs {
 
             let repo = self.get_repo(attr.ino)?;
             let mut repo = repo.lock().map_err(|_| anyhow!("Lock poisoned"))?;
-            repo.get_build_state(parent_oid, &build_root)?
+            let session = repo.get_or_init_build_session(parent_oid, &build_root)?;
+            session.folder.path().to_path_buf()
         } else {
             self.build_full_path(attr.ino)?
         };

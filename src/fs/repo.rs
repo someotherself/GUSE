@@ -690,29 +690,28 @@ impl GitRepo {
     }
 
     #[instrument(level = "debug", skip(self), fields(commit_oid = %commit_oid), ret(level = Level::DEBUG), err(Display))]
-    pub fn get_build_state(
+    pub fn get_or_init_build_session(
         &mut self,
         commit_oid: Oid,
         build_folder: &Path,
-    ) -> anyhow::Result<PathBuf> {
+    ) -> anyhow::Result<Arc<BuildSession>> {
         match self.build_sessions.entry(commit_oid) {
             Entry::Occupied(entry) => {
                 let session = entry.get();
-                Ok(session.folder.path().into())
+                Ok(session.clone())
             }
             Entry::Vacant(slot) => {
                 let folder = tempfile::Builder::new()
                     .prefix(&format!("build_{}", &commit_oid.to_string()[..=7]))
                     .rand_bytes(4)
                     .tempdir_in(build_folder)?;
-                let folder_name = folder.path().to_path_buf();
-                let session = BuildSession {
+                let session = Arc::new(BuildSession {
                     folder,
                     open_count: AtomicUsize::new(0),
                     pinned: AtomicBool::new(false),
-                };
-                slot.insert(Arc::new(session));
-                Ok(folder_name)
+                });
+                slot.insert(session.clone());
+                Ok(session)
             }
         }
     }
