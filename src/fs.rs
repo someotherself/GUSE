@@ -513,7 +513,7 @@ impl GitFs {
     #[instrument(level = "debug", skip(self), ret(level = Level::DEBUG), err(Display))]
     pub fn release(&self, fh: u64) -> anyhow::Result<bool> {
         if fh == 0 {
-            return Ok(true)
+            return Ok(true);
         }
         let ino = {
             let mut guard = self.handles.write().map_err(|_| anyhow!("Lock poisoned"))?;
@@ -1184,9 +1184,7 @@ impl GitFs {
         ino & !VDIR_BIT
     }
 
-#[instrument(level = "debug", skip(self), ret(level = Level::DEBUG), err(Display))]
     pub fn refresh_attr(&self, attr: &mut FileAttr) -> anyhow::Result<FileAttr> {
-        info!("{:?}", attr.kind);
         let ino = Inodes::NormalIno(attr.ino).to_norm();
         let path = if self.is_in_build(ino)? {
             let parent_oid = self.parent_commit_build_session(ino)?;
