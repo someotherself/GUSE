@@ -14,50 +14,26 @@ use crate::{
     inodes::{NormalIno, VirtualIno},
 };
 
-struct LookupOperationCtx {
+pub struct AttrOperationCtx {
     ino: NormalIno,
     parent_tree: Oid,
     parent_commit: Oid,
-    snap_name: String,
     build_root: PathBuf,
     path: PathBuf,
 }
 
-impl LookupOperationCtx {
-    fn new(fs: &GitFs, ino: NormalIno) -> anyhow::Result<Self> {
+impl AttrOperationCtx {
+    pub fn new(fs: &GitFs, ino: NormalIno) -> anyhow::Result<Self> {
         let res = classify_inode(fs, ino.to_norm_u64())?;
         match res {
             DirCase::Month { year: _, month: _ } => Ok(Self {
                 ino,
                 parent_tree: Oid::zero(),
                 parent_commit: Oid::zero(),
-                snap_name: String::new(),
                 build_root: PathBuf::new(),
                 path: PathBuf::new(),
             }),
             DirCase::Commit { oid } => {
-                if oid == Oid::zero() {
-                    // We are in the build folder
-                    let parent_oid = fs.parent_commit_build_session(ino)?;
-                    let build_root = fs.get_path_to_build_folder(ino)?;
-
-                    let build_session = {
-                        let repo = fs.get_repo(ino.to_norm_u64())?;
-                        let mut repo = repo.lock().map_err(|_| anyhow!("Lock poisoned"))?;
-                        repo.get_or_init_build_session(parent_oid, &build_root)?
-                    };
-                    // TODO: Does it need path file?
-                    let path = build_session.finish_path(fs, ino)?;
-                    return Ok(Self {
-                        ino,
-                        parent_tree: Oid::zero(),
-                        parent_commit: Oid::zero(),
-                        snap_name: String::new(),
-                        build_root,
-                        path,
-                    });
-                }
-
                 let (parent_commit, _) = fs.get_parent_commit(ino.to_norm_u64())?;
                 let parent_tree = if oid == parent_commit {
                     let repo = fs.get_repo(ino.to_norm_u64())?;
@@ -68,12 +44,30 @@ impl LookupOperationCtx {
                     // else, get parent oid from db
                     fs.get_oid_from_db(ino.to_norm_u64())?
                 };
+                if oid == Oid::zero() {
+                    // We are in the build folder
+                    let parent_oid = fs.parent_commit_build_session(ino)?;
+                    let build_root = fs.get_path_to_build_folder(ino)?;
+
+                    let build_session = {
+                        let repo = fs.get_repo(ino.to_norm_u64())?;
+                        let mut repo = repo.lock().map_err(|_| anyhow!("Lock poisoned"))?;
+                        repo.get_or_init_build_session(parent_oid, &build_root)?
+                    };
+                    let path = build_session.finish_path(fs, ino)?;
+                    return Ok(Self {
+                        ino,
+                        parent_tree,
+                        parent_commit,
+                        build_root,
+                        path,
+                    });
+                }
 
                 Ok(Self {
                     ino,
                     parent_tree,
                     parent_commit,
-                    snap_name: String::new(),
                     build_root: PathBuf::new(),
                     path: PathBuf::new(),
                 })
@@ -81,12 +75,24 @@ impl LookupOperationCtx {
         }
     }
 
-    fn is_month(&self) -> bool {
+    pub fn is_month(&self) -> bool {
         self.parent_commit == Oid::zero() && self.parent_tree == Oid::zero()
     }
 
-    fn is_in_build(&self) -> bool {
+    pub fn is_in_build(&self) -> bool {
         self.build_root != PathBuf::new() && self.path != PathBuf::new()
+    }
+
+    pub fn path(&self) -> PathBuf {
+        self.path.clone()
+    }
+
+    pub fn parent_tree(&self) -> Oid {
+        self.parent_tree
+    }
+
+    pub fn parent_commit(&self) -> Oid {
+        self.parent_commit
     }
 }
 
@@ -181,7 +187,7 @@ pub fn lookup_live(fs: &GitFs, parent: NormalIno, name: &str) -> anyhow::Result<
 
 #[instrument(level = "debug", skip(fs), fields(parent = %parent), err(Display))]
 pub fn lookup_git(fs: &GitFs, parent: NormalIno, name: &str) -> anyhow::Result<Option<FileAttr>> {
-    let ctx = LookupOperationCtx::new(fs, parent)?;
+    let ctx = AttrOperationCtx::new(fs, parent)?;
     let child_ino = {
         let repo = fs.get_repo(parent.to_norm_u64())?;
         let repo = repo.lock().map_err(|_| anyhow!("Lock poisoned"))?;
@@ -201,12 +207,12 @@ pub fn lookup_git(fs: &GitFs, parent: NormalIno, name: &str) -> anyhow::Result<O
         return Ok(Some(attr));
     }
 
-    if ctx.is_in_build() {
-        let path = ctx.path.join(name);
-        let mut attr = fs.attr_from_path(path)?;
-        attr.ino = child_ino;
-        return Ok(Some(attr));
-    }
+    // if ctx.is_in_build() {
+    //     let path = ctx.path().join(name);
+    //     let mut attr = fs.attr_from_path(path)?;
+    //     attr.ino = child_ino;
+    //     return Ok(Some(attr));
+    // }
 
     let object_attr_res = {
         let repo = fs.get_repo(parent.to_norm_u64())?;
