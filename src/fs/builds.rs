@@ -23,7 +23,7 @@ pub struct BuildSession {
 }
 
 impl BuildSession {
-    pub fn finish_path(&self, fs: & GitFs, ino: NormalIno) -> anyhow::Result<PathBuf> {
+    pub fn finish_path(&self, fs: &GitFs, ino: NormalIno) -> anyhow::Result<PathBuf> {
         let temp_dir_path = self.folder.path().to_path_buf();
 
         let mut components = vec![];
@@ -114,4 +114,3 @@ impl BuildOperationCtx {
         self.temp_dir_path().join(p)
     }
 }
-
