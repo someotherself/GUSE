@@ -512,6 +512,9 @@ impl GitFs {
 
     #[instrument(level = "debug", skip(self), ret(level = Level::DEBUG), err(Display))]
     pub fn release(&self, fh: u64) -> anyhow::Result<bool> {
+        if fh == 0 {
+            return Ok(true)
+        }
         let ino = {
             let mut guard = self.handles.write().map_err(|_| anyhow!("Lock poisoned"))?;
             match guard.remove(&fh) {
