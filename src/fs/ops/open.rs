@@ -225,12 +225,9 @@ pub fn open_vdir(
     let repo = fs.get_repo(ino)?;
     let repo = repo.lock().map_err(|_| anyhow!("Lock poisoned"))?;
     let Some(v_node) = repo.vdir_cache.get(&parent) else {
-        tracing::error!("Open - no v_node for {} and {}", name, u64::from(parent));
         bail!("File not found!")
     };
-    tracing::info!("{}", v_node.log.is_empty());
     let Some((_, object)) = v_node.log.get(&name) else {
-        tracing::error!("Open - no log for {}", name);
         bail!("File not found!")
     };
     let oid = object.oid;

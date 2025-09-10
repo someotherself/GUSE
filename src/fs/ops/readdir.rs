@@ -2,7 +2,7 @@ use std::{collections::btree_map::Entry, ffi::OsString, path::Path};
 
 use anyhow::{anyhow, bail};
 use git2::{FileMode, Oid};
-use tracing::{Level, instrument};
+use tracing::{instrument, Level};
 
 use crate::{
     fs::{
@@ -197,7 +197,7 @@ fn read_build_dir(fs: &GitFs, ino: NormalIno) -> anyhow::Result<Vec<DirectoryEnt
         return Ok(out);
     };
 
-    let entries = populate_build_entries(fs, ino, &ctx.temp_dir_path())?;
+    let entries = populate_build_entries(fs, ino, &ctx.path())?;
     out.extend(entries);
     Ok(out)
 }
@@ -231,7 +231,6 @@ fn populate_build_entries(
 #[instrument(level = "debug", skip(fs), fields(ino = %ino), ret(level = Level::DEBUG), err(Display))]
 pub fn readdir_git_dir(fs: &GitFs, ino: NormalIno) -> anyhow::Result<Vec<DirectoryEntry>> {
     let ino = ino.to_norm_u64();
-
     let repo = fs.get_repo(ino)?;
     let git_objects = match classify_inode(fs, ino)? {
         DirCase::Month { year, month } => {
@@ -249,7 +248,7 @@ pub fn readdir_git_dir(fs: &GitFs, ino: NormalIno) -> anyhow::Result<Vec<Directo
                 // else, get parent oid from db
                 let tree_oid = oid;
                 let repo = repo.lock().map_err(|_| anyhow!("Lock poisoned"))?;
-                repo.list_tree(commit_oid, Some(tree_oid))?
+                repo.list_tree(commit_oid, Some(tree_oid)).unwrap_or_default()
             }
         }
     };

@@ -83,7 +83,7 @@ pub fn mkdir_git(
     let Some(ctx) = BuildOperationCtx::new(fs, parent)? else {
         bail!(std::io::Error::from_raw_os_error(EPERM))
     };
-    let dir_path = ctx.child_in_temp(name);
+    let dir_path = ctx.path().join(name);
 
     std::fs::create_dir(&dir_path)?;
     std::fs::set_permissions(dir_path, std::fs::Permissions::from_mode(0o775))?;

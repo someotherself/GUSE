@@ -54,7 +54,7 @@ pub fn create_git(
         bail!(std::io::Error::from_raw_os_error(EPERM))
     };
 
-    let file_path = ctx.child_in_temp(name);
+    let file_path = ctx.path().join(name);
     let ino = fs.next_inode_checked(parent.to_norm_u64())?;
     let mut attr: FileAttr = file_attr().into();
     attr.ino = ino;

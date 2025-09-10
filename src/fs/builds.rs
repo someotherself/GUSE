@@ -1,5 +1,5 @@
 use std::{
-    path::{Path, PathBuf},
+    path::PathBuf,
     sync::atomic::{AtomicBool, AtomicUsize},
 };
 
@@ -17,6 +17,7 @@ use crate::{
 
 #[derive(Debug)]
 pub struct BuildSession {
+    /// Relative path to tempdir
     pub folder: TempDir,
     pub open_count: AtomicUsize,
     pub pinned: AtomicBool,
@@ -44,9 +45,12 @@ impl BuildSession {
 
         components.reverse();
         let full_path = temp_dir_path.join(components.iter().collect::<PathBuf>());
-        tracing::info!("{}", full_path.display());
 
         Ok(full_path)
+    }
+
+    pub fn temp_dir(&self) -> PathBuf {
+        self.folder.path().to_path_buf()
     }
 }
 
@@ -59,8 +63,8 @@ enum TargetCommit {
 pub struct BuildOperationCtx {
     ino: NormalIno,
     target: TargetCommit,
-    build_root: PathBuf,
     temp_dir: PathBuf,
+    full_path: PathBuf,
 }
 
 impl BuildOperationCtx {
@@ -97,20 +101,17 @@ impl BuildOperationCtx {
             repo.get_or_init_build_session(oid, &build_root)?
         };
         let temp_dir = build_session.folder.path().to_path_buf();
+        let full_path = build_session.finish_path(fs, ino)?;
 
         Ok(Some(Self {
             ino,
             target,
-            build_root,
             temp_dir,
+            full_path,
         }))
     }
 
-    pub fn temp_dir_path(&self) -> PathBuf {
-        self.build_root.join(&self.temp_dir)
-    }
-
-    pub fn child_in_temp<P: AsRef<Path>>(&self, p: P) -> PathBuf {
-        self.temp_dir_path().join(p)
+    pub fn path(&self) -> PathBuf {
+        self.full_path.clone()
     }
 }

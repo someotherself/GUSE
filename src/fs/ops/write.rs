@@ -40,7 +40,7 @@ pub fn write_git(
     if ctx.file.is_blob() {
         bail!("Cannot write to blobs")
     }
-        if !ctx.write {
+    if !ctx.write {
         bail!("Write not permitted")
     };
     let bytes_written = ctx.file.write_at(buf, offset)?;
