@@ -322,7 +322,6 @@ impl GitRepo {
         let commit_time = commit_obj.time();
         let tree = commit_obj.tree()?;
 
-        // If they asked for the root tree itself
         if tree.id() == oid {
             return Ok(ObjectAttr {
                 name: ".".into(),
@@ -333,11 +332,9 @@ impl GitRepo {
                 commit_time,
             });
         }
-        // Search recursively for a matching entry id
         let mut found: Option<ObjectAttr> = None;
         let walk_res = tree.walk(TreeWalkMode::PreOrder, |root, entry| {
             if entry.id() == oid {
-                // ... build ObjectAttr into `found` exactly like you already do ...
                 found = Some(ObjectAttr {
                     name: format!("{}{}", root, entry.name().unwrap_or("<non-utf8>")),
                     oid,
@@ -353,7 +350,7 @@ impl GitRepo {
                     },
                     commit_time,
                 });
-                return TreeWalkResult::Abort; // triggers GIT_EUSER (-7)
+                return TreeWalkResult::Abort;
             }
             TreeWalkResult::Ok
         });
