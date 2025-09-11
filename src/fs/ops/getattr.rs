@@ -29,7 +29,6 @@ pub enum TargetGetAttr {
 
 pub struct GetAttrOperationCtx {
     ino: NormalIno,
-    parent_tree: Oid,
     parent_commit: Oid,
     build_root: PathBuf,
     temp_folder: PathBuf,
@@ -46,7 +45,6 @@ impl GetAttrOperationCtx {
                 // Target is one of the MONTH folders
                 return Ok(TargetGetAttr::InsideRepo(Self {
                     ino,
-                    parent_tree: Oid::zero(),
                     parent_commit: Oid::zero(),
                     build_root: PathBuf::new(),
                     temp_folder: PathBuf::new(),
@@ -56,7 +54,6 @@ impl GetAttrOperationCtx {
                 // Target is the build folder
                 return Ok(TargetGetAttr::InsideRepo(Self {
                     ino,
-                    parent_tree: Oid::zero(),
                     parent_commit: Oid::zero(),
                     build_root: PathBuf::new(),
                     temp_folder: PathBuf::new(),
@@ -69,7 +66,6 @@ impl GetAttrOperationCtx {
         if let Ok(DirCase::Month { year: _, month: _ }) = classify_inode(fs, parent_ino) {
             return Ok(TargetGetAttr::InsideMonth(Self {
                 ino,
-                parent_tree: Oid::zero(),
                 parent_commit: Oid::zero(),
                 build_root: PathBuf::new(),
                 temp_folder: PathBuf::new(),
@@ -79,7 +75,6 @@ impl GetAttrOperationCtx {
 
         let (parent_commit, _) = fs.get_parent_commit(ino.to_norm_u64())?;
         let oid = fs.get_oid_from_db(ino.to_norm_u64())?;
-        // let commit_oid = commit.id();
         let build_root = fs.get_path_to_build_folder(ino)?;
         let build_session = {
             let repo = fs.get_repo(ino.to_norm_u64())?;
@@ -87,10 +82,8 @@ impl GetAttrOperationCtx {
             repo.get_or_init_build_session(parent_commit, &build_root)?
         };
         if oid != Oid::zero() {
-            let parent_tree = fs.get_oid_from_db(parent_ino)?;
             Ok(TargetGetAttr::InsideSnap(Self {
                 ino,
-                parent_tree,
                 parent_commit,
                 build_root,
                 temp_folder: build_session.temp_dir(),
@@ -101,7 +94,6 @@ impl GetAttrOperationCtx {
             let path = build_session.finish_path(fs, ino)?;
             Ok(TargetGetAttr::InsideBuild(Self {
                 ino,
-                parent_tree: Oid::zero(),
                 parent_commit,
                 build_root,
                 temp_folder: build_session.temp_dir(),
@@ -116,10 +108,6 @@ impl GetAttrOperationCtx {
 
     pub fn path(&self) -> PathBuf {
         self.path.clone()
-    }
-
-    pub fn parent_tree(&self) -> Oid {
-        self.parent_tree
     }
 
     pub fn parent_commit(&self) -> Oid {
