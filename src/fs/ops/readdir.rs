@@ -2,7 +2,6 @@ use std::{collections::btree_map::Entry, ffi::OsString, path::Path};
 
 use anyhow::{anyhow, bail};
 use git2::{FileMode, Oid};
-use tracing::{Level, instrument};
 
 use crate::{
     fs::{
@@ -52,7 +51,6 @@ pub enum DirCase {
     Commit { oid: Oid },
 }
 
-#[instrument(level = "debug", skip(fs), ret(level = Level::DEBUG), err(Display))]
 pub fn readdir_root_dir(fs: &GitFs) -> anyhow::Result<Vec<DirectoryEntry>> {
     let mut entries: Vec<DirectoryEntry> = vec![];
     for repo in fs.repos_list.values() {
@@ -72,7 +70,6 @@ pub fn readdir_root_dir(fs: &GitFs) -> anyhow::Result<Vec<DirectoryEntry>> {
     Ok(entries)
 }
 
-#[instrument(level = "debug", skip(fs), fields(ino = %ino), ret(level = Level::DEBUG), err(Display))]
 pub fn readdir_repo_dir(fs: &GitFs, ino: u64) -> anyhow::Result<Vec<DirectoryEntry>> {
     let repo_id = (ino >> REPO_SHIFT) as u16;
 
@@ -139,10 +136,9 @@ pub fn readdir_repo_dir(fs: &GitFs, ino: u64) -> anyhow::Result<Vec<DirectoryEnt
     Ok(entries)
 }
 
-#[instrument(level = "debug", skip(fs), fields(ino = %ino), ret(level = Level::DEBUG), err(Display))]
 pub fn readdir_live_dir(fs: &GitFs, ino: NormalIno) -> anyhow::Result<Vec<DirectoryEntry>> {
     let ino = u64::from(ino);
-    let ignore_list = [OsString::from(".git"), OsString::from("fs_meta.db")];
+    let ignore_list = [OsString::from("build"), OsString::from(".git"), OsString::from("fs_meta.db")];
     let path = fs.build_full_path(ino)?;
     let mut entries: Vec<DirectoryEntry> = vec![];
     for node in path.read_dir()? {
@@ -228,7 +224,6 @@ fn populate_build_entries(
     Ok(out)
 }
 
-#[instrument(level = "debug", skip(fs), fields(ino = %ino), ret(level = Level::DEBUG), err(Display))]
 pub fn readdir_git_dir(fs: &GitFs, ino: NormalIno) -> anyhow::Result<Vec<DirectoryEntry>> {
     let ino = ino.to_norm_u64();
     let repo = fs.get_repo(ino)?;
