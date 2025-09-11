@@ -55,6 +55,12 @@ impl MetaDb {
         Ok(set)
     }
 
+    pub fn clear(&self) -> anyhow::Result<()> {
+        self.conn.execute("DELETE FROM inode_map", params![])?;
+        self.conn.execute_batch("VACUUM")?;
+        Ok(())
+    }
+
     pub fn get_parent_ino(&self, ino: u64) -> anyhow::Result<u64> {
         let mut stmt = self.conn.prepare(
             "SELECT parent_inode
