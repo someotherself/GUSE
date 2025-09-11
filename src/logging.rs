@@ -96,32 +96,33 @@ use tracing_subscriber::EnvFilter;
 // }
 
 pub fn init_logging(verbosity: u8) {
-    let level = match verbosity {
+    let my_level = match verbosity {
         0 => "info",
         1 => "debug",
         _ => "trace",
     };
+    let my_crate = "guse";
 
-    let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(level));
+    let mut filter = EnvFilter::try_from_default_env()
+        .unwrap_or_else(|_| EnvFilter::new("=warn,fuser=warn,git2=warn,tokio=info"));
 
-    tracing_subscriber::fmt::fmt()
+    filter = filter.add_directive(format!("{my_crate}={my_level}").parse().unwrap());
+
+    tracing_subscriber::fmt::Subscriber::builder()
         .with_env_filter(filter)
         .with_writer(std::io::stderr)
         .init();
 }
 
 // pub fn init_logging(buffer: LogBuffer) {
-//     // Our custom writer, which will append to `buffer`
 //     let writer = BufferWriter(buffer.clone());
 
-//     // Only record logs from `fuser` at DEBUG or higher
 //     let fuse_layer = tracing_subscriber::fmt::layer()
 //         .with_target(true)
 //         .with_ansi(false)              // disable colors, it’s UI territory
 //         .with_writer(writer)
 //         .with_filter(tracing_subscriber::filter::EnvFilter::new("fuser=debug"));
 
-//     // Send your own app logs to stdout as usual
 //     // let stdout_layer = tracing_subscriber::fmt::layer()
 //     //     .with_filter(tracing_subscriber::filter::EnvFilter::new("info"));
 
