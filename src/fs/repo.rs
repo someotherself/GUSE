@@ -13,7 +13,6 @@ use std::{
         atomic::{AtomicBool, AtomicUsize},
     },
 };
-use tracing::{Level, instrument};
 
 use crate::{
     fs::{ObjectAttr, builds::BuildSession, meta_db::MetaDb},
@@ -33,9 +32,6 @@ pub struct GitRepo {
     /// Vec<Oid> -> Vec<commit_oid> -> In case commits are made at the same time
     pub snapshots: BTreeMap<i64, Vec<Oid>>,
     /// Used inodes to prevent reading from DB
-    ///
-    /// Gets populated from DB when loading a repo
-    /// TODO: Remove inodes of virtual files at startup
     pub res_inodes: HashSet<u64>,
     /// key: inode of the virtual directory
     pub vdir_cache: BTreeMap<VirtualIno, VirtualNode>,
@@ -686,7 +682,6 @@ impl GitRepo {
         Ok(self.head_commit()?.tree()?)
     }
 
-    #[instrument(level = "debug", skip(self), fields(commit_oid = %commit_oid), ret(level = Level::DEBUG), err(Display))]
     pub fn get_or_init_build_session(
         &mut self,
         commit_oid: Oid,
@@ -700,7 +695,6 @@ impl GitRepo {
             Entry::Vacant(slot) => {
                 let folder = tempfile::Builder::new()
                     .prefix(&format!("build_{}", &commit_oid.to_string()[..=7]))
-                    .rand_bytes(4)
                     .tempdir_in(build_folder)?;
                 let session = Arc::new(BuildSession {
                     folder,
