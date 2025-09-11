@@ -783,16 +783,16 @@ impl GitFs {
     }
 
     #[instrument(
-    level = "debug",
-    skip(self, os_name),
-    fields(
-        parent,
-        name = %os_name.to_string_lossy(),
-        read_only = self.read_only
-    ),
-    ret(level = Level::DEBUG),
-    err(Display)
-)]
+        level = "debug",
+        skip(self, os_name),
+        fields(
+            parent,
+            name = %os_name.to_string_lossy(),
+            read_only = self.read_only
+        ),
+        ret(level = Level::DEBUG),
+        err(Display)
+    )]
     pub fn unlink(&self, parent: u64, os_name: &OsStr) -> anyhow::Result<()> {
         let parent: Inodes = parent.into();
 
@@ -818,7 +818,9 @@ impl GitFs {
                 bail!("Not allowed")
             }
             FsOperationContext::InsideLiveDir { ino } => ops::unlink::unlink_live(self, ino, name),
-            FsOperationContext::InsideGitDir { ino: _ } => ops::unlink::unlink_build_dir(self, parent.to_norm(), name)
+            FsOperationContext::InsideGitDir { ino: _ } => {
+                ops::unlink::unlink_build_dir(self, parent.to_norm(), name)
+            }
         }
     }
 
@@ -1142,7 +1144,6 @@ impl GitFs {
 // gitfs_path_builders
 impl GitFs {
     /// Build path to a folder or file that exists in the live folder
-    #[instrument(level = "debug", skip(self), fields(parent = %parent, parent = %parent), ret(level = Level::DEBUG), err(Display))]
     fn get_path_by_name_in_live(&self, parent: u64, name: &str) -> anyhow::Result<PathBuf> {
         let parent = self.clear_vdir_bit(parent);
         let repo_name = {
@@ -1580,7 +1581,19 @@ impl GitFs {
                 let path = self.build_full_path(ino)?;
                 Ok(path.exists())
             }
-            FsOperationContext::InsideGitDir { ino } => Ok(self.build_full_path(ino).is_ok()),
+            FsOperationContext::InsideGitDir { ino: _ } => {
+                if self.build_full_path(ino.to_u64_n()).is_ok() {
+                    Ok(true)
+                } else {
+                    let parent_oid = self.parent_commit_build_session(ino.to_norm())?;
+                    let build_root = self.get_path_to_build_folder(ino.to_norm())?;
+                    let repo = self.get_repo(ino.to_u64_n())?;
+                    let mut repo = repo.lock().map_err(|_| anyhow!("Lock poisoned"))?;
+                    let session = repo.get_or_init_build_session(parent_oid, &build_root)?;
+                    drop(repo);
+                    Ok(session.finish_path(self, ino.to_norm())?.exists())
+                }
+            }
         }
     }
 
@@ -1654,7 +1667,6 @@ impl GitFs {
         conn.remove_db_record(self.clear_vdir_bit(ino))
     }
 
-    #[instrument(level = "debug", skip(self), fields(ino = %ino), ret(level = Level::DEBUG), err(Display))]
     pub fn parent_commit_build_session(&self, ino: NormalIno) -> anyhow::Result<Oid> {
         let oid = self.get_oid_from_db(ino.to_norm_u64())?;
 
