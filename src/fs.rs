@@ -921,12 +921,14 @@ impl GitFs {
                 bail!("Not allowed")
             }
             FsOperationContext::RepoDir { ino: _ } => {
-                ops::rmdir::rmdir_live(self, parent.to_u64_n(), name)
+                bail!("Not allowed")
             }
             FsOperationContext::InsideLiveDir { ino: _ } => {
-                ops::rmdir::rmdir_live(self, parent.to_u64_n(), name)
+                ops::rmdir::rmdir_live(self, parent.to_norm(), name)
             }
-            FsOperationContext::InsideGitDir { ino: _ } => Ok(()),
+            FsOperationContext::InsideGitDir { ino: _ } => {
+                ops::rmdir::rmdir_git(self, parent.to_norm(), name)
+            }
         }
     }
 

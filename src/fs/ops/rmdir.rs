@@ -1,8 +1,12 @@
 use anyhow::{anyhow, bail};
 
-use crate::fs::GitFs;
+use crate::{
+    fs::GitFs,
+    inodes::{Inodes, NormalIno},
+};
 
-pub fn rmdir_live(fs: &GitFs, parent: u64, name: &str) -> anyhow::Result<()> {
+pub fn rmdir_live(fs: &GitFs, parent: NormalIno, name: &str) -> anyhow::Result<()> {
+    let parent = parent.to_norm_u64();
     let attr = fs
         .lookup(parent, name)?
         .ok_or_else(|| anyhow!(format!("{name} not found in parent {parent}")))?;
@@ -20,31 +24,27 @@ pub fn rmdir_live(fs: &GitFs, parent: u64, name: &str) -> anyhow::Result<()> {
     Ok(())
 }
 
-pub fn rmdir_repo(fs: &GitFs, parent: u64, name: &str) -> anyhow::Result<()> {
+pub fn rmdir_git(fs: &GitFs, parent: NormalIno, name: &str) -> anyhow::Result<()> {
     let attr = fs
-        .lookup(parent, name)?
+        .lookup(parent.to_norm_u64(), name)?
         .ok_or_else(|| anyhow!(format!("{name} not found in parent {parent}")))?;
-    if !fs.is_dir(attr.ino.into())? {
-        bail!("Not a directory")
-    }
-    let live_ino = fs.get_live_ino(parent);
-    if attr.ino == live_ino {
-        return Ok(());
+    let target_ino: Inodes = attr.ino.into();
+    if !fs.is_dir(target_ino)? {
+        bail!("Not a dir")
     }
 
-    let entries = fs.readdir(attr.ino)?;
-    let mut entries_len = entries.len();
-    for entry in &entries {
-        if entry.ino == live_ino || entries_len > 0 {
-            entries_len -= 1;
-        }
-    }
+    let path = {
+        let parent_oid = fs.parent_commit_build_session(parent)?;
+        let build_root = fs.get_path_to_build_folder(parent)?;
+        let repo = fs.get_repo(parent.to_norm_u64())?;
+        let mut repo = repo.lock().map_err(|_| anyhow!("Lock poisoned"))?;
+        let session = repo.get_or_init_build_session(parent_oid, &build_root)?;
+        drop(repo);
+        session.finish_path(fs, parent)?.join(name)
+    };
 
-    if !entries.is_empty() {
-        bail!("Parent is not empty")
-    }
-    let path = fs.build_full_path(attr.ino)?;
     std::fs::remove_dir(path)?;
 
+    fs.remove_db_record(attr.ino)?;
     Ok(())
 }
