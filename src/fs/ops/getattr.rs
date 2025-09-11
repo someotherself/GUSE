@@ -70,7 +70,7 @@ impl GetAttrOperationCtx {
                 build_root: PathBuf::new(),
                 temp_folder: PathBuf::new(),
                 path: PathBuf::new(),
-            }))
+            }));
         }
 
         let (parent_commit, _) = fs.get_parent_commit(ino.to_norm_u64())?;
@@ -157,7 +157,7 @@ pub fn getattr_git_dir(fs: &GitFs, ino: NormalIno) -> anyhow::Result<FileAttr> {
             Ok(attr)
         }
         TargetGetAttr::InsideBuild(ctx) => {
-            let mut attr = fs.attr_from_path(ctx.temp_folder())?;
+            let mut attr = fs.attr_from_path(ctx.path())?;
             attr.ino = ino.to_norm_u64();
             Ok(attr)
         }
