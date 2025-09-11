@@ -1597,9 +1597,7 @@ impl GitFs {
         }
     }
 
-    /// Needs to be passed the actual u64 inode
     fn is_dir(&self, ino: Inodes) -> anyhow::Result<bool> {
-        // let ino = self.clear_vdir_bit(ino);
         if ino == ROOT_INO {
             return Ok(true);
         }
