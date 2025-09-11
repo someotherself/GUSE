@@ -138,7 +138,11 @@ pub fn readdir_repo_dir(fs: &GitFs, ino: u64) -> anyhow::Result<Vec<DirectoryEnt
 
 pub fn readdir_live_dir(fs: &GitFs, ino: NormalIno) -> anyhow::Result<Vec<DirectoryEntry>> {
     let ino = u64::from(ino);
-    let ignore_list = [OsString::from("build"), OsString::from(".git"), OsString::from("fs_meta.db")];
+    let ignore_list = [
+        OsString::from("build"),
+        OsString::from(".git"),
+        OsString::from("fs_meta.db"),
+    ];
     let path = fs.build_full_path(ino)?;
     let mut entries: Vec<DirectoryEntry> = vec![];
     for node in path.read_dir()? {
