@@ -1,3 +1,5 @@
+use std::ffi::OsStr;
+
 use anyhow::{anyhow, bail};
 
 use crate::{fs::GitFs, inodes::NormalIno};
@@ -13,6 +15,13 @@ pub fn unlink_live(fs: &GitFs, parent: u64, name: &str) -> anyhow::Result<()> {
     std::fs::remove_file(path)?;
 
     fs.remove_db_record(attr.ino)?;
+
+    if let Some(notifier) = fs.notifier.get() {
+        let _ = notifier.inval_entry(parent, OsStr::new(name));
+        let _ = notifier.inval_inode(parent, 0, 0);
+        let _ = notifier.inval_inode(attr.ino, 0, 0);
+    }
+
     Ok(())
 }
 
@@ -35,6 +44,12 @@ pub fn unlink_build_dir(fs: &GitFs, parent: NormalIno, name: &str) -> anyhow::Re
     };
 
     std::fs::remove_file(path)?;
+
+    if let Some(notifier) = fs.notifier.get() {
+        let _ = notifier.inval_entry(parent.to_norm_u64(), OsStr::new(name));
+        let _ = notifier.inval_inode(parent.to_norm_u64(), 0, 0);
+        let _ = notifier.inval_inode(attr.ino, 0, 0);
+    }
 
     fs.remove_db_record(attr.ino)?;
     Ok(())

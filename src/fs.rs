@@ -1313,6 +1313,14 @@ impl GitFs {
         attr.gid = unsafe { libc::getgid() } as u32;
         attr.size = metadata.size();
 
+    if let Some(notifier) = self.notifier.get() {
+        let parent = self.get_parent_ino(attr.ino)?;
+        let name = self.get_name_from_db(attr.ino)?;
+        let _ = notifier.inval_entry(parent, OsStr::new(&name));
+        let _ = notifier.inval_inode(parent, 0, 0);
+        let _ = notifier.inval_inode(attr.ino, 0, 0);
+    }
+
         Ok(*attr)
     }
 

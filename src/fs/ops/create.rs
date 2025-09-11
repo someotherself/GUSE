@@ -1,4 +1,4 @@
-use std::{fs::File, os::unix::fs::PermissionsExt};
+use std::{ffi::OsStr, fs::File, os::unix::fs::PermissionsExt};
 
 use anyhow::{anyhow, bail};
 use libc::EPERM;
@@ -35,6 +35,12 @@ pub fn create_live(
     let nodes = vec![(parent, name.into(), attr)];
     fs.write_inodes_to_db(nodes)?;
 
+    if let Some(notifier) = fs.notifier.get() {
+        let _ = notifier.inval_entry(parent, OsStr::new(name));
+        let _ = notifier.inval_inode(parent, 0, 0);
+        let _ = notifier.inval_inode(attr.ino, 0, 0);
+    }
+
     let fh = fs.open(ino, read, write, false)?;
     Ok((attr, fh))
 }
@@ -65,6 +71,12 @@ pub fn create_git(
 
     let nodes = vec![(parent.to_norm_u64(), name.into(), attr)];
     fs.write_inodes_to_db(nodes)?;
+
+    if let Some(notifier) = fs.notifier.get() {
+        let _ = notifier.inval_entry(parent.to_norm_u64(), OsStr::new(name));
+        let _ = notifier.inval_inode(parent.to_norm_u64(), 0, 0);
+        let _ = notifier.inval_inode(attr.ino, 0, 0);
+    }
 
     let fh = fs.open(ino, read, write, false)?;
     Ok((attr, fh))

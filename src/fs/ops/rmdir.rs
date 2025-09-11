@@ -1,4 +1,5 @@
 use anyhow::{anyhow, bail};
+use std::ffi::OsStr;
 
 use crate::{
     fs::GitFs,
@@ -21,6 +22,13 @@ pub fn rmdir_live(fs: &GitFs, parent: NormalIno, name: &str) -> anyhow::Result<(
     std::fs::remove_dir(path)?;
 
     fs.remove_db_record(attr.ino)?;
+
+    if let Some(notifier) = fs.notifier.get() {
+        let _ = notifier.inval_entry(parent, OsStr::new(name));
+        let _ = notifier.inval_inode(parent, 0, 0);
+        let _ = notifier.inval_inode(attr.ino, 0, 0);
+    }
+
     Ok(())
 }
 
@@ -46,5 +54,12 @@ pub fn rmdir_git(fs: &GitFs, parent: NormalIno, name: &str) -> anyhow::Result<()
     std::fs::remove_dir(path)?;
 
     fs.remove_db_record(attr.ino)?;
+
+    if let Some(notifier) = fs.notifier.get() {
+        let _ = notifier.inval_entry(parent.to_norm_u64(), OsStr::new(name));
+        let _ = notifier.inval_inode(parent.to_norm_u64(), 0, 0);
+        let _ = notifier.inval_inode(attr.ino, 0, 0);
+    }
+
     Ok(())
 }

@@ -19,6 +19,11 @@ pub fn write_live(fs: &GitFs, ino: u64, offset: u64, buf: &[u8], fh: u64) -> any
         bail!("Invalid handle.")
     }
     let bytes_written = ctx.file.write_at(buf, offset)?;
+
+    if let Some(notifier) = fs.notifier.get() {
+        let _ = notifier.inval_inode(ino, 0, 0);
+    }
+
     // Look into syncing
     Ok(bytes_written)
 }
@@ -44,5 +49,10 @@ pub fn write_git(
         bail!("Write not permitted")
     };
     let bytes_written = ctx.file.write_at(buf, offset)?;
+
+    if let Some(notifier) = fs.notifier.get() {
+        let _ = notifier.inval_inode(ino.to_norm_u64(), 0, 0);
+    }
+
     Ok(bytes_written)
 }

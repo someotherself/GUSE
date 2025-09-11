@@ -8,7 +8,7 @@ use git2::Oid;
 use libc::{EACCES, EIO, EISDIR, ENOENT, ENOTDIR, O_DIRECTORY};
 use ratatui::crossterm::style::Stylize;
 use tracing::{Level, Span, info};
-use tracing::{debug, error, instrument, trace, warn};
+use tracing::{debug, error, trace, warn};
 
 use std::ffi::OsStr;
 use std::io::{BufRead, BufReader, ErrorKind, Read, Write};
@@ -27,7 +27,7 @@ use crate::fs::ops::readdir::{DirectoryEntry, DirectoryEntryPlus};
 use crate::fs::{GitFs, REPO_SHIFT, ROOT_INO, repo};
 use crate::internals::sock::{socket_path, start_control_server};
 
-const TTL: Duration = Duration::from_millis(100);
+const TTL: Duration = Duration::from_secs(3);
 
 pub struct MountPoint {
     mountpoint: PathBuf,
@@ -557,10 +557,7 @@ impl fuser::Filesystem for GitFsAdapter {
         let res = fs.read(ino, offset as u64, &mut buf, fh);
         drop(fs);
         match res {
-            Ok(n) => {
-                debug!("Read {n} bytes");
-                reply.data(&buf[..n])
-            }
+            Ok(n) => reply.data(&buf[..n]),
             Err(e) => {
                 error!(e = %e);
                 reply.error(errno_from_anyhow(&e))
