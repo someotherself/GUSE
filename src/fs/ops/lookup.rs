@@ -1,8 +1,8 @@
-use std::{collections::hash_map::Entry, os::unix::fs::MetadataExt, path::PathBuf};
+use std::{os::unix::fs::MetadataExt, path::PathBuf};
 
 use git2::Oid;
 
-use anyhow::anyhow;
+use anyhow::{anyhow, bail};
 use tracing::instrument;
 
 use crate::{
@@ -11,102 +11,100 @@ use crate::{
         fileattr::{dir_attr, file_attr},
         ops::readdir::{DirCase, classify_inode},
     },
-    inodes::{NormalIno, VirtualIno},
+    inodes::{Inodes, NormalIno, VirtualIno},
 };
 
 pub enum TargetAttr {
-    Month(AttrOperationCtx),
-    Build(AttrOperationCtx),
-    Snap(AttrOperationCtx),
-    InsideCommit(AttrOperationCtx),
+    /// Target is a MONTH folder, or the build folder
+    InsideRepo(LookOperationCtx),
+    /// One of the Snap folders
+    InsideMonth(LookOperationCtx),
+    /// Git object inside the Snap folder. Only includes git objects.
+    ///
+    /// Share the same parent as real files inside Build, but need different handling
+    InsideSnap(LookOperationCtx),
+    /// Real file inside the build folder
+    ///
+    /// Share the same parent as objects inside Snap, but need different handling
+    InsideBuild(LookOperationCtx),
 }
 
-pub struct AttrOperationCtx {
+pub struct LookOperationCtx {
     ino: NormalIno,
-    parent_tree: Oid,
     parent_commit: Oid,
     build_root: PathBuf,
     temp_folder: PathBuf,
     path: PathBuf,
 }
 
-impl AttrOperationCtx {
-    pub fn get_target(fs: &GitFs, ino: NormalIno) -> anyhow::Result<TargetAttr> {
-        let res = classify_inode(fs, ino.to_norm_u64())?;
-        match res {
-            DirCase::Month { year: _, month: _ } => Ok(TargetAttr::Month(Self {
-                ino,
-                parent_tree: Oid::zero(),
+impl LookOperationCtx {
+    pub fn get_target(fs: &GitFs, parent: NormalIno, name: &str) -> anyhow::Result<TargetAttr> {
+        let repo_ino = fs.get_repo_ino(parent.to_norm_u64())?;
+        let target_ino = fs.get_ino_from_db(parent.to_norm_u64(), name)?;
+        let target_ino: Inodes = target_ino.into();
+        if repo_ino == parent.to_norm_u64() {
+            if let Some((y, m)) = name.split_once('-')
+                && let (Ok(_), Ok(_)) = (y.parse::<i32>(), m.parse::<u32>())
+            {
+                return Ok(TargetAttr::InsideRepo(Self {
+                    ino: target_ino.to_norm(),
+                    parent_commit: Oid::zero(),
+                    build_root: PathBuf::new(),
+                    temp_folder: PathBuf::new(),
+                    path: PathBuf::new(),
+                }));
+            }
+            if name == "build" {
+                return Ok(TargetAttr::InsideRepo(Self {
+                    ino: target_ino.to_norm(),
+                    parent_commit: Oid::zero(),
+                    build_root: PathBuf::new(),
+                    temp_folder: PathBuf::new(),
+                    path: PathBuf::new(),
+                }));
+            }
+            bail!("Target {name} does not exist")
+        }
+
+        if let Ok(DirCase::Month { year: _, month: _ }) = classify_inode(fs, parent.to_norm_u64()) {
+            if !name.starts_with("Snap") {
+                bail!("Target {name} does not exist")
+            }
+            return Ok(TargetAttr::InsideMonth(Self {
+                ino: target_ino.to_norm(),
                 parent_commit: Oid::zero(),
                 build_root: PathBuf::new(),
                 temp_folder: PathBuf::new(),
                 path: PathBuf::new(),
-            })),
-            DirCase::Commit { oid } => {
-                let (parent_commit, _) = fs.get_parent_commit(ino.to_norm_u64())?;
-                if oid == Oid::zero() {
-                    // We are in the build folder
-                    let parent_oid = fs.parent_commit_build_session(ino)?;
-                    let build_root = fs.get_path_to_build_folder(ino)?;
-
-                    let build_session = {
-                        let repo = fs.get_repo(ino.to_norm_u64())?;
-                        let mut repo = repo.lock().map_err(|_| anyhow!("Lock poisoned"))?;
-                        repo.get_or_init_build_session(parent_oid, &build_root)?
-                    };
-                    let temp_folder = build_session.temp_dir();
-                    let path = build_session.finish_path(fs, ino)?;
-                    return Ok(TargetAttr::Build(Self {
-                        ino,
-                        parent_tree: Oid::zero(),
-                        parent_commit,
-                        build_root,
-                        temp_folder,
-                        path,
-                    }));
-                }
-                if fs.is_commit(ino, oid)? {
-                    let parent_tree = {
-                        let repo = fs.get_repo(ino.to_norm_u64())?;
-                        let repo = repo.lock().map_err(|_| anyhow!("Lock poisoned"))?;
-                        let commit = repo.inner.find_commit(oid)?;
-                        commit.tree_id()
-                    };
-                    let repo = fs.get_repo(ino.to_norm_u64())?;
-                    let mut repo = repo.lock().map_err(|_| anyhow!("Lock poisoned"))?;
-                    let temp_folder = if let Entry::Occupied(e) = { repo.build_sessions.entry(oid) }
-                    {
-                        e.get().folder.path().to_path_buf().clone()
-                    } else {
-                        PathBuf::new()
-                    };
-                    drop(repo);
-                    return Ok(TargetAttr::Snap(Self {
-                        ino,
-                        parent_tree,
-                        parent_commit: oid,
-                        build_root: PathBuf::new(),
-                        temp_folder,
-                        path: PathBuf::new(),
-                    }));
-                }
-
-                let parent_ino = fs.get_parent_ino(ino.to_norm_u64())?;
-                let parent_tree = fs.get_oid_from_db(parent_ino)?;
-                Ok(TargetAttr::InsideCommit(Self {
-                    ino,
-                    parent_tree,
-                    parent_commit,
-                    build_root: PathBuf::new(),
-                    temp_folder: PathBuf::new(),
-                    path: PathBuf::new(),
-                }))
-            }
+            }));
         }
-    }
 
-    pub fn is_month(&self) -> bool {
-        self.parent_commit == Oid::zero() && self.parent_tree == Oid::zero()
+        let (parent_commit, _) = fs.get_parent_commit(parent.to_norm_u64())?;
+        let oid = fs.get_oid_from_db(target_ino.to_u64_n())?;
+        let build_root = fs.get_path_to_build_folder(parent)?;
+        let build_session = {
+            let repo = fs.get_repo(parent.to_norm_u64())?;
+            let mut repo = repo.lock().map_err(|_| anyhow!("Lock poisoned"))?;
+            repo.get_or_init_build_session(parent_commit, &build_root)?
+        };
+        if oid != Oid::zero() {
+            Ok(TargetAttr::InsideSnap(Self {
+                ino: target_ino.to_norm(),
+                parent_commit,
+                build_root,
+                temp_folder: build_session.temp_dir(),
+                path: PathBuf::new(),
+            }))
+        } else {
+            let path = build_session.finish_path(fs, target_ino.to_norm())?;
+            Ok(TargetAttr::InsideBuild(Self {
+                ino: target_ino.to_norm(),
+                parent_commit,
+                build_root,
+                temp_folder: build_session.temp_dir(),
+                path,
+            }))
+        }
     }
 
     pub fn is_in_build(&self) -> bool {
@@ -115,10 +113,6 @@ impl AttrOperationCtx {
 
     pub fn path(&self) -> PathBuf {
         self.path.clone()
-    }
-
-    pub fn parent_tree(&self) -> Oid {
-        self.parent_tree
     }
 
     pub fn parent_commit(&self) -> Oid {
@@ -221,59 +215,34 @@ pub fn lookup_live(fs: &GitFs, parent: NormalIno, name: &str) -> anyhow::Result<
 
 #[instrument(level = "debug", skip(fs), fields(parent = %parent), err(Display))]
 pub fn lookup_git(fs: &GitFs, parent: NormalIno, name: &str) -> anyhow::Result<Option<FileAttr>> {
-    let child_ino = {
-        let repo = fs.get_repo(parent.to_norm_u64())?;
-        let repo = repo.lock().map_err(|_| anyhow!("Lock poisoned"))?;
-        let Ok(child_ino) = repo
-            .connection
-            .lock()
-            .map_err(|_| anyhow!("Lock poisoned"))?
-            .get_ino_from_db(parent.to_norm_u64(), name)
-        else {
-            return Ok(None);
-        };
-        child_ino
+    let Ok(ctx) = LookOperationCtx::get_target(fs, parent, name) else {
+        return Ok(None);
     };
-    let ctx = AttrOperationCtx::get_target(fs, parent)?;
 
     match ctx {
-        TargetAttr::Month(_) => {
+        TargetAttr::InsideRepo(ctx) => {
             let mut attr: FileAttr = dir_attr().into();
-            attr.ino = child_ino;
+            attr.ino = ctx.ino.to_norm_u64();
             Ok(Some(attr))
         }
-        TargetAttr::Snap(ctx) => {
-            let obj_attr_res = {
-                let repo = fs.get_repo(parent.to_norm_u64())?;
-                let repo = repo.lock().map_err(|_| anyhow!("Lock poisoned"))?;
-                repo.find_by_name(ctx.parent_tree, name)
-            };
-            let mut attr = match obj_attr_res {
-                // Check if the target is a git object
-                Ok(a) => fs.object_to_file_attr(child_ino, &a)?,
-                // Else check if it's in the temp folder
-                Err(_) => match fs.attr_from_path(ctx.temp_folder.join(name)) {
-                    Ok(a) => a,
-                    Err(_) => return Ok(None),
-                },
-            };
-            attr.ino = child_ino;
+        TargetAttr::InsideMonth(ctx) => {
+            let mut attr: FileAttr = dir_attr().into();
+            attr.ino = ctx.ino.to_norm_u64();
             Ok(Some(attr))
         }
-        TargetAttr::Build(ctx) => {
-            let mut attr = fs.attr_from_path(ctx.path().join(name))?;
-            attr.ino = child_ino;
-            Ok(Some(attr))
-        }
-        TargetAttr::InsideCommit(ctx) => {
+        TargetAttr::InsideSnap(ctx) => {
+            let oid = fs.get_oid_from_db(ctx.ino.to_norm_u64())?;
             let obj_attr = {
                 let repo = fs.get_repo(parent.to_norm_u64())?;
-                let oid = fs.get_oid_from_db(child_ino)?;
                 let repo = repo.lock().map_err(|_| anyhow!("Lock poisoned"))?;
                 repo.find_in_commit(ctx.parent_commit(), oid)?
             };
-            let mut attr = fs.object_to_file_attr(child_ino, &obj_attr)?;
-            attr.ino = child_ino;
+            let attr = fs.object_to_file_attr(ctx.ino.to_norm_u64(), &obj_attr)?;
+            Ok(Some(attr))
+        }
+        TargetAttr::InsideBuild(ctx) => {
+            let mut attr = fs.attr_from_path(ctx.path())?;
+            attr.ino = ctx.ino.to_norm_u64();
             Ok(Some(attr))
         }
     }
