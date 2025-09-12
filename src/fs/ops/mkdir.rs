@@ -1,4 +1,4 @@
-use std::ffi::OsStr;
+use std::ffi::OsString;
 use std::os::unix::fs::PermissionsExt;
 
 use anyhow::{anyhow, bail};
@@ -8,6 +8,7 @@ use crate::fs::builds::BuildOperationCtx;
 use crate::fs::fileattr::FileAttr;
 use crate::fs::{CreateFileAttr, GitFs, REPO_SHIFT, repo};
 use crate::inodes::NormalIno;
+use crate::mount::InvalMsg;
 
 pub fn mkdir_root(
     fs: &mut GitFs,
@@ -72,11 +73,9 @@ pub fn mkdir_live(
     let nodes = vec![(parent, name.into(), attr)];
     fs.write_inodes_to_db(nodes)?;
 
-    if let Some(notifier) = fs.notifier.get() {
-        let _ = notifier.inval_entry(parent, OsStr::new(name));
-        let _ = notifier.inval_inode(parent, 0, 0);
-        let _ = notifier.inval_inode(attr.ino, 0, 0);
-    }
+    let _ = fs.notifier.send(InvalMsg::Entry { parent: parent, name: OsString::from(name) });
+    let _ = fs.notifier.send(InvalMsg::Inode { ino: parent, off: 0, len: 0 });
+    let _ = fs.notifier.send(InvalMsg::Inode { ino: new_ino,  off: 0, len: 0 });
 
     Ok(attr)
 }
@@ -103,11 +102,9 @@ pub fn mkdir_git(
     let nodes = vec![(parent.to_norm_u64(), name.into(), attr)];
     fs.write_inodes_to_db(nodes)?;
 
-    if let Some(notifier) = fs.notifier.get() {
-        let _ = notifier.inval_entry(parent.to_norm_u64(), OsStr::new(name));
-        let _ = notifier.inval_inode(parent.to_norm_u64(), 0, 0);
-        let _ = notifier.inval_inode(attr.ino, 0, 0);
-    }
+    let _ = fs.notifier.send(InvalMsg::Entry { parent: parent.to_norm_u64(), name: OsString::from(name) });
+    let _ = fs.notifier.send(InvalMsg::Inode { ino: parent.to_norm_u64(), off: 0, len: 0 });
+    let _ = fs.notifier.send(InvalMsg::Inode { ino: new_ino,  off: 0, len: 0 });
 
     Ok(attr)
 }

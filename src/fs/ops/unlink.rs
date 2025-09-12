@@ -1,8 +1,9 @@
-use std::ffi::OsStr;
+
+use std::ffi::OsString;
 
 use anyhow::{anyhow, bail};
 
-use crate::{fs::GitFs, inodes::NormalIno};
+use crate::{fs::GitFs, inodes::NormalIno, mount::InvalMsg};
 
 pub fn unlink_live(fs: &GitFs, parent: u64, name: &str) -> anyhow::Result<()> {
     let attr = fs
@@ -16,11 +17,9 @@ pub fn unlink_live(fs: &GitFs, parent: u64, name: &str) -> anyhow::Result<()> {
 
     fs.remove_db_record(attr.ino)?;
 
-    if let Some(notifier) = fs.notifier.get() {
-        let _ = notifier.inval_entry(parent, OsStr::new(name));
-        let _ = notifier.inval_inode(parent, 0, 0);
-        let _ = notifier.inval_inode(attr.ino, 0, 0);
-    }
+    let _ = fs.notifier.send(InvalMsg::Entry { parent: parent, name: OsString::from(name) });
+    let _ = fs.notifier.send(InvalMsg::Inode { ino: parent, off: 0, len: 0 });
+    let _ = fs.notifier.send(InvalMsg::Inode { ino: attr.ino,  off: 0, len: 0 });
 
     Ok(())
 }
@@ -45,11 +44,9 @@ pub fn unlink_build_dir(fs: &GitFs, parent: NormalIno, name: &str) -> anyhow::Re
 
     std::fs::remove_file(path)?;
 
-    if let Some(notifier) = fs.notifier.get() {
-        let _ = notifier.inval_entry(parent.to_norm_u64(), OsStr::new(name));
-        let _ = notifier.inval_inode(parent.to_norm_u64(), 0, 0);
-        let _ = notifier.inval_inode(attr.ino, 0, 0);
-    }
+    let _ = fs.notifier.send(InvalMsg::Entry { parent: parent.to_norm_u64(), name: OsString::from(name) });
+    let _ = fs.notifier.send(InvalMsg::Inode { ino: parent.to_norm_u64(), off: 0, len: 0 });
+    let _ = fs.notifier.send(InvalMsg::Inode { ino: attr.ino,  off: 0, len: 0 });
 
     fs.remove_db_record(attr.ino)?;
     Ok(())

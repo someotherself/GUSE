@@ -10,7 +10,7 @@ use ratatui::crossterm::style::Stylize;
 use tracing::{Level, Span, info};
 use tracing::{debug, error, trace, warn};
 
-use std::ffi::OsStr;
+use std::ffi::{OsStr, OsString};
 use std::io::{BufRead, BufReader, ErrorKind, Read, Write};
 use std::iter::Skip;
 use std::os::linux::fs;
@@ -27,7 +27,7 @@ use crate::fs::ops::readdir::{DirectoryEntry, DirectoryEntryPlus};
 use crate::fs::{GitFs, REPO_SHIFT, ROOT_INO, repo};
 use crate::internals::sock::{socket_path, start_control_server};
 
-const TTL: Duration = Duration::from_secs(3);
+const TTL: Duration = Duration::from_secs(1);
 
 pub struct MountPoint {
     mountpoint: PathBuf,
@@ -115,6 +115,11 @@ fn fuse_allow_other_enabled() -> std::io::Result<bool> {
     Ok(false)
 }
 
+pub enum InvalMsg {
+    Entry { parent: u64, name: OsString },
+    Inode { ino: u64, off: i64, len: i64 },
+}
+
 #[derive(Clone)]
 pub struct GitFsAdapter {
     inner: Arc<Mutex<GitFs>>,
@@ -126,7 +131,7 @@ impl GitFsAdapter {
         read_only: bool,
         notifier: Arc<OnceLock<fuser::Notifier>>,
     ) -> anyhow::Result<Self> {
-        let fs = GitFs::new(repos_dir, read_only, Arc::new(OnceLock::new()))?;
+        let fs = GitFs::new(repos_dir, read_only, notifier)?;
         Ok(GitFsAdapter { inner: fs })
     }
 

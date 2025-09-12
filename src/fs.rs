@@ -1,6 +1,6 @@
 use std::collections::btree_map::Entry;
 use std::collections::{BTreeMap, HashSet};
-use std::ffi::OsStr;
+use std::ffi::{OsStr, OsString};
 use std::fs::File;
 use std::os::unix::fs::{FileExt, MetadataExt, PermissionsExt};
 use std::path::Path;
@@ -25,6 +25,7 @@ use crate::fs::meta_db::MetaDb;
 use crate::fs::ops::readdir::{DirectoryEntry, DirectoryEntryPlus};
 use crate::fs::repo::{GitRepo, VirtualNode};
 use crate::inodes::{Inodes, NormalIno, VirtualIno};
+use crate::mount::InvalMsg;
 use crate::namespec::NameSpec;
 
 pub mod builds;
@@ -119,7 +120,7 @@ pub struct GitFs {
     handles: RwLock<HashMap<u64, Handle>>, // (fh, Handle)
     read_only: bool,
     vfile_entry: RwLock<HashMap<VirtualIno, VFileEntry>>,
-    notifier: Arc<OnceLock<fuser::Notifier>>, // not used atm
+    notifier: crossbeam_channel::Sender<InvalMsg>
 }
 
 struct Handle {
@@ -200,6 +201,8 @@ impl GitFs {
         read_only: bool,
         notifier: Arc<OnceLock<fuser::Notifier>>,
     ) -> anyhow::Result<Arc<Mutex<Self>>> {
+        let (tx, rx) = crossbeam_channel::unbounded::<InvalMsg>();
+
         let mut fs = Self {
             repos_dir,
             repos_list: BTreeMap::new(),
@@ -209,8 +212,22 @@ impl GitFs {
             current_handle: AtomicU64::new(1),
             next_inode: HashMap::new(),
             vfile_entry: RwLock::new(HashMap::new()),
-            notifier,
+            notifier: tx.clone(),
         };
+
+    std::thread::spawn(move || {
+        while notifier.get().is_none() {
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        let n = notifier.get().unwrap().clone();
+        for msg in rx.iter() {
+            match msg {
+                InvalMsg::Entry { parent, name } => { let _ = n.inval_entry(parent, &name); }
+                InvalMsg::Inode { ino, off, len } => { let _ = n.inval_inode(ino, off as i64, len as i64); }
+            }
+        };
+    });
+
         fs.ensure_base_dirs_exist()?;
         for entry in fs.repos_dir.read_dir()? {
             let entry = entry?;
@@ -1313,13 +1330,11 @@ impl GitFs {
         attr.gid = unsafe { libc::getgid() } as u32;
         attr.size = metadata.size();
 
-        // if let Some(notifier) = self.notifier.get() {
-        //     let parent = self.get_parent_ino(attr.ino)?;
-        //     let name = self.get_name_from_db(attr.ino)?;
-        //     let _ = notifier.inval_entry(parent, OsStr::new(&name));
-        //     let _ = notifier.inval_inode(parent, 0, 0);
-        //     let _ = notifier.inval_inode(attr.ino, 0, 0);
-        // }
+        let parent = self.get_parent_ino(attr.ino)?;
+        let name = self.get_name_from_db(attr.ino)?;
+        let _ = self.notifier.send(InvalMsg::Entry { parent: parent, name: OsString::from(name) });
+        let _ = self.notifier.send(InvalMsg::Inode { ino: parent, off: 0, len: 0 });
+        let _ = self.notifier.send(InvalMsg::Inode { ino: attr.ino,  off: 0, len: 0 });
 
         Ok(*attr)
     }

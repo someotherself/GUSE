@@ -2,7 +2,7 @@ use std::os::unix::fs::FileExt;
 
 use anyhow::{anyhow, bail};
 
-use crate::{fs::GitFs, inodes::NormalIno};
+use crate::{fs::GitFs, inodes::NormalIno, mount::InvalMsg};
 
 pub fn write_live(fs: &GitFs, ino: u64, offset: u64, buf: &[u8], fh: u64) -> anyhow::Result<usize> {
     let guard = fs.handles.read().map_err(|_| anyhow!("Lock poisoned."))?;
@@ -20,9 +20,7 @@ pub fn write_live(fs: &GitFs, ino: u64, offset: u64, buf: &[u8], fh: u64) -> any
     }
     let bytes_written = ctx.file.write_at(buf, offset)?;
 
-    if let Some(notifier) = fs.notifier.get() {
-        let _ = notifier.inval_inode(ino, 0, 0);
-    }
+    let _ = fs.notifier.send(InvalMsg::Inode { ino: ino, off: 0, len: 0 });
 
     // Look into syncing
     Ok(bytes_written)
@@ -50,9 +48,7 @@ pub fn write_git(
     };
     let bytes_written = ctx.file.write_at(buf, offset)?;
 
-    if let Some(notifier) = fs.notifier.get() {
-        let _ = notifier.inval_inode(ino.to_norm_u64(), 0, 0);
-    }
+    let _ = fs.notifier.send(InvalMsg::Inode { ino: ino.to_norm_u64(), off: 0, len: 0 });
 
     Ok(bytes_written)
 }
