@@ -56,28 +56,24 @@ pub fn rename_live(
         vec![(new_parent.to_norm_u64(), new_name.to_string(), new_attr)];
     fs.write_inodes_to_db(nodes)?;
 
-if let Some(notifier) = fs.notifier.get() {
-    let p_old = parent.to_norm_u64();
-    let p_new = new_parent.to_norm_u64();
+    if let Some(notifier) = fs.notifier.get() {
+        let p_old = parent.to_norm_u64();
+        let p_new = new_parent.to_norm_u64();
 
-    let _ = notifier.inval_entry(p_old, OsStr::new(name));
-    let _ = notifier.inval_entry(p_new, OsStr::new(new_name));
+        let _ = notifier.inval_entry(p_old, OsStr::new(name));
+        let _ = notifier.inval_entry(p_new, OsStr::new(new_name));
 
-    // 2) Parent dir caches/metadata (nlink, mtime, size)
-    let _ = notifier.inval_inode(p_old, 0, 0);
-    if p_new != p_old {
-        let _ = notifier.inval_inode(p_new, 0, 0);
+        let _ = notifier.inval_inode(p_old, 0, 0);
+        if p_new != p_old {
+            let _ = notifier.inval_inode(p_new, 0, 0);
+        }
+
+        let _ = notifier.inval_inode(src_attr.ino, 0, 0);
+
+        if dest_exists {
+            let _ = notifier.inval_inode(dest_old_ino, 0, 0);
+        }
     }
-
-    // 3) Inodes
-    // Invalidate the old source inode (its path changed; attrs may change)
-    let _ = notifier.inval_inode(src_attr.ino, 0, 0);
-
-    // If we overwrote an existing destination, invalidate that old inode too
-    if dest_exists {
-        let _ = notifier.inval_inode(dest_old_ino, 0, 0);
-    }
-}
 
     Ok(())
 }
@@ -155,28 +151,24 @@ pub fn rename_git_build(
         vec![(new_parent.to_norm_u64(), new_name.to_string(), new_attr)];
     fs.write_inodes_to_db(nodes)?;
 
-if let Some(notifier) = fs.notifier.get() {
-    let p_old = parent.to_norm_u64();
-    let p_new = new_parent.to_norm_u64();
+    if let Some(notifier) = fs.notifier.get() {
+        let p_old = parent.to_norm_u64();
+        let p_new = new_parent.to_norm_u64();
 
-    let _ = notifier.inval_entry(p_old, OsStr::new(name));
-    let _ = notifier.inval_entry(p_new, OsStr::new(new_name));
+        let _ = notifier.inval_entry(p_old, OsStr::new(name));
+        let _ = notifier.inval_entry(p_new, OsStr::new(new_name));
 
-    // 2) Parent dir caches/metadata (nlink, mtime, size)
-    let _ = notifier.inval_inode(p_old, 0, 0);
-    if p_new != p_old {
-        let _ = notifier.inval_inode(p_new, 0, 0);
+        let _ = notifier.inval_inode(p_old, 0, 0);
+        if p_new != p_old {
+            let _ = notifier.inval_inode(p_new, 0, 0);
+        } 
+
+        let _ = notifier.inval_inode(src_attr.ino, 0, 0);
+
+        if dest_exists {
+            let _ = notifier.inval_inode(dest_old_ino, 0, 0);
+        }
     }
-
-    // 3) Inodes
-    // Invalidate the old source inode (its path changed; attrs may change)
-    let _ = notifier.inval_inode(src_attr.ino, 0, 0);
-
-    // If we overwrote an existing destination, invalidate that old inode too
-    if dest_exists {
-        let _ = notifier.inval_inode(dest_old_ino, 0, 0);
-    }
-}
 
     Ok(())
 }

@@ -1,3 +1,4 @@
+use std::ffi::OsStr;
 use std::os::unix::fs::PermissionsExt;
 
 use anyhow::{anyhow, bail};
@@ -71,6 +72,12 @@ pub fn mkdir_live(
     let nodes = vec![(parent, name.into(), attr)];
     fs.write_inodes_to_db(nodes)?;
 
+    if let Some(notifier) = fs.notifier.get() {
+        let _ = notifier.inval_entry(parent, OsStr::new(name));
+        let _ = notifier.inval_inode(parent, 0, 0);
+        let _ = notifier.inval_inode(attr.ino, 0, 0);
+    }
+
     Ok(attr)
 }
 
@@ -95,6 +102,12 @@ pub fn mkdir_git(
 
     let nodes = vec![(parent.to_norm_u64(), name.into(), attr)];
     fs.write_inodes_to_db(nodes)?;
+
+    if let Some(notifier) = fs.notifier.get() {
+        let _ = notifier.inval_entry(parent.to_norm_u64(), OsStr::new(name));
+        let _ = notifier.inval_inode(parent.to_norm_u64(), 0, 0);
+        let _ = notifier.inval_inode(attr.ino, 0, 0);
+    }
 
     Ok(attr)
 }
