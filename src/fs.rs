@@ -1611,38 +1611,8 @@ impl GitFs {
             return Ok(true);
         }
 
-        let ino: Inodes = ino.into();
-
-        let ctx = FsOperationContext::get_operation(self, ino);
-        match ctx? {
-            FsOperationContext::Root => Ok(true),
-            FsOperationContext::RepoDir { ino: _ } => Ok(true),
-            FsOperationContext::InsideLiveDir { ino } => {
-                let Ok(path) = self.build_full_path(ino) else {
-                        return Ok(false)
-                    };
-                Ok(path.exists())
-            }
-            FsOperationContext::InsideGitDir { ino: _ } => {
-                if self.build_full_path(ino.to_u64_n()).is_ok() {
-                    Ok(true)
-                } else {
-                    let Ok(parent_oid) = self.parent_commit_build_session(ino.to_norm()) else {
-                        return Ok(false)
-                    };
-                    let Ok(build_root) = self.get_path_to_build_folder(ino.to_norm()) else {
-                        return Ok(false)
-                    };
-                    let repo = self.get_repo(ino.to_u64_n())?;
-                    let mut repo = repo.lock().map_err(|_| anyhow!("Lock poisoned"))?;
-                    let Ok(session) = repo.get_or_init_build_session(parent_oid, &build_root) else {
-                        return Ok(false)
-                    };
-                    drop(repo);
-                    Ok(session.finish_path(self, ino.to_norm())?.exists())
-                }
-            }
-        }
+        let res = self.get_name_from_db(ino);
+        Ok(res.is_ok())
     }
 
     fn is_dir(&self, ino: Inodes) -> anyhow::Result<bool> {
