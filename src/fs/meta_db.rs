@@ -87,7 +87,7 @@ impl MetaDb {
         if let Some(ino) = ino_opt {
             Ok(ino as u64)
         } else {
-            bail!(format!("inode {parent} not found"))
+            bail!(format!("Could not find inode {parent} in db"))
         }
     }
 
@@ -105,7 +105,7 @@ impl MetaDb {
         if let Some(filemode) = filemode_opt {
             Ok(filemode)
         } else {
-            bail!(format!("inode {ino} not found"))
+            bail!(format!("Could not find mode for {ino}"))
         }
     }
 
@@ -120,7 +120,7 @@ impl MetaDb {
             .query_row(rusqlite::params![ino as i64], |row| row.get(0))
             .optional()?;
 
-        let oid_str = oid_str.ok_or_else(|| anyhow!(format!("inode {ino} not found")))?;
+        let oid_str = oid_str.ok_or_else(|| anyhow!(format!("Could not find Oid for {ino}")))?;
         Ok(git2::Oid::from_str(&oid_str)?)
     }
     pub fn get_name_from_db(&self, ino: u64) -> anyhow::Result<String> {
@@ -134,7 +134,7 @@ impl MetaDb {
             .query_row(rusqlite::params![ino as i64], |row| row.get(0))
             .optional()?;
 
-        let name_str = name_str.ok_or_else(|| anyhow!(format!("inode {ino} not found")))?;
+        let name_str = name_str.ok_or_else(|| anyhow!(format!("Could not find name for {ino}")))?;
         Ok(name_str.to_string())
     }
 
@@ -226,7 +226,7 @@ impl MetaDb {
             }
         }
         if components.is_empty() && ino != ROOT_INO {
-            bail!(format!("inode {ino} not found"))
+            bail!(format!("Could not build path for {ino}"))
         }
 
         components.reverse();
