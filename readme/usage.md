@@ -1,4 +1,13 @@
-# How to install and run GUSE
+Table of contents:
+
+- [How to install and run GUSE](#Running)
+
+- [Find commit history of a file](#Commit-history)
+
+- [Running a commit](#Compiling)
+
+
+# Running
 
 ## Install the app
 
@@ -151,10 +160,12 @@ cat 2024-06@
 
 cd 2024-06
 cat Snap001_75c953b@
--> Will output the same as git show 75c953b
+-> Will output the same as git show 75c953b (TODO)
 ``` 
 
-## Find commit history of a file
+## Commit-history
+
+Find commit history of a file
 
 When inside a Snap folder, the cd command can also be used on a file.
 This will create a folder with all the versions of that file from the commit history.
@@ -246,4 +257,29 @@ This operation only works when the app us running
 
 ```bash
 guse repo remove tokio
+```
+
+# Compiling
+
+The snap folders also have write permissions.
+
+### This is a temporary write location. Any files will be cleared at the start of the filesystem.
+
+Each commit can be compiled or ran, and tests can be performed.
+
+```bash
+cd MOUNT
+mkdir mkdir github.someotherself.GUSE.git
+cd GUSE/2025-09/Snap140_4e66c30/
+ls 
+Cargo.lock  Cargo.toml  LICENSE  README.md  readme  src
+cargo test
+   Compiling proc-macro2 v1.0.95
+   Compiling libc v0.2.175
+   Compiling pkg-config v0.3.32
+   Compiling vcpkg v0.2.15
+   Compiling writeable v0.6.1
+   Compiling rustversion v1.0.21
+   ....
+
 ```
