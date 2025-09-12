@@ -29,6 +29,7 @@ pub enum TargetGetAttr {
 
 pub struct GetAttrOperationCtx {
     ino: NormalIno,
+    obj_oid: Oid,
     parent_commit: Oid,
     build_root: PathBuf,
     temp_folder: PathBuf,
@@ -45,6 +46,7 @@ impl GetAttrOperationCtx {
                 // Target is one of the MONTH folders
                 return Ok(TargetGetAttr::InsideRepo(Self {
                     ino,
+                    obj_oid: Oid::zero(),
                     parent_commit: Oid::zero(),
                     build_root: PathBuf::new(),
                     temp_folder: PathBuf::new(),
@@ -54,6 +56,7 @@ impl GetAttrOperationCtx {
                 // Target is the build folder
                 return Ok(TargetGetAttr::InsideRepo(Self {
                     ino,
+                    obj_oid: Oid::zero(),
                     parent_commit: Oid::zero(),
                     build_root: PathBuf::new(),
                     temp_folder: PathBuf::new(),
@@ -66,6 +69,7 @@ impl GetAttrOperationCtx {
         if let Ok(DirCase::Month { year: _, month: _ }) = classify_inode(fs, parent_ino) {
             return Ok(TargetGetAttr::InsideMonth(Self {
                 ino,
+                obj_oid: Oid::zero(),
                 parent_commit: Oid::zero(),
                 build_root: PathBuf::new(),
                 temp_folder: PathBuf::new(),
@@ -84,6 +88,7 @@ impl GetAttrOperationCtx {
         if oid != Oid::zero() {
             Ok(TargetGetAttr::InsideSnap(Self {
                 ino,
+                obj_oid: oid,
                 parent_commit,
                 build_root,
                 temp_folder: build_session.temp_dir(),
@@ -94,6 +99,7 @@ impl GetAttrOperationCtx {
             let path = build_session.finish_path(fs, ino)?;
             Ok(TargetGetAttr::InsideBuild(Self {
                 ino,
+                obj_oid: oid,
                 parent_commit,
                 build_root,
                 temp_folder: build_session.temp_dir(),
@@ -146,11 +152,10 @@ pub fn getattr_git_dir(fs: &GitFs, ino: NormalIno) -> anyhow::Result<FileAttr> {
             Ok(attr)
         }
         TargetGetAttr::InsideSnap(ctx) => {
-            let oid = fs.get_oid_from_db(ino.to_norm_u64())?;
             let object_attr = {
                 let repo = fs.get_repo(ino.to_norm_u64())?;
                 let repo = repo.lock().map_err(|_| anyhow!("Lock poisoned"))?;
-                repo.find_in_commit(ctx.parent_commit(), oid)?
+                repo.find_in_commit(ctx.parent_commit(), ctx.obj_oid)?
             };
             let mut attr = fs.object_to_file_attr(ino.to_norm_u64(), &object_attr)?;
             attr.ino = ino.to_norm_u64();
