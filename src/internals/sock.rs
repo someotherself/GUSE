@@ -20,7 +20,6 @@ pub fn socket_path() -> anyhow::Result<PathBuf> {
         .map(PathBuf::from)
         .unwrap_or(PathBuf::from("/tmp"));
     let sock_dir = home.join(".local").join("share").join("guse");
-    tracing::info!("{}", sock_dir.exists());
     std::fs::create_dir_all(&sock_dir)?;
     Ok(sock_dir.join("control.sock"))
 }
