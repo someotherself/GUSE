@@ -3,7 +3,10 @@ use std::ffi::OsString;
 use anyhow::{anyhow, bail};
 
 use crate::{
-    fs::{FileAttr, GitFs, fileattr::FileType},
+    fs::{
+        FileAttr, GitFs,
+        fileattr::{FileType, dir_attr, file_attr},
+    },
     inodes::NormalIno,
     mount::InvalMsg,
 };
@@ -87,9 +90,11 @@ pub fn rename_live(
         fs.remove_db_record(dest_old_ino)?;
     }
 
-    let mut new_attr = fs.attr_from_path(dest)?;
-    let new_ino = fs.next_inode_checked(new_parent.to_norm_u64())?;
-    new_attr.ino = new_ino;
+    let mut new_attr: FileAttr = match src_attr.kind {
+        FileType::Directory => dir_attr().into(),
+        _ => file_attr().into(),
+    };
+    new_attr.ino = src_attr.ino;
 
     let nodes: Vec<(u64, String, FileAttr)> =
         vec![(new_parent.to_norm_u64(), new_name.to_string(), new_attr)];
@@ -201,8 +206,7 @@ pub fn rename_git_build(
     }
 
     let mut new_attr = fs.attr_from_path(dest)?;
-    let new_ino = fs.next_inode_checked(new_parent.to_norm_u64())?;
-    new_attr.ino = new_ino;
+    new_attr.ino = src_attr.ino;
 
     let nodes: Vec<(u64, String, FileAttr)> =
         vec![(new_parent.to_norm_u64(), new_name.to_string(), new_attr)];
