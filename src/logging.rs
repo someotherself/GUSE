@@ -103,8 +103,8 @@ pub fn init_logging(verbosity: u8) {
     };
     let my_crate = "guse";
 
-    let mut filter = EnvFilter::try_from_default_env()
-        .unwrap_or_else(|_| EnvFilter::new("warn,fuser=warn"));
+    let mut filter =
+        EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("warn,fuser=warn"));
 
     filter = filter.add_directive(format!("{my_crate}={my_level}").parse().unwrap());
 

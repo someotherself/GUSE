@@ -3,8 +3,9 @@ use std::ffi::OsString;
 use anyhow::{anyhow, bail};
 
 use crate::{
-    fs::{fileattr::FileType, FileAttr, GitFs},
-    inodes::NormalIno, mount::InvalMsg,
+    fs::{FileAttr, GitFs, fileattr::FileType},
+    inodes::NormalIno,
+    mount::InvalMsg,
 };
 
 pub fn rename_live(
@@ -43,6 +44,44 @@ pub fn rename_live(
 
     std::fs::rename(src, &dest)?;
 
+    {
+        let _ = fs.notifier.send(InvalMsg::Entry {
+            parent: parent.to_norm_u64(),
+            name: OsString::from(name),
+        });
+        let _ = fs.notifier.send(InvalMsg::Entry {
+            parent: new_parent.to_norm_u64(),
+            name: OsString::from(new_name),
+        });
+
+        let _ = fs.notifier.send(InvalMsg::Inode {
+            ino: parent.to_norm_u64(),
+            off: 0,
+            len: 0,
+        });
+        if new_parent.to_norm_u64() != parent.to_norm_u64() {
+            let _ = fs.notifier.send(InvalMsg::Inode {
+                ino: new_parent.to_norm_u64(),
+                off: 0,
+                len: 0,
+            });
+        }
+
+        let _ = fs.notifier.send(InvalMsg::Inode {
+            ino: src_attr.ino,
+            off: 0,
+            len: 0,
+        });
+
+        if dest_exists {
+            let _ = fs.notifier.send(InvalMsg::Inode {
+                ino: dest_old_ino,
+                off: 0,
+                len: 0,
+            });
+        }
+    }
+
     fs.remove_db_record(src_attr.ino)?;
     if dest_exists {
         fs.remove_db_record(dest_old_ino)?;
@@ -55,21 +94,6 @@ pub fn rename_live(
     let nodes: Vec<(u64, String, FileAttr)> =
         vec![(new_parent.to_norm_u64(), new_name.to_string(), new_attr)];
     fs.write_inodes_to_db(nodes)?;
-
-    let _ = fs.notifier.send(InvalMsg::Entry { parent: parent.to_norm_u64(), name: OsString::from(name) });
-    let _ = fs.notifier.send(InvalMsg::Entry { parent: new_parent.to_norm_u64(), name: OsString::from(new_name) });
-
-    let _ = fs.notifier.send(InvalMsg::Inode { ino: parent.to_norm_u64(), off: 0, len: 0 });
-    if new_parent.to_norm_u64() != parent.to_norm_u64() {
-        let _ = fs.notifier.send(InvalMsg::Inode { ino: new_parent.to_norm_u64(), off: 0, len: 0 });
-    }
-
-    let _ = fs.notifier.send(InvalMsg::Inode { ino: src_attr.ino, off: 0, len: 0 });
-
-    if dest_exists {
-        let _ = fs.notifier.send(InvalMsg::Inode { ino: dest_old_ino, off: 0, len: 0 });
-    }
-
     Ok(())
 }
 
@@ -132,6 +156,44 @@ pub fn rename_git_build(
 
     std::fs::rename(src, &dest)?;
 
+    {
+        let _ = fs.notifier.send(InvalMsg::Entry {
+            parent: parent.to_norm_u64(),
+            name: OsString::from(name),
+        });
+        let _ = fs.notifier.send(InvalMsg::Entry {
+            parent: new_parent.to_norm_u64(),
+            name: OsString::from(new_name),
+        });
+
+        let _ = fs.notifier.send(InvalMsg::Inode {
+            ino: parent.to_norm_u64(),
+            off: 0,
+            len: 0,
+        });
+        if new_parent.to_norm_u64() != parent.to_norm_u64() {
+            let _ = fs.notifier.send(InvalMsg::Inode {
+                ino: new_parent.to_norm_u64(),
+                off: 0,
+                len: 0,
+            });
+        }
+
+        let _ = fs.notifier.send(InvalMsg::Inode {
+            ino: src_attr.ino,
+            off: 0,
+            len: 0,
+        });
+
+        if dest_exists {
+            let _ = fs.notifier.send(InvalMsg::Inode {
+                ino: dest_old_ino,
+                off: 0,
+                len: 0,
+            });
+        }
+    }
+
     fs.remove_db_record(src_attr.ino)?;
 
     if dest_exists {
@@ -145,20 +207,6 @@ pub fn rename_git_build(
     let nodes: Vec<(u64, String, FileAttr)> =
         vec![(new_parent.to_norm_u64(), new_name.to_string(), new_attr)];
     fs.write_inodes_to_db(nodes)?;
-
-    let _ = fs.notifier.send(InvalMsg::Entry { parent: parent.to_norm_u64(), name: OsString::from(name) });
-    let _ = fs.notifier.send(InvalMsg::Entry { parent: new_parent.to_norm_u64(), name: OsString::from(new_name) });
-
-    let _ = fs.notifier.send(InvalMsg::Inode { ino: parent.to_norm_u64(), off: 0, len: 0 });
-    if new_parent.to_norm_u64() != parent.to_norm_u64() {
-        let _ = fs.notifier.send(InvalMsg::Inode { ino: new_parent.to_norm_u64(), off: 0, len: 0 });
-    }
-
-    let _ = fs.notifier.send(InvalMsg::Inode { ino: src_attr.ino, off: 0, len: 0 });
-
-    if dest_exists {
-        let _ = fs.notifier.send(InvalMsg::Inode { ino: dest_old_ino, off: 0, len: 0 });
-    }
 
     Ok(())
 }

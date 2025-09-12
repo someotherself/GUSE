@@ -5,9 +5,12 @@ use libc::EPERM;
 
 use crate::{
     fs::{
-        builds::BuildOperationCtx, fileattr::{file_attr, FileAttr}, GitFs
+        GitFs,
+        builds::BuildOperationCtx,
+        fileattr::{FileAttr, file_attr},
     },
-    inodes::NormalIno, mount::InvalMsg,
+    inodes::NormalIno,
+    mount::InvalMsg,
 };
 
 pub fn create_live(
@@ -33,9 +36,20 @@ pub fn create_live(
     let nodes = vec![(parent, name.into(), attr)];
     fs.write_inodes_to_db(nodes)?;
 
-    let _ = fs.notifier.send(InvalMsg::Entry { parent: parent, name: OsString::from(name) });
-    let _ = fs.notifier.send(InvalMsg::Inode { ino: parent, off: 0, len: 0 });
-    let _ = fs.notifier.send(InvalMsg::Inode { ino,  off: 0, len: 0 });
+    let _ = fs.notifier.send(InvalMsg::Entry {
+        parent,
+        name: OsString::from(name),
+    });
+    let _ = fs.notifier.send(InvalMsg::Inode {
+        ino: parent,
+        off: 0,
+        len: 0,
+    });
+    let _ = fs.notifier.send(InvalMsg::Inode {
+        ino,
+        off: 0,
+        len: 0,
+    });
 
     let fh = fs.open(ino, read, write, false)?;
     Ok((attr, fh))
@@ -68,9 +82,20 @@ pub fn create_git(
     let nodes = vec![(parent.to_norm_u64(), name.into(), attr)];
     fs.write_inodes_to_db(nodes)?;
 
-    let _ = fs.notifier.send(InvalMsg::Entry { parent: parent.to_norm_u64(), name: OsString::from(name) });
-    let _ = fs.notifier.send(InvalMsg::Inode { ino: parent.to_norm_u64(), off: 0, len: 0 });
-    let _ = fs.notifier.send(InvalMsg::Inode { ino,  off: 0, len: 0 });
+    let _ = fs.notifier.send(InvalMsg::Entry {
+        parent: parent.to_norm_u64(),
+        name: OsString::from(name),
+    });
+    let _ = fs.notifier.send(InvalMsg::Inode {
+        ino: parent.to_norm_u64(),
+        off: 0,
+        len: 0,
+    });
+    let _ = fs.notifier.send(InvalMsg::Inode {
+        ino,
+        off: 0,
+        len: 0,
+    });
 
     let fh = fs.open(ino, read, write, false)?;
     Ok((attr, fh))

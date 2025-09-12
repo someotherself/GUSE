@@ -120,7 +120,7 @@ pub struct GitFs {
     handles: RwLock<HashMap<u64, Handle>>, // (fh, Handle)
     read_only: bool,
     vfile_entry: RwLock<HashMap<VirtualIno, VFileEntry>>,
-    notifier: crossbeam_channel::Sender<InvalMsg>
+    notifier: crossbeam_channel::Sender<InvalMsg>,
 }
 
 struct Handle {
@@ -215,18 +215,22 @@ impl GitFs {
             notifier: tx.clone(),
         };
 
-    std::thread::spawn(move || {
-        while notifier.get().is_none() {
-            std::thread::sleep(std::time::Duration::from_millis(10));
-        }
-        let n = notifier.get().unwrap().clone();
-        for msg in rx.iter() {
-            match msg {
-                InvalMsg::Entry { parent, name } => { let _ = n.inval_entry(parent, &name); }
-                InvalMsg::Inode { ino, off, len } => { let _ = n.inval_inode(ino, off as i64, len as i64); }
+        std::thread::spawn(move || {
+            while notifier.get().is_none() {
+                std::thread::sleep(std::time::Duration::from_millis(10));
             }
-        };
-    });
+            let n = notifier.get().unwrap().clone();
+            for msg in rx.iter() {
+                match msg {
+                    InvalMsg::Entry { parent, name } => {
+                        let _ = n.inval_entry(parent, &name);
+                    }
+                    InvalMsg::Inode { ino, off, len } => {
+                        let _ = n.inval_inode(ino, off, len);
+                    }
+                }
+            }
+        });
 
         fs.ensure_base_dirs_exist()?;
         for entry in fs.repos_dir.read_dir()? {
@@ -1332,9 +1336,20 @@ impl GitFs {
 
         let parent = self.get_parent_ino(attr.ino)?;
         let name = self.get_name_from_db(attr.ino)?;
-        let _ = self.notifier.send(InvalMsg::Entry { parent: parent, name: OsString::from(name) });
-        let _ = self.notifier.send(InvalMsg::Inode { ino: parent, off: 0, len: 0 });
-        let _ = self.notifier.send(InvalMsg::Inode { ino: attr.ino,  off: 0, len: 0 });
+        let _ = self.notifier.send(InvalMsg::Entry {
+            parent,
+            name: OsString::from(name),
+        });
+        let _ = self.notifier.send(InvalMsg::Inode {
+            ino: parent,
+            off: 0,
+            len: 0,
+        });
+        let _ = self.notifier.send(InvalMsg::Inode {
+            ino: attr.ino,
+            off: 0,
+            len: 0,
+        });
 
         Ok(*attr)
     }
