@@ -4,8 +4,10 @@
 
 ## Dependencies
 
-This project uses [libgit2](https://libgit2.org/) (via the `git2` crate) and
+
+This project required fuse3 and uses [libgit2](https://libgit2.org/) (via the `git2` crate) and
 [SQLite](https://sqlite.org/) (via the `rusqlite` crate).
+
 
 ## OS
 This project has support for linux/macOS. On windows, consider using WSL2.
@@ -18,7 +20,8 @@ GUSE is a learning project. It is built to allow user to interact with git direc
 
 Inspired by [rencfs](https://github.com/xoriors/rencfs)
 
-GUSE allows mounting of multiple 'repositories' and manage them independently
+GUSE allows mounting of multiple repositories and manage them independently
+
 ### The disk structure, as observed by the user is:
 ``` text
 data_dir (Root folder. Can be renamed)
