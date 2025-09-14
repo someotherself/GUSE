@@ -163,3 +163,16 @@ pub fn build_attr_dir(ino: u64, st_mode: u32) -> FileAttr {
         flags: 0,
     }
 }
+
+struct DbAttr {
+    pub ino: u64,
+    pub oid: Oid,
+    pub mode: u32,
+    pub filemode: u32,
+    pub ino_mask: u64,
+    pub nlink: u32,
+    pub uid: u32,
+    pub gid: u32,
+    pub rdev: u32,
+    pub flags: u32,
+}
