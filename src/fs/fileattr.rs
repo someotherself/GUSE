@@ -118,6 +118,36 @@ impl From<CreateFileAttr> for FileAttr {
     }
 }
 
+// impl From<StoredAttr> for FileAttr {
+//     fn from(value: StoredAttr) -> Self {
+//         let now = SystemTime::now();
+//         let kind = todo!();
+//         Self {
+//             ino: 0,
+//             oid: Oid::zero(),
+//             size: 0,
+//             blocks: 0,
+//             atime: now,
+//             mtime: now,
+//             ctime: now,
+//             crtime: now,
+//             kind: kind,
+//             perm: value.perm,
+//             mode: value.mode,
+//             nlink: if value.kind == FileType::Directory {
+//                 2
+//             } else {
+//                 1
+//             },
+//             uid: unsafe { libc::getuid() },
+//             gid: unsafe { libc::getgid() },
+//             rdev: value.rdev,
+//             blksize: 0,
+//             flags: value.flags,
+//         }
+//     }
+// }
+
 fn build_attr_file(ino: u64, st_mode: u32) -> FileAttr {
     let now = SystemTime::now();
     FileAttr {
@@ -164,7 +194,8 @@ pub fn build_attr_dir(ino: u64, st_mode: u32) -> FileAttr {
     }
 }
 
-struct DbAttr {
+/// Used for inodes table in meta_db
+struct StoredAttr {
     pub ino: u64,
     pub oid: Oid,
     pub mode: u32,
@@ -175,4 +206,18 @@ struct DbAttr {
     pub gid: u32,
     pub rdev: u32,
     pub flags: u32,
+}
+
+/// Used for dentries table in meta_db
+struct DirEntries {
+    pub target_ino: u64, // ino from StoredAttr
+    pub parent_ino: u64,
+    pub name: String,
+}
+
+/// Used for passing to Gitfs::write_inodes_to_db()
+struct Storage {
+    parent_ino: u64,
+    name: String,
+    attr: StoredAttr,
 }
