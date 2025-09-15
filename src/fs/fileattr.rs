@@ -6,6 +6,7 @@ use git2::{ObjectType, Oid};
 pub struct FileAttr {
     // Inode in the fuse fs
     pub ino: u64,
+    pub ino_mask: InoMask,
     // SHA-1 in git
     pub oid: Oid,
     // Blob size
@@ -17,7 +18,7 @@ pub struct FileAttr {
     pub crtime: SystemTime,
     pub kind: FileType,
     pub perm: u16,
-    pub mode: u32,
+    pub git_mode: u32,
     pub nlink: u32,
     pub uid: u32,
     pub gid: u32,
@@ -31,7 +32,7 @@ pub struct ObjectAttr {
     pub name: String,
     pub oid: Oid,
     pub kind: git2::ObjectType,
-    pub filemode: u32,
+    pub git_mode: u32,
     pub size: u64,
     pub commit_time: git2::Time,
 }
@@ -54,9 +55,10 @@ impl FileType {
     }
 }
 
-pub const fn dir_attr() -> CreateFileAttr {
+pub const fn dir_attr(ino_mask: InoMask) -> CreateFileAttr {
     CreateFileAttr {
         kind: FileType::Directory,
+        ino_mask,
         perm: 0o775,
         uid: 0,
         mode: libc::S_IFDIR,
@@ -66,9 +68,10 @@ pub const fn dir_attr() -> CreateFileAttr {
     }
 }
 
-pub const fn file_attr() -> CreateFileAttr {
+pub const fn file_attr(ino_mask: InoMask) -> CreateFileAttr {
     CreateFileAttr {
         kind: FileType::RegularFile,
+        ino_mask,
         perm: 0o655,
         uid: 0,
         mode: libc::S_IFREG,
@@ -81,6 +84,7 @@ pub const fn file_attr() -> CreateFileAttr {
 #[derive(Debug, Clone)]
 pub struct CreateFileAttr {
     pub kind: FileType,
+    pub ino_mask: InoMask,
     pub perm: u16,
     pub mode: u32,
     pub uid: u32,
@@ -94,6 +98,7 @@ impl From<CreateFileAttr> for FileAttr {
         let now = SystemTime::now();
         Self {
             ino: 0,
+            ino_mask: value.ino_mask,
             oid: Oid::zero(),
             size: 0,
             blocks: 0,
@@ -103,7 +108,7 @@ impl From<CreateFileAttr> for FileAttr {
             crtime: now,
             kind: value.kind,
             perm: value.perm,
-            mode: value.mode,
+            git_mode: value.mode,
             nlink: if value.kind == FileType::Directory {
                 2
             } else {
@@ -118,40 +123,11 @@ impl From<CreateFileAttr> for FileAttr {
     }
 }
 
-// impl From<StoredAttr> for FileAttr {
-//     fn from(value: StoredAttr) -> Self {
-//         let now = SystemTime::now();
-//         let kind = todo!();
-//         Self {
-//             ino: 0,
-//             oid: Oid::zero(),
-//             size: 0,
-//             blocks: 0,
-//             atime: now,
-//             mtime: now,
-//             ctime: now,
-//             crtime: now,
-//             kind: kind,
-//             perm: value.perm,
-//             mode: value.mode,
-//             nlink: if value.kind == FileType::Directory {
-//                 2
-//             } else {
-//                 1
-//             },
-//             uid: unsafe { libc::getuid() },
-//             gid: unsafe { libc::getgid() },
-//             rdev: value.rdev,
-//             blksize: 0,
-//             flags: value.flags,
-//         }
-//     }
-// }
-
-fn build_attr_file(ino: u64, st_mode: u32) -> FileAttr {
+fn build_attr_file(ino: u64, ino_mask: InoMask, st_mode: u32) -> FileAttr {
     let now = SystemTime::now();
     FileAttr {
         ino,
+        ino_mask,
         oid: Oid::zero(),
         size: 0,
         blocks: 0,
@@ -161,7 +137,7 @@ fn build_attr_file(ino: u64, st_mode: u32) -> FileAttr {
         crtime: now,
         kind: FileType::RegularFile,
         perm: 0o655,
-        mode: st_mode,
+        git_mode: st_mode,
         nlink: 1,
         uid: unsafe { libc::getuid() } as u32,
         gid: unsafe { libc::getgid() } as u32,
@@ -171,10 +147,11 @@ fn build_attr_file(ino: u64, st_mode: u32) -> FileAttr {
     }
 }
 
-pub fn build_attr_dir(ino: u64, st_mode: u32) -> FileAttr {
+pub fn build_attr_dir(ino: u64, ino_mask: InoMask, st_mode: u32) -> FileAttr {
     let now = SystemTime::now();
     FileAttr {
         ino,
+        ino_mask,
         oid: Oid::zero(),
         size: 0,
         blocks: 0,
@@ -184,7 +161,7 @@ pub fn build_attr_dir(ino: u64, st_mode: u32) -> FileAttr {
         crtime: now,
         kind: FileType::Directory,
         perm: 0o775,
-        mode: st_mode,
+        git_mode: st_mode,
         nlink: 2,
         uid: unsafe { libc::getuid() } as u32,
         gid: unsafe { libc::getgid() } as u32,
@@ -195,13 +172,12 @@ pub fn build_attr_dir(ino: u64, st_mode: u32) -> FileAttr {
 }
 
 /// Used for inodes table in meta_db
-struct StoredAttr {
+pub struct StoredAttr {
     pub ino: u64,
+    pub ino_mask: InoMask,
     pub oid: Oid,
-    pub mode: u32,
-    pub filemode: u32,
-    pub ino_mask: u64,
-    pub nlink: u32,
+    pub size: u64,
+    pub git_mode: u32,
     pub uid: u32,
     pub gid: u32,
     pub rdev: u32,
@@ -216,8 +192,62 @@ struct DirEntries {
 }
 
 /// Used for passing to Gitfs::write_inodes_to_db()
-struct Storage {
-    parent_ino: u64,
-    name: String,
-    attr: StoredAttr,
+pub struct StorageNode {
+    pub parent_ino: u64,
+    pub name: String,
+    pub attr: StoredAttr,
+}
+
+impl From<FileAttr> for StoredAttr {
+    fn from(value: FileAttr) -> Self {
+        Self {
+            ino: value.ino,
+            ino_mask: value.ino_mask,
+            oid: value.oid,
+            size: value.size,
+            git_mode: value.git_mode,
+            uid: value.uid,
+            gid: value.gid,
+            rdev: value.rdev,
+            flags: value.flags,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[repr(u64)]
+pub enum InoMask {
+    Root = 1 << 0,
+    RepoRoot = 1 << 1,
+    LiveRoot = 1 << 2,
+    BuildRoot = 1 << 3,
+    MonthFolder = 1 << 4,
+    SnapFolder = 1 << 5,
+    InsideSnap = 1 << 6,
+    InsideBuild = 1 << 7,
+    InsideLive = 1 << 8,
+    VirtualFile = 1 << 9,
+}
+
+impl TryFrom<u64> for InoMask {
+    type Error = ();
+    fn try_from(v: u64) -> Result<Self, Self::Error> {
+        match v {
+            x if x == InoMask::RepoRoot as u64 => Ok(InoMask::RepoRoot),
+            x if x == InoMask::LiveRoot as u64 => Ok(InoMask::RepoRoot),
+            x if x == InoMask::BuildRoot as u64 => Ok(InoMask::RepoRoot),
+            x if x == InoMask::MonthFolder as u64 => Ok(InoMask::MonthFolder),
+            x if x == InoMask::SnapFolder as u64 => Ok(InoMask::SnapFolder),
+            x if x == InoMask::InsideSnap as u64 => Ok(InoMask::InsideSnap),
+            x if x == InoMask::InsideBuild as u64 => Ok(InoMask::InsideBuild),
+            x if x == InoMask::InsideLive as u64 => Ok(InoMask::InsideLive),
+            _ => Err(()),
+        }
+    }
+}
+
+impl From<InoMask> for u64 {
+    fn from(v: InoMask) -> u64 {
+        v as u64
+    }
 }
