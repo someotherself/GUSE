@@ -1,5 +1,6 @@
 use std::time::SystemTime;
 
+use anyhow::bail;
 use git2::{ObjectType, Oid};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -230,7 +231,7 @@ pub enum InoMask {
 }
 
 impl TryFrom<u64> for InoMask {
-    type Error = ();
+    type Error = anyhow::Error;
     fn try_from(v: u64) -> Result<Self, Self::Error> {
         match v {
             x if x == InoMask::RepoRoot as u64 => Ok(InoMask::RepoRoot),
@@ -241,7 +242,7 @@ impl TryFrom<u64> for InoMask {
             x if x == InoMask::InsideSnap as u64 => Ok(InoMask::InsideSnap),
             x if x == InoMask::InsideBuild as u64 => Ok(InoMask::InsideBuild),
             x if x == InoMask::InsideLive as u64 => Ok(InoMask::InsideLive),
-            _ => Err(()),
+            _ => bail!("Unknown InoMask valueL {v:#x}"),
         }
     }
 }
@@ -249,5 +250,21 @@ impl TryFrom<u64> for InoMask {
 impl From<InoMask> for u64 {
     fn from(v: InoMask) -> u64 {
         v as u64
+    }
+}
+
+pub fn try_into_filetype(mode: u64) -> Option<FileType> {
+    let m = u32::try_from(mode).ok()?;
+    match m {
+        0o040000 => Some(FileType::Directory),
+        0o100644 | 0o100755 | 0o120000 | 0o160000 => Some(FileType::RegularFile),
+        _ => {
+            let typ = m & 0o170000;
+            match typ {
+                0o040000 => Some(FileType::Directory),
+                0o120000 | 0o160000 | 0o100000 => Some(FileType::RegularFile),
+                _ => None,
+            }
+        }
     }
 }
