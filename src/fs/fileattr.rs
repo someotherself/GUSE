@@ -185,6 +185,14 @@ pub struct StoredAttr {
     pub flags: u32,
 }
 
+pub struct SetStoredAttr {
+    pub ino: u64,
+    pub size: Option<u64>,
+    pub uid: Option<u32>,
+    pub gid: Option<u32>,
+    pub flags: Option<u32>,
+}
+
 /// Used for dentries table in meta_db
 struct DirEntries {
     pub target_ino: u64, // ino from StoredAttr
@@ -229,14 +237,36 @@ pub enum InoMask {
     InsideLive = 1 << 8,
     VirtualFile = 1 << 9,
 }
+impl InoMask {
+    pub const fn as_str(&self) -> &'static str {
+        match *self {
+            InoMask::Root => "Root",
+            InoMask::RepoRoot => "RepoRoot",
+            InoMask::LiveRoot => "LiveRoot",
+            InoMask::BuildRoot => "BuildRoot",
+            InoMask::MonthFolder => "MonthFolder",
+            InoMask::SnapFolder => "SnapFolder",
+            InoMask::InsideSnap => "InsideSnap",
+            InoMask::InsideBuild => "InsideBuild",
+            InoMask::InsideLive => "InsideLive",
+            InoMask::VirtualFile => "VirtualFile",
+        }
+    }
+}
+
+impl std::fmt::Display for InoMask {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
 
 impl TryFrom<u64> for InoMask {
     type Error = anyhow::Error;
     fn try_from(v: u64) -> Result<Self, Self::Error> {
         match v {
             x if x == InoMask::RepoRoot as u64 => Ok(InoMask::RepoRoot),
-            x if x == InoMask::LiveRoot as u64 => Ok(InoMask::RepoRoot),
-            x if x == InoMask::BuildRoot as u64 => Ok(InoMask::RepoRoot),
+            x if x == InoMask::LiveRoot as u64 => Ok(InoMask::LiveRoot),
+            x if x == InoMask::BuildRoot as u64 => Ok(InoMask::BuildRoot),
             x if x == InoMask::MonthFolder as u64 => Ok(InoMask::MonthFolder),
             x if x == InoMask::SnapFolder as u64 => Ok(InoMask::SnapFolder),
             x if x == InoMask::InsideSnap as u64 => Ok(InoMask::InsideSnap),
