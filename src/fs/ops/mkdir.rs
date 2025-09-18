@@ -5,7 +5,7 @@ use anyhow::{anyhow, bail};
 use libc::EPERM;
 
 use crate::fs::builds::BuildOperationCtx;
-use crate::fs::fileattr::FileAttr;
+use crate::fs::fileattr::{FileAttr, StorageNode};
 use crate::fs::{CreateFileAttr, GitFs, REPO_SHIFT, repo};
 use crate::inodes::NormalIno;
 use crate::mount::InvalMsg;
@@ -61,7 +61,7 @@ pub fn mkdir_live(
     name: &str,
     create_attr: CreateFileAttr,
 ) -> anyhow::Result<FileAttr> {
-    let dir_path = fs.get_path_by_name_in_live(parent, name)?;
+    let dir_path = fs.get_live_path(parent.into())?.join(name);
     std::fs::create_dir(&dir_path)?;
     std::fs::set_permissions(dir_path, std::fs::Permissions::from_mode(0o775))?;
     let new_ino = fs.next_inode_checked(parent)?;
@@ -70,7 +70,11 @@ pub fn mkdir_live(
 
     attr.ino = new_ino;
 
-    let nodes = vec![(parent, name.into(), attr)];
+    let nodes = vec![StorageNode {
+        parent_ino: parent,
+        name: name.into(),
+        attr: attr.into(),
+    }];
     fs.write_inodes_to_db(nodes)?;
 
     let _ = fs.notifier.send(InvalMsg::Entry {
@@ -110,7 +114,11 @@ pub fn mkdir_git(
 
     attr.ino = new_ino;
 
-    let nodes = vec![(parent.to_norm_u64(), name.into(), attr)];
+    let nodes = vec![StorageNode {
+        parent_ino: parent.to_norm_u64(),
+        name: name.into(),
+        attr: attr.into(),
+    }];
     fs.write_inodes_to_db(nodes)?;
 
     let _ = fs.notifier.send(InvalMsg::Entry {

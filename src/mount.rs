@@ -22,7 +22,7 @@ use std::thread;
 use std::time::{Duration, SystemTime};
 use std::{num::NonZeroU32, path::PathBuf};
 
-use crate::fs::fileattr::{CreateFileAttr, FileAttr, FileType, dir_attr};
+use crate::fs::fileattr::{CreateFileAttr, FileAttr, FileType, InoFlag, SetStoredAttr, dir_attr};
 use crate::fs::ops::readdir::{DirectoryEntry, DirectoryEntryPlus};
 use crate::fs::{GitFs, REPO_SHIFT, ROOT_INO, repo};
 use crate::internals::sock::{socket_path, start_control_server};
@@ -173,7 +173,7 @@ impl fuser::Filesystem for GitFsAdapter {
                     let parent_ino = if parent == ROOT_INO {
                         ROOT_INO
                     } else {
-                        fs.get_parent_ino(parent).unwrap_or(ROOT_INO)
+                        fs.get_dir_parent(parent).unwrap_or(ROOT_INO)
                     };
                     let Ok(parent_attr) = fs.getattr(parent_ino) else {
                         return reply.error(libc::ENOENT);
@@ -261,8 +261,7 @@ impl fuser::Filesystem for GitFsAdapter {
                 return reply.error(EIO);
             }
         };
-        let create_attr = dir_attr();
-        match fs.mkdir(parent, name, create_attr) {
+        match fs.mkdir(parent, name) {
             Ok(attr) => reply.entry(&TTL, &attr.into(), 0),
             Err(e) => {
                 error!(?e);
@@ -291,7 +290,7 @@ impl fuser::Filesystem for GitFsAdapter {
             Ok(_) => reply.ok(),
             Err(e) => {
                 error!(e = %e);
-                reply.error(libc::EROFS)
+                reply.error(errno_from_anyhow(&e))
             }
         }
     }
@@ -316,7 +315,7 @@ impl fuser::Filesystem for GitFsAdapter {
             Ok(_) => reply.ok(),
             Err(e) => {
                 error!(e = %e);
-                reply.error(libc::EROFS)
+                reply.error(errno_from_anyhow(&e))
             }
         }
     }
@@ -406,7 +405,7 @@ impl fuser::Filesystem for GitFsAdapter {
         let parent_ino = if ino == ROOT_INO {
             ROOT_INO
         } else {
-            fs.get_parent_ino(ino).unwrap_or(ROOT_INO)
+            fs.get_dir_parent(ino).unwrap_or(ROOT_INO)
         };
         let parent_entries: Vec<DirectoryEntry> = vec![
             DirectoryEntry {
@@ -482,9 +481,15 @@ impl fuser::Filesystem for GitFsAdapter {
         ];
         let mut entries: Vec<DirectoryEntryPlus> = vec![];
         for entry in parent_entries {
+            let attr = {
+                let Ok(ino_flag) = fs.get_ino_flag_from_db(entry.ino.into()) else {
+                    return reply.error(EIO);
+                };
+                dir_attr(ino_flag)
+            };
             let entry_plus = DirectoryEntryPlus {
                 entry,
-                attr: dir_attr().into(),
+                attr: attr.into(),
             };
             entries.push(entry_plus);
         }
@@ -635,17 +640,18 @@ impl fuser::Filesystem for GitFsAdapter {
                 return reply.error(EIO);
             }
         };
-        let res = fs.getattr(ino);
-        match res {
-            Ok(mut attr) => {
-                match fs.refresh_attr(&mut attr) {
-                    Ok(a) => a,
-                    Err(e) => return reply.error(errno_from_anyhow(&e)),
-                };
-                reply.attr(&TTL, &attr.into());
-            }
-            Err(e) => reply.error(errno_from_anyhow(&e)),
-        }
+        let set_stored_attr: SetStoredAttr = SetStoredAttr {
+            ino,
+            size,
+            uid,
+            gid,
+            flags,
+        };
+        let attr = match fs.update_db_metadata(set_stored_attr) {
+            Ok(a) => a,
+            Err(e) => return reply.error(errno_from_anyhow(&e)),
+        };
+        reply.attr(&TTL, &attr.into());
     }
 
     fn release(

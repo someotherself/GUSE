@@ -4,7 +4,6 @@ use anyhow::anyhow;
 use git2::Oid;
 
 use crate::{
-    fs::fileattr::dir_attr,
     fs::{FileType, GitFs, REPO_SHIFT},
     inodes::Inodes,
     test_setup::{TestSetup, get_fs, run_test},
@@ -24,10 +23,9 @@ fn test_mkdir_fetch() -> anyhow::Result<()> {
         |_| -> anyhow::Result<()> {
             let fs = get_fs();
             let mut fs = fs.lock().map_err(|_| anyhow!("Lock poisoned"))?;
-            let create_attr = dir_attr();
             // let name = OsStr::new("github.tokio-rs.mio.git");
             let name = OsStr::new("github.someotherself.git_rust.git");
-            fs.mkdir(ROOT_INO, name, create_attr)?;
+            fs.mkdir(ROOT_INO, name)?;
 
             // GET ATTR ROOT
             let root_attr = fs.getattr(ROOT_INO)?;
@@ -66,6 +64,7 @@ fn test_mkdir_fetch() -> anyhow::Result<()> {
 
             for a in fs.readdir(parent_snap_ino)? {
                 let a_attr_1 = fs.getattr(a.ino)?;
+                dbg!(&a.name);
                 assert_eq!(a.ino, a_attr_1.ino);
                 if a.kind == FileType::Directory {
                     let a_attr = fs
@@ -74,6 +73,7 @@ fn test_mkdir_fetch() -> anyhow::Result<()> {
                     assert_eq!(a.ino, a_attr.ino);
 
                     for b in fs.readdir(a_attr.ino)? {
+                        dbg!(&b.name);
                         let b_attr_1 = fs.getattr(b.ino)?;
                         assert_eq!(b.ino, b_attr_1.ino);
                         if b.kind == FileType::Directory {
@@ -160,9 +160,8 @@ fn test_mkdir_normal() -> anyhow::Result<()> {
             let fs = get_fs();
             let mut fs = fs.lock().map_err(|_| anyhow!("Lock posoned"))?;
 
-            let create_attr = dir_attr();
             let name = OsStr::new("new_repo");
-            fs.mkdir(ROOT_INO, name, create_attr)?;
+            fs.mkdir(ROOT_INO, name)?;
 
             let root_attr = fs.getattr(ROOT_INO)?;
             assert_eq!(root_attr.ino, ROOT_INO);
@@ -188,9 +187,8 @@ fn test_mkdir_normal() -> anyhow::Result<()> {
 
             assert_eq!(read_dir[0].name, "live");
 
-            let create_attr = dir_attr();
             let dir_name1 = OsStr::new("dir_in_live_1");
-            let dir1_attr = fs.mkdir(live_attr.ino, dir_name1, create_attr)?;
+            let dir1_attr = fs.mkdir(live_attr.ino, dir_name1)?;
             let dir1_ino = LIVE_DIR_INO + 2;
 
             let dir1attr_ino: Inodes = dir1_attr.ino.into();
@@ -265,14 +263,13 @@ fn test_rename_live_same_parent_dir() -> anyhow::Result<()> {
             let fs_arc = get_fs();
             let mut fs = fs_arc.lock().map_err(|_| anyhow!("Lock poisoned"))?;
 
-            let create_attr = dir_attr();
             let name = OsStr::new("new_repo");
-            fs.mkdir(ROOT_INO, name, create_attr)?;
+            fs.mkdir(ROOT_INO, name)?;
             let live = live_ino(&fs)?;
 
             // Create dir: live/alpha
             let alpha = OsStr::new("alpha");
-            fs.mkdir(live, alpha, dir_attr())?;
+            fs.mkdir(live, alpha)?;
             // Sanity
             assert!(fs.lookup(live, "alpha")?.is_some());
 
@@ -304,19 +301,18 @@ fn test_rename_live_across_parents() -> anyhow::Result<()> {
             let fs_arc = get_fs();
             let mut fs = fs_arc.lock().map_err(|_| anyhow!("Lock poisoned"))?;
 
-            let create_attr = dir_attr();
             let name = OsStr::new("new_repo");
-            fs.mkdir(ROOT_INO, name, create_attr)?;
+            fs.mkdir(ROOT_INO, name)?;
             let live = live_ino(&fs)?;
 
             // live/left and live/right
             let left = OsStr::new("left");
             let right = OsStr::new("right");
-            let left_attr = fs.mkdir(live, left, dir_attr())?;
-            let right_attr = fs.mkdir(live, right, dir_attr())?;
+            let left_attr = fs.mkdir(live, left)?;
+            let right_attr = fs.mkdir(live, right)?;
             // left/x
             let x = OsStr::new("x");
-            fs.mkdir(left_attr.ino, x, dir_attr())?;
+            fs.mkdir(left_attr.ino, x)?;
             assert!(fs.lookup(left_attr.ino, "x")?.is_some());
 
             // Move left/x -> right/x
@@ -344,13 +340,12 @@ fn test_rename_live_noop_same_name() -> anyhow::Result<()> {
             let fs_arc = get_fs();
             let mut fs = fs_arc.lock().map_err(|_| anyhow!("Lock poisoned"))?;
 
-            let create_attr = dir_attr();
             let name = OsStr::new("new_repo");
-            fs.mkdir(ROOT_INO, name, create_attr)?;
+            fs.mkdir(ROOT_INO, name)?;
             let live = live_ino(&fs)?;
 
             let name = OsStr::new("noop_dir");
-            fs.mkdir(live, name, dir_attr())?;
+            fs.mkdir(live, name)?;
             let before = fs.readdir(live)?;
 
             // Same parent + same name
@@ -379,16 +374,15 @@ fn test_rename_live_overwrite_empty_dir() -> anyhow::Result<()> {
             let fs_arc = get_fs();
             let mut fs = fs_arc.lock().map_err(|_| anyhow!("Lock poisoned"))?;
 
-            let create_attr = dir_attr();
             let name = OsStr::new("new_repo");
-            fs.mkdir(ROOT_INO, name, create_attr)?;
+            fs.mkdir(ROOT_INO, name)?;
             let live = live_ino(&fs)?;
 
             // Create src and empty dst: live/src_dir, live/dst_dir
             let src = OsStr::new("src_dir");
             let dst = OsStr::new("dst_dir");
-            fs.mkdir(live, src, dir_attr())?;
-            fs.mkdir(live, dst, dir_attr())?;
+            fs.mkdir(live, src)?;
+            fs.mkdir(live, dst)?;
             assert!(fs.lookup(live, "src_dir")?.is_some());
             assert!(fs.lookup(live, "dst_dir")?.is_some());
             // Ensure dst is empty
@@ -420,18 +414,17 @@ fn test_rename_live_overwrite_nonempty_dir_fails() -> anyhow::Result<()> {
             let fs_arc = get_fs();
             let mut fs = fs_arc.lock().map_err(|_| anyhow!("Lock poisoned"))?;
 
-            let create_attr = dir_attr();
             let name = OsStr::new("new_repo");
-            fs.mkdir(ROOT_INO, name, create_attr)?;
+            fs.mkdir(ROOT_INO, name)?;
             let live = live_ino(&fs)?;
 
             // Create src: live/src_dir
             let src = OsStr::new("src_dir");
-            let _src_attr = fs.mkdir(live, src, dir_attr())?;
+            let _src_attr = fs.mkdir(live, src)?;
             // Create dst: live/dst_dir (non-empty: has child `c`)
             let dst = OsStr::new("dst_dir");
-            let dst_attr = fs.mkdir(live, dst, dir_attr())?;
-            fs.mkdir(dst_attr.ino, OsStr::new("c"), dir_attr())?;
+            let dst_attr = fs.mkdir(live, dst)?;
+            fs.mkdir(dst_attr.ino, OsStr::new("c"))?;
             assert!(!fs.readdir(dst_attr.ino)?.is_empty());
 
             // Attempt to rename src_dir -> dst_dir
@@ -461,13 +454,12 @@ fn test_rename_live_invalid_name_with_slash() -> anyhow::Result<()> {
             let fs_arc = get_fs();
             let mut fs = fs_arc.lock().map_err(|_| anyhow!("Lock poisoned"))?;
 
-            let create_attr = dir_attr();
             let name = OsStr::new("new_repo");
-            fs.mkdir(ROOT_INO, name, create_attr)?;
+            fs.mkdir(ROOT_INO, name)?;
             let live = live_ino(&fs)?;
 
             let good = OsStr::new("good");
-            fs.mkdir(live, good, dir_attr())?;
+            fs.mkdir(live, good)?;
 
             // Bad dest name
             let bad = OsStr::new("bad/name");
@@ -496,9 +488,8 @@ fn test_rename_live_source_missing() -> anyhow::Result<()> {
             let fs_arc = get_fs();
             let mut fs = fs_arc.lock().map_err(|_| anyhow!("Lock poisoned"))?;
 
-            let create_attr = dir_attr();
             let name = OsStr::new("new_repo");
-            fs.mkdir(ROOT_INO, name, create_attr)?;
+            fs.mkdir(ROOT_INO, name)?;
             let live = live_ino(&fs)?;
 
             let missing = OsStr::new("i_do_not_exist");

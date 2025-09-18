@@ -27,7 +27,7 @@ pub fn open_live(
     truncate: bool,
 ) -> anyhow::Result<u64> {
     let ino = u64::from(ino);
-    let path = fs.build_full_path(ino)?;
+    let path = fs.get_live_path(ino.into())?;
     let file = OpenOptions::new()
         .read(read)
         .write(write)
@@ -220,9 +220,8 @@ pub fn open_vdir(
     truncate: bool,
     parent: VirtualIno,
 ) -> anyhow::Result<u64> {
-    let ino = u64::from(ino);
-    let name = fs.get_name_from_db(ino)?;
-    let repo = fs.get_repo(ino)?;
+    let name = fs.get_name_from_db(ino.into())?;
+    let repo = fs.get_repo(ino.into())?;
     let repo = repo.lock().map_err(|_| anyhow!("Lock poisoned"))?;
     let Some(v_node) = repo.vdir_cache.get(&parent) else {
         bail!("File not found!")
@@ -232,7 +231,7 @@ pub fn open_vdir(
     };
     let oid = object.oid;
     drop(repo);
-    open_blob(fs, oid, ino, read)
+    open_blob(fs, oid, ino.into(), read)
 }
 
 #[instrument(level = "debug", skip(fs), fields(ino = %ino), ret(level = Level::DEBUG), err(Display))]

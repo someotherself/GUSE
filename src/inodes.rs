@@ -86,6 +86,18 @@ impl From<u64> for Inodes {
     }
 }
 
+impl From<u64> for NormalIno {
+    fn from(value: u64) -> Self {
+        Self(value & !VDIR_BIT)
+    }
+}
+
+impl From<u64> for VirtualIno {
+    fn from(value: u64) -> Self {
+        Self(value | VDIR_BIT)
+    }
+}
+
 impl From<NormalIno> for u64 {
     fn from(n: NormalIno) -> Self {
         n.0

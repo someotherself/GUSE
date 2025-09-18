@@ -129,7 +129,7 @@ impl GitRepo {
                 name: folder_name,
                 oid: Oid::zero(),
                 kind: ObjectType::Tree,
-                filemode: 0o040000,
+                git_mode: 0o040000,
                 size: 0,
                 commit_time: git2::Time::new(*secs, 0),
             });
@@ -167,8 +167,8 @@ impl GitRepo {
                 out.push(ObjectAttr {
                     name: folder_name,
                     oid: *commit_oid,
-                    kind: ObjectType::Tree,
-                    filemode: 0o040000,
+                    kind: ObjectType::Commit,
+                    git_mode: 0o040000,
                     size: 0,
                     commit_time: git2::Time::new(secs_utc, 0),
                 });
@@ -278,7 +278,7 @@ impl GitRepo {
                 name,
                 oid: entry.id(),
                 kind: entry.kind().ok_or_else(|| anyhow!("Invalid object"))?,
-                filemode: entry.filemode() as u32,
+                git_mode: entry.filemode() as u32,
                 size: 0,
                 commit_time: Time::new(0, 0),
             });
@@ -307,7 +307,7 @@ impl GitRepo {
             name: name.into(),
             oid: entry.id(),
             kind: entry.kind().ok_or_else(|| anyhow!("Invalid object"))?,
-            filemode: entry.filemode() as u32,
+            git_mode: entry.filemode() as u32,
             size: size as u64,
             commit_time,
         })
@@ -318,12 +318,12 @@ impl GitRepo {
         let commit_time = commit_obj.time();
         let tree = commit_obj.tree()?;
 
-        if tree.id() == oid {
+        if commit_id == oid {
             return Ok(ObjectAttr {
                 name: ".".into(),
                 oid,
                 kind: ObjectType::Tree,
-                filemode: 0o040000,
+                git_mode: 0o040000,
                 size: 0,
                 commit_time,
             });
@@ -335,7 +335,7 @@ impl GitRepo {
                     name: format!("{}{}", root, entry.name().unwrap_or("<non-utf8>")),
                     oid,
                     kind: entry.kind().unwrap_or(ObjectType::Any),
-                    filemode: entry.filemode() as u32,
+                    git_mode: entry.filemode() as u32,
                     size: if entry.kind() == Some(ObjectType::Blob) {
                         self.inner
                             .find_blob(entry.id())
@@ -385,7 +385,7 @@ impl GitRepo {
                 name: commit_name,
                 oid,
                 kind: ObjectType::Commit,
-                filemode: 0u32,
+                git_mode: 0u32,
                 size: 0u64,
                 commit_time: commit.time(),
             });
@@ -400,14 +400,14 @@ impl GitRepo {
         for entry in root_tree.iter() {
             let oid = entry.id();
             let kind = entry.kind().ok_or_else(|| anyhow!("Invalid object"))?;
-            let filemode = entry.filemode() as u32;
+            let git_mode = entry.filemode() as u32;
             let name = entry.name().unwrap_or("").to_string();
             let commit_time = commit.time();
             entries.push(ObjectAttr {
                 name,
                 oid,
                 kind,
-                filemode,
+                git_mode,
                 size: 0,
                 commit_time,
             });
@@ -420,7 +420,7 @@ impl GitRepo {
         let name = name.to_string();
         let oid = commit.id();
         let kind = ObjectType::Commit;
-        let filemode = libc::S_IFDIR;
+        let git_mode = libc::S_IFDIR;
         let size = 0;
         let commit_time = commit.time();
 
@@ -428,7 +428,7 @@ impl GitRepo {
             name,
             oid,
             kind,
-            filemode,
+            git_mode,
             size,
             commit_time,
         })
@@ -538,7 +538,7 @@ impl GitRepo {
         }
         let oid = entry.id();
         let blob = repo.find_blob(oid)?;
-        let filemode = entry.filemode() as u32;
+        let git_mode = entry.filemode() as u32;
         let commit_time = commit.time();
         let name = format!("{count:04}_{:.7}", commit.id());
 
@@ -546,7 +546,7 @@ impl GitRepo {
             name,
             oid,
             kind: ObjectType::Blob,
-            filemode,
+            git_mode,
             size: blob.size() as u64,
             commit_time,
         }))
@@ -744,9 +744,8 @@ impl PartialEq for GitRepo {
     }
 }
 
-pub fn try_into_filemode(mode: i64) -> Option<FileMode> {
+pub fn try_into_filemode(mode: u64) -> Option<FileMode> {
     let m = u32::try_from(mode).ok()?;
-    // Exact matches first
     match m {
         0o040000 => Some(FileMode::Tree),
         0o100644 => Some(FileMode::Blob),
@@ -755,7 +754,6 @@ pub fn try_into_filemode(mode: i64) -> Option<FileMode> {
         0o160000 => Some(FileMode::Commit),
         0 => Some(FileMode::Unreadable),
         _ => {
-            // Normalize common stat-like modes if they sneak in
             let typ = m & 0o170000;
             match typ {
                 0o040000 => Some(FileMode::Tree),

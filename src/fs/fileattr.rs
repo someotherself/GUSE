@@ -7,7 +7,7 @@ use git2::{ObjectType, Oid};
 pub struct FileAttr {
     // Inode in the fuse fs
     pub ino: u64,
-    pub ino_mask: InoMask,
+    pub ino_flag: InoFlag,
     // SHA-1 in git
     pub oid: Oid,
     // Blob size
@@ -56,10 +56,10 @@ impl FileType {
     }
 }
 
-pub const fn dir_attr(ino_mask: InoMask) -> CreateFileAttr {
+pub const fn dir_attr(ino_flag: InoFlag) -> CreateFileAttr {
     CreateFileAttr {
         kind: FileType::Directory,
-        ino_mask,
+        ino_flag,
         perm: 0o775,
         uid: 0,
         mode: libc::S_IFDIR,
@@ -69,10 +69,10 @@ pub const fn dir_attr(ino_mask: InoMask) -> CreateFileAttr {
     }
 }
 
-pub const fn file_attr(ino_mask: InoMask) -> CreateFileAttr {
+pub const fn file_attr(ino_flag: InoFlag) -> CreateFileAttr {
     CreateFileAttr {
         kind: FileType::RegularFile,
-        ino_mask,
+        ino_flag,
         perm: 0o655,
         uid: 0,
         mode: libc::S_IFREG,
@@ -85,7 +85,7 @@ pub const fn file_attr(ino_mask: InoMask) -> CreateFileAttr {
 #[derive(Debug, Clone)]
 pub struct CreateFileAttr {
     pub kind: FileType,
-    pub ino_mask: InoMask,
+    pub ino_flag: InoFlag,
     pub perm: u16,
     pub mode: u32,
     pub uid: u32,
@@ -99,7 +99,7 @@ impl From<CreateFileAttr> for FileAttr {
         let now = SystemTime::now();
         Self {
             ino: 0,
-            ino_mask: value.ino_mask,
+            ino_flag: value.ino_flag,
             oid: Oid::zero(),
             size: 0,
             blocks: 0,
@@ -124,11 +124,11 @@ impl From<CreateFileAttr> for FileAttr {
     }
 }
 
-fn build_attr_file(ino: u64, ino_mask: InoMask, st_mode: u32) -> FileAttr {
+fn build_attr_file(ino: u64, ino_flag: InoFlag, st_mode: u32) -> FileAttr {
     let now = SystemTime::now();
     FileAttr {
         ino,
-        ino_mask,
+        ino_flag,
         oid: Oid::zero(),
         size: 0,
         blocks: 0,
@@ -148,11 +148,11 @@ fn build_attr_file(ino: u64, ino_mask: InoMask, st_mode: u32) -> FileAttr {
     }
 }
 
-pub fn build_attr_dir(ino: u64, ino_mask: InoMask, st_mode: u32) -> FileAttr {
+pub fn build_attr_dir(ino: u64, ino_flag: InoFlag, st_mode: u32) -> FileAttr {
     let now = SystemTime::now();
     FileAttr {
         ino,
-        ino_mask,
+        ino_flag,
         oid: Oid::zero(),
         size: 0,
         blocks: 0,
@@ -175,7 +175,7 @@ pub fn build_attr_dir(ino: u64, ino_mask: InoMask, st_mode: u32) -> FileAttr {
 /// Used for inodes table in meta_db
 pub struct StoredAttr {
     pub ino: u64,
-    pub ino_mask: InoMask,
+    pub ino_flag: InoFlag,
     pub oid: Oid,
     pub size: u64,
     pub git_mode: u32,
@@ -211,7 +211,7 @@ impl From<FileAttr> for StoredAttr {
     fn from(value: FileAttr) -> Self {
         Self {
             ino: value.ino,
-            ino_mask: value.ino_mask,
+            ino_flag: value.ino_flag,
             oid: value.oid,
             size: value.size,
             git_mode: value.git_mode,
@@ -225,7 +225,7 @@ impl From<FileAttr> for StoredAttr {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[repr(u64)]
-pub enum InoMask {
+pub enum InoFlag {
     Root = 1 << 0,
     RepoRoot = 1 << 1,
     LiveRoot = 1 << 2,
@@ -237,48 +237,48 @@ pub enum InoMask {
     InsideLive = 1 << 8,
     VirtualFile = 1 << 9,
 }
-impl InoMask {
+impl InoFlag {
     pub const fn as_str(&self) -> &'static str {
         match *self {
-            InoMask::Root => "Root",
-            InoMask::RepoRoot => "RepoRoot",
-            InoMask::LiveRoot => "LiveRoot",
-            InoMask::BuildRoot => "BuildRoot",
-            InoMask::MonthFolder => "MonthFolder",
-            InoMask::SnapFolder => "SnapFolder",
-            InoMask::InsideSnap => "InsideSnap",
-            InoMask::InsideBuild => "InsideBuild",
-            InoMask::InsideLive => "InsideLive",
-            InoMask::VirtualFile => "VirtualFile",
+            InoFlag::Root => "Root",
+            InoFlag::RepoRoot => "RepoRoot",
+            InoFlag::LiveRoot => "LiveRoot",
+            InoFlag::BuildRoot => "BuildRoot",
+            InoFlag::MonthFolder => "MonthFolder",
+            InoFlag::SnapFolder => "SnapFolder",
+            InoFlag::InsideSnap => "InsideSnap",
+            InoFlag::InsideBuild => "InsideBuild",
+            InoFlag::InsideLive => "InsideLive",
+            InoFlag::VirtualFile => "VirtualFile",
         }
     }
 }
 
-impl std::fmt::Display for InoMask {
+impl std::fmt::Display for InoFlag {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(self.as_str())
     }
 }
 
-impl TryFrom<u64> for InoMask {
+impl TryFrom<u64> for InoFlag {
     type Error = anyhow::Error;
     fn try_from(v: u64) -> Result<Self, Self::Error> {
         match v {
-            x if x == InoMask::RepoRoot as u64 => Ok(InoMask::RepoRoot),
-            x if x == InoMask::LiveRoot as u64 => Ok(InoMask::LiveRoot),
-            x if x == InoMask::BuildRoot as u64 => Ok(InoMask::BuildRoot),
-            x if x == InoMask::MonthFolder as u64 => Ok(InoMask::MonthFolder),
-            x if x == InoMask::SnapFolder as u64 => Ok(InoMask::SnapFolder),
-            x if x == InoMask::InsideSnap as u64 => Ok(InoMask::InsideSnap),
-            x if x == InoMask::InsideBuild as u64 => Ok(InoMask::InsideBuild),
-            x if x == InoMask::InsideLive as u64 => Ok(InoMask::InsideLive),
-            _ => bail!("Unknown InoMask valueL {v:#x}"),
+            x if x == InoFlag::RepoRoot as u64 => Ok(InoFlag::RepoRoot),
+            x if x == InoFlag::LiveRoot as u64 => Ok(InoFlag::LiveRoot),
+            x if x == InoFlag::BuildRoot as u64 => Ok(InoFlag::BuildRoot),
+            x if x == InoFlag::MonthFolder as u64 => Ok(InoFlag::MonthFolder),
+            x if x == InoFlag::SnapFolder as u64 => Ok(InoFlag::SnapFolder),
+            x if x == InoFlag::InsideSnap as u64 => Ok(InoFlag::InsideSnap),
+            x if x == InoFlag::InsideBuild as u64 => Ok(InoFlag::InsideBuild),
+            x if x == InoFlag::InsideLive as u64 => Ok(InoFlag::InsideLive),
+            _ => bail!("Unknown InoFlag valueL {v:#x}"),
         }
     }
 }
 
-impl From<InoMask> for u64 {
-    fn from(v: InoMask) -> u64 {
+impl From<InoFlag> for u64 {
+    fn from(v: InoFlag) -> u64 {
         v as u64
     }
 }

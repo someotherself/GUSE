@@ -39,7 +39,7 @@ impl BuildSession {
                 break;
             }
             components.push(fs.get_name_from_db(cur_ino)?);
-            cur_ino = fs.get_parent_ino(cur_ino)?;
+            cur_ino = fs.get_single_parent(cur_ino)?;
             cur_oid = fs.get_oid_from_db(cur_ino)?;
         }
 

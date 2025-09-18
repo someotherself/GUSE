@@ -1,5 +1,4 @@
 use std::collections::btree_map::Entry;
-use std::collections::{BTreeMap, HashSet};
 use std::ffi::{OsStr, OsString};
 use std::fs::File;
 use std::os::unix::fs::{FileExt, MetadataExt, PermissionsExt};
@@ -7,7 +6,7 @@ use std::path::Path;
 use std::sync::{Arc, Mutex, OnceLock, RwLock};
 use std::time::{Duration, UNIX_EPOCH};
 use std::{
-    collections::HashMap,
+    collections::{BTreeMap, HashMap, HashSet},
     path::PathBuf,
     sync::atomic::{AtomicU64, Ordering},
     time::SystemTime,
@@ -19,7 +18,8 @@ use rusqlite::Connection;
 use tracing::{Level, field, info, instrument};
 
 use crate::fs::fileattr::{
-    CreateFileAttr, FileAttr, FileType, ObjectAttr, build_attr_dir, dir_attr, file_attr,
+    CreateFileAttr, FileAttr, FileType, InoFlag, ObjectAttr, SetStoredAttr, StorageNode,
+    StoredAttr, build_attr_dir, dir_attr, file_attr,
 };
 use crate::fs::meta_db::MetaDb;
 use crate::fs::ops::readdir::{DirectoryEntry, DirectoryEntryPlus};
@@ -55,8 +55,8 @@ enum FsOperationContext {
 }
 
 impl FsOperationContext {
-    fn get_operation(fs: &GitFs, ino: Inodes) -> anyhow::Result<Self> {
-        let ino = u64::from(ino.to_norm());
+    fn get_operation(fs: &GitFs, inode: Inodes) -> anyhow::Result<Self> {
+        let ino = u64::from(inode.to_norm());
         let mask: u64 = (1u64 << 48) - 1;
         let repo_dir = GitFs::ino_to_repo_id(ino);
         if ino == ROOT_INO {
@@ -64,7 +64,7 @@ impl FsOperationContext {
         } else if ino & mask == 0 && fs.repos_list.contains_key(&repo_dir) {
             // If the least significant 48 bits are 0
             Ok(FsOperationContext::RepoDir { ino })
-        } else if fs.is_in_live(ino) {
+        } else if fs.is_in_live(inode.to_norm())? {
             Ok(FsOperationContext::InsideLiveDir { ino })
         } else {
             Ok(FsOperationContext::InsideGitDir { ino })
@@ -254,7 +254,7 @@ impl GitFs {
             let repo_path = fs.repos_dir.join(repo_name);
 
             // Read contents of live
-            let nodes = fs.read_dir_to_db(&repo_path, live_ino)?;
+            let nodes = fs.read_dir_to_db(&repo_path, InoFlag::InsideLive, live_ino)?;
             fs.write_inodes_to_db(nodes)?;
         }
         Ok(Arc::from(Mutex::new(fs)))
@@ -264,6 +264,7 @@ impl GitFs {
         let repo_path = self.repos_dir.join(repo_name);
 
         let mut connection = self.init_meta_db(repo_name)?;
+        connection.ensure_root()?;
 
         let repo = git2::Repository::init(&repo_path)?;
         let mut res_inodes = HashSet::new();
@@ -274,9 +275,14 @@ impl GitFs {
             .insert(repo_id, AtomicU64::from(repo_ino + 1));
 
         // Write repo root to db
-        let mut repo_attr: FileAttr = dir_attr().into();
+        let mut repo_attr: FileAttr = dir_attr(InoFlag::RepoRoot).into();
         repo_attr.ino = repo_ino;
-        let mut nodes: Vec<(u64, String, FileAttr)> = vec![(ROOT_INO, repo_name.into(), repo_attr)];
+        let nodes: Vec<StorageNode> = vec![StorageNode {
+            parent_ino: ROOT_INO,
+            name: repo_name.into(),
+            attr: repo_attr.into(),
+        }];
+        connection.write_inodes_to_db(nodes)?;
 
         // Clean the build folder
         let build_name = "build".to_string();
@@ -293,22 +299,29 @@ impl GitFs {
 
         let perms = 0o775;
         let st_mode = libc::S_IFDIR | perms;
-        let live_attr = build_attr_dir(live_ino, st_mode);
-        let build_attr = build_attr_dir(build_ino, st_mode);
+        let live_attr = build_attr_dir(live_ino, InoFlag::LiveRoot, st_mode);
+        let build_attr = build_attr_dir(build_ino, InoFlag::BuildRoot, st_mode);
 
         res_inodes.insert(live_ino);
         res_inodes.insert(build_ino);
+        let nodes: Vec<StorageNode> = vec![
+            StorageNode {
+                parent_ino: repo_ino,
+                name: live_name,
+                attr: live_attr.into(),
+            },
+            StorageNode {
+                parent_ino: repo_ino,
+                name: build_name,
+                attr: build_attr.into(),
+            },
+        ];
 
-        nodes.push((repo_ino, live_name, live_attr));
         connection.write_inodes_to_db(nodes)?;
 
         // Create build folder again
         std::fs::create_dir(&build_path)?;
         std::fs::set_permissions(&build_path, std::fs::Permissions::from_mode(0o775))?;
-
-        let nodes: Vec<(u64, String, FileAttr)> = vec![(repo_ino, build_name, build_attr)];
-
-        connection.write_inodes_to_db(nodes)?;
 
         let mut git_repo = GitRepo {
             connection: Arc::new(Mutex::new(connection)),
@@ -340,9 +353,10 @@ impl GitFs {
     fn read_dir_to_db(
         &self,
         path: &Path,
+        ino_flag: InoFlag,
         parent_ino: u64,
-    ) -> anyhow::Result<Vec<(u64, String, FileAttr)>> {
-        let mut nodes: Vec<(u64, String, FileAttr)> = vec![];
+    ) -> anyhow::Result<Vec<StorageNode>> {
+        let mut nodes: Vec<StorageNode> = vec![];
         for entry in path.read_dir()? {
             let entry = entry?;
             if IGNORE_LIST.contains(&entry.file_name().to_str().unwrap_or_default()) {
@@ -350,15 +364,23 @@ impl GitFs {
             }
             if entry.file_type()?.is_dir() {
                 let ino = self.next_inode_checked(parent_ino)?;
-                let mut attr: FileAttr = dir_attr().into();
+                let mut attr: FileAttr = dir_attr(ino_flag).into();
                 attr.ino = ino;
-                nodes.push((parent_ino, entry.file_name().to_string_lossy().into(), attr));
-                nodes.extend(self.read_dir_to_db(&entry.path(), ino)?);
+                nodes.push(StorageNode {
+                    parent_ino,
+                    name: entry.file_name().to_string_lossy().into(),
+                    attr: attr.into(),
+                });
+                nodes.extend(self.read_dir_to_db(&entry.path(), ino_flag, ino)?);
             } else {
                 let ino = self.next_inode_checked(parent_ino)?;
-                let mut attr: FileAttr = file_attr().into();
+                let mut attr: FileAttr = file_attr(ino_flag).into();
                 attr.ino = ino;
-                nodes.push((parent_ino, entry.file_name().to_string_lossy().into(), attr));
+                nodes.push(StorageNode {
+                    parent_ino,
+                    name: entry.file_name().to_string_lossy().into(),
+                    attr: attr.into(),
+                });
             }
         }
         Ok(nodes)
@@ -372,15 +394,20 @@ impl GitFs {
         std::fs::create_dir(&repo_path)?;
         std::fs::set_permissions(&repo_path, std::fs::Permissions::from_mode(0o775))?;
         let mut connection = self.init_meta_db(repo_name)?;
+        connection.ensure_root()?;
 
         let repo_id = self.next_repo_id();
         let repo_ino = GitFs::repo_id_to_ino(repo_id);
         self.next_inode
             .insert(repo_id, AtomicU64::from(repo_ino + 1));
 
-        let mut repo_attr: FileAttr = dir_attr().into();
+        let mut repo_attr: FileAttr = dir_attr(InoFlag::RepoRoot).into();
         repo_attr.ino = repo_ino;
-        let mut nodes: Vec<(u64, String, FileAttr)> = vec![(ROOT_INO, repo_name.into(), repo_attr)];
+        let mut nodes: Vec<StorageNode> = vec![StorageNode {
+            parent_ino: ROOT_INO,
+            name: repo_name.into(),
+            attr: repo_attr.into(),
+        }];
 
         let mut res_inodes = HashSet::new();
 
@@ -399,11 +426,18 @@ impl GitFs {
 
         let perms = 0o775;
         let st_mode = libc::S_IFDIR | perms;
-        let live_attr = build_attr_dir(live_ino, st_mode);
-        let build_attr = build_attr_dir(build_ino, st_mode);
-
-        nodes.push((repo_ino, live_name, live_attr));
-        nodes.push((repo_ino, build_name, build_attr));
+        let live_attr = build_attr_dir(live_ino, InoFlag::LiveRoot, st_mode);
+        let build_attr = build_attr_dir(build_ino, InoFlag::BuildRoot, st_mode);
+        nodes.push(StorageNode {
+            parent_ino: repo_ino,
+            name: live_name,
+            attr: live_attr.into(),
+        });
+        nodes.push(StorageNode {
+            parent_ino: repo_ino,
+            name: build_name,
+            attr: build_attr.into(),
+        });
         connection.write_inodes_to_db(nodes)?;
 
         let connection = Arc::from(Mutex::from(connection));
@@ -430,7 +464,8 @@ impl GitFs {
     //     let repo = Repository::open(&repo_path)?;
     //     let head = repo.revparse_single("HEAD")?.id();
     //     let db = self.open_meta_db(repo_name)?;
-
+    //     db.execute_batch("PRAGMA foreign_keys = ON;")?;
+    //
     //     let mut stmt = db.conn.prepare(
     //         "SELECT inode
     //            FROM inode_map
@@ -461,14 +496,17 @@ impl GitFs {
     //         .join(repo_name)
     //         .join(META_STORE);
     //     let conn = Connection::open(&db_path)?;
+    //     conn.execute_batch("PRAGMA foreign_keys = ON;")?;
     //     Ok(MetaDb { conn })
     // }
 
+    /// Must take in the name of the folder of the REPO --
+    /// data_dir/repo_name1
+    ///
+    ///------------------├── fs_meta.db
+    ///
+    ///------------------└── .git/
     pub fn init_meta_db<P: AsRef<Path>>(&self, repo_name: P) -> anyhow::Result<MetaDb> {
-        // Must take in the name of the folder of the REPO
-        // repos_dir/repo_name1
-        //------------------├── fs_meta.db
-        //------------------└── git/
         let db_path = PathBuf::from(&self.repos_dir)
             .join(repo_name)
             .join(META_STORE);
@@ -477,24 +515,59 @@ impl GitFs {
         }
         let conn = Connection::open(&db_path)?;
 
+        conn.execute_batch("PRAGMA foreign_keys = ON;")?;
+
         // DB layout
+        // INODE storage
         //   inode        INTEGER   PRIMARY KEY,    -> the u64 inode
-        //   parent_inode INTEGER   NOT NULL,       -> the parent directory’s inode
-        //   name         TEXT      NOT NULL,       -> the filename or directory name
-        //   oid          TEXT      NOT NULL,       -> the Git OID
-        //   filemode     INTEGER   NOT NULL        -> the raw Git filemode
+        //   git_mode     INTEGER   NOT NULL        -> the raw Git filemode
+        //   oid          TEXT      NOT NULL        -> the Git OID
+        //   size         INTEGER   NOT NULL        -> real size of the file/git object
+        //   inode_flag   INTEGER   NOT NULL        -> InoFlag
+        //   uid          INTEGER   NOT NULL
+        //   gid          INTEGER   NOT NULL
+        //   nlink        INTEGER   NOT NULL        -> calculated by sql
+        //   rdev         INTEGER   NOT NULL
+        //   flags        INTEGER   NOT NULL
         conn.execute_batch(
             r#"
                 CREATE TABLE IF NOT EXISTS inode_map (
                     inode        INTEGER PRIMARY KEY,
-                    parent_inode INTEGER NOT NULL,
-                    name         TEXT    NOT NULL,
                     oid          TEXT    NOT NULL,
-                    filemode     INTEGER NOT NULL
+                    git_mode     INTEGER NOT NULL,
+                    size         INTEGER NOT NUll,
+                    inode_flag   INTEGER NOT NUll,
+                    uid          INTEGER NOT NULL,
+                    gid          INTEGER NOT NULL,
+                    nlink        INTEGER NOT NULL,
+                    rdev         INTEGER NOT NULL,
+                    flags        INTEGER NOT NULL
                 );
             "#,
         )?;
 
+        // Directory Entries Storage
+        //  target_inode INTEGER   NOT NULL       -> inode from inode_map
+        //  parent_inode INTEGER   NOT NULL       -> the parent directory’s inode
+        //  name         TEXT      NOT NULL       -> the filename or directory name
+        conn.execute_batch(
+            r#"
+                CREATE TABLE IF NOT EXISTS dentries (
+                parent_inode INTEGER NOT NULL,
+                target_inode INTEGER NOT NULL,
+                name         TEXT    NOT NULL,
+                PRIMARY KEY (parent_inode, name),
+                FOREIGN KEY (parent_inode) REFERENCES inode_map(inode) ON DELETE CASCADE,
+                FOREIGN KEY (target_inode) REFERENCES inode_map(inode) ON DELETE RESTRICT
+                );
+            "#,
+        )?;
+
+        conn.execute_batch(
+            r#"
+            CREATE INDEX dentries_by_target ON dentries(target_inode);
+            "#,
+        )?;
         Ok(MetaDb { conn })
     }
 
@@ -512,14 +585,14 @@ impl GitFs {
             bail!("Target is a directory");
         }
 
-        let parent = self.get_parent_ino(ino.to_u64_n())?;
-        let par_mode = self.get_mode_from_db(parent)?;
+        let parent = self.get_single_parent(ino.to_u64_n())?;
+        let par_mode = self.get_mode_from_db(parent.into())?;
         let parent_kind = match par_mode {
             git2::FileMode::Tree | git2::FileMode::Commit => FileType::Directory,
             _ => FileType::RegularFile,
         };
 
-        let target_mode = self.get_mode_from_db(ino.to_u64_n())?;
+        let target_mode = self.get_mode_from_db(ino.to_norm())?;
         let target_kind = match target_mode {
             git2::FileMode::Tree | git2::FileMode::Commit => FileType::Directory,
             _ => FileType::RegularFile,
@@ -634,7 +707,7 @@ impl GitFs {
         let time = UNIX_EPOCH + Duration::from_secs(commit_secs);
 
         let kind = match git_attr.kind {
-            ObjectType::Blob if git_attr.filemode == 0o120000 => FileType::Symlink,
+            ObjectType::Blob if git_attr.git_mode == 0o120000 => FileType::Symlink,
             ObjectType::Tree => FileType::Directory,
             ObjectType::Commit => FileType::Directory,
             _ => FileType::RegularFile,
@@ -649,8 +722,15 @@ impl GitFs {
         let blksize = 4096;
         let flags = 0;
 
+        let ino_flag = if git_attr.kind == ObjectType::Commit {
+            InoFlag::SnapFolder
+        } else {
+            InoFlag::InsideSnap
+        };
+
         Ok(FileAttr {
             ino,
+            ino_flag,
             oid: git_attr.oid,
             size: git_attr.size,
             blocks,
@@ -660,7 +740,7 @@ impl GitFs {
             crtime: time,
             kind,
             perm,
-            mode: git_attr.filemode,
+            git_mode: git_attr.git_mode,
             nlink,
             uid,
             gid,
@@ -683,9 +763,9 @@ impl GitFs {
 
         let ctx = FsOperationContext::get_operation(self, ino);
         match ctx? {
-            FsOperationContext::Root => Ok(build_attr_dir(ROOT_INO, st_mode)),
+            FsOperationContext::Root => Ok(build_attr_dir(ROOT_INO, InoFlag::Root, st_mode)),
             FsOperationContext::RepoDir { ino: _ } => {
-                let attr = build_attr_dir(ino.to_u64_n(), st_mode);
+                let attr = build_attr_dir(ino.to_u64_n(), InoFlag::RepoRoot, st_mode);
                 let ino: Inodes = attr.ino.into();
                 match ino {
                     Inodes::NormalIno(_) => Ok(attr),
@@ -731,12 +811,7 @@ impl GitFs {
     // website.accoount.repo_name
     // example:github.tokio.tokio-rs.git -> https://github.com/tokio-rs/tokio.git
     #[instrument(level = "debug", skip(self), fields(parent = %parent), ret(level = Level::DEBUG), err(Display))]
-    pub fn mkdir(
-        &mut self,
-        parent: u64,
-        os_name: &OsStr,
-        create_attr: CreateFileAttr,
-    ) -> anyhow::Result<FileAttr> {
+    pub fn mkdir(&mut self, parent: u64, os_name: &OsStr) -> anyhow::Result<FileAttr> {
         let parent: Inodes = parent.into();
         if self.read_only {
             bail!("Filesystem is in read only");
@@ -753,15 +828,17 @@ impl GitFs {
 
         let ctx = FsOperationContext::get_operation(self, parent);
         match ctx? {
-            FsOperationContext::Root => ops::mkdir::mkdir_root(self, ROOT_INO, name, create_attr),
+            FsOperationContext::Root => {
+                ops::mkdir::mkdir_root(self, ROOT_INO, name, dir_attr(InoFlag::Root))
+            }
             FsOperationContext::RepoDir { ino } => {
-                ops::mkdir::mkdir_repo(self, ino, name, create_attr)
+                ops::mkdir::mkdir_repo(self, ino, name, dir_attr(InoFlag::RepoRoot))
             }
             FsOperationContext::InsideLiveDir { ino } => {
-                ops::mkdir::mkdir_live(self, ino, name, create_attr)
+                ops::mkdir::mkdir_live(self, ino, name, dir_attr(InoFlag::InsideLive))
             }
             FsOperationContext::InsideGitDir { ino: _ } => {
-                ops::mkdir::mkdir_git(self, parent.to_norm(), name, create_attr)
+                ops::mkdir::mkdir_git(self, parent.to_norm(), name, dir_attr(InoFlag::InsideBuild))
             }
         }
     }
@@ -818,25 +895,31 @@ impl GitFs {
         let parent: Inodes = parent.into();
 
         if self.read_only {
-            bail!("Filesystem is in read only");
+            tracing::error!("Filesystem is in read only");
+            bail!(std::io::Error::from_raw_os_error(libc::EACCES))
         }
         if !self.exists(parent)? {
-            bail!(format!("Parent {} does not exist", parent));
+            tracing::error!("Parent {} does not exist", parent);
+            bail!(std::io::Error::from_raw_os_error(libc::EIO))
         }
-        let name = os_name
-            .to_str()
-            .ok_or_else(|| anyhow!("Not a valid UTF-8 name"))?;
+        let name = os_name.to_str().ok_or_else(|| {
+            tracing::error!("Not a valid UTF-8 name");
+            anyhow!(std::io::Error::from_raw_os_error(libc::EIO))
+        })?;
         if name == "." || name == ".." {
-            bail!("invalid name");
+            tracing::error!("invalid name");
+            bail!(std::io::Error::from_raw_os_error(libc::EIO))
         }
 
         let ctx = FsOperationContext::get_operation(self, parent);
         match ctx? {
             FsOperationContext::Root => {
-                bail!("This directory is read only")
+                tracing::error!("This directory is read only");
+                bail!(std::io::Error::from_raw_os_error(libc::EACCES))
             }
             FsOperationContext::RepoDir { ino: _ } => {
-                bail!("Not allowed")
+                tracing::error!("Not allowed");
+                bail!(std::io::Error::from_raw_os_error(libc::EACCES))
             }
             FsOperationContext::InsideLiveDir { ino } => ops::unlink::unlink_live(self, ino, name),
             FsOperationContext::InsideGitDir { ino: _ } => {
@@ -1014,7 +1097,7 @@ impl GitFs {
         match ctx? {
             FsOperationContext::Root => ops::lookup::lookup_root(self, name),
             FsOperationContext::RepoDir { ino: _ } => {
-                let Some(attr) = ops::lookup::lookup_repo(self, parent.to_u64_n(), name)? else {
+                let Some(attr) = ops::lookup::lookup_repo(self, parent.to_norm(), name)? else {
                     return Ok(None);
                 };
                 if spec.is_virtual() && attr.kind == FileType::Directory {
@@ -1099,12 +1182,12 @@ impl GitFs {
     }
 
     fn create_vfile_attr(&self, ino: VirtualIno, size: u64) -> anyhow::Result<FileAttr> {
-        let mut new_attr: FileAttr = file_attr().into();
+        let mut new_attr: FileAttr = file_attr(InoFlag::VirtualFile).into();
 
         let v_ino = ino.to_virt_u64();
 
         new_attr.size = size;
-        new_attr.mode = 0o100444;
+        new_attr.git_mode = 0o100444;
         new_attr.kind = FileType::RegularFile;
         new_attr.perm = 0o444;
         new_attr.nlink = 1;
@@ -1167,28 +1250,56 @@ impl GitFs {
 // gitfs_path_builders
 impl GitFs {
     /// Build path to a folder or file that exists in the live folder
-    fn get_path_by_name_in_live(&self, parent: u64, name: &str) -> anyhow::Result<PathBuf> {
-        let parent = self.clear_vdir_bit(parent);
+    fn get_live_path(&self, parent: NormalIno) -> anyhow::Result<PathBuf> {
+        let live_ino = self.get_live_ino(parent.to_norm_u64());
         let repo_name = {
-            let repo = &self.get_repo(parent)?;
+            let repo = &self.get_repo(parent.to_norm_u64())?;
             let repo = repo.lock().map_err(|_| anyhow!("Lock poisoned"))?;
             repo.repo_dir.clone()
         };
         let path_to_repo = PathBuf::from(&self.repos_dir).join(repo_name);
 
-        let live_ino = self.get_live_ino(parent);
-        if parent == live_ino {
-            return Ok(path_to_repo.join(name));
+        // live folder must be skipped. It doesn't exist on disk
+        if live_ino == parent.to_norm_u64() {
+            return Ok(path_to_repo);
         }
 
         let conn_arc = {
-            let repo = &self.get_repo(parent)?;
+            let repo = &self.get_repo(parent.into())?;
             let repo = repo.lock().map_err(|_| anyhow!("Lock poisoned"))?;
             std::sync::Arc::clone(&repo.connection)
         };
-        let conn = conn_arc.lock().map_err(|_| anyhow!("Lock poisoned"))?;
-        let db_path = conn.get_path_from_db(parent)?;
-        Ok(PathBuf::from(&self.repos_dir).join(db_path).join(name))
+
+        let parent_name = {
+            let conn = conn_arc.lock().map_err(|_| anyhow!("Lock poisoned"))?;
+            conn.get_parent_name_from_ino(parent.into())?
+        };
+
+        let mut out: Vec<String> = vec![];
+
+        let mut cur_par_ino = parent.to_norm_u64();
+        let mut cur_par_name = parent_name;
+
+        out.push(cur_par_name.clone());
+
+        let max_loops = 1000;
+        for _ in 0..max_loops {
+            (cur_par_ino, cur_par_name) = {
+                let conn = conn_arc.lock().map_err(|_| anyhow!("Lock poisoned"))?;
+                tracing::error!("Getting {cur_par_ino} {cur_par_name}");
+                conn.get_parent_name_from_child(cur_par_ino, &cur_par_name)?
+            };
+
+            // live folder must be skipped. It doesn't exist on disk
+            if live_ino == cur_par_ino {
+                break;
+            }
+
+            out.push(cur_par_name.clone());
+        }
+
+        out.reverse();
+        Ok(path_to_repo.join(out.iter().collect::<PathBuf>()))
     }
 
     fn get_path_to_build_folder(&self, ino: NormalIno) -> anyhow::Result<PathBuf> {
@@ -1201,39 +1312,15 @@ impl GitFs {
         Ok(repo_dir_path)
     }
 
-    fn full_path_build_folder(&self, ino: NormalIno, temp_dir: &Path) -> anyhow::Result<PathBuf> {
-        let mut components = vec![];
-        let build_ino = self.get_build_ino(ino)?;
-
-        let mut cur = ino.to_norm_u64();
-        loop {
-            let parent_name = self.get_name_from_db(cur)?;
-            components.push(parent_name);
-
-            let parent = self.get_parent_ino(cur)?;
-            if parent == build_ino {
-                components.push(temp_dir.to_string_lossy().into());
-                break;
-            }
-            cur = parent;
-        }
-
-        components.reverse();
-
-        Ok(components.iter().collect::<PathBuf>())
-    }
-
-    // TODO: Change to check live_ino instead of live name
     // As "live" does not exist on disk, it will remove it from the path
-    fn build_full_path(&self, ino: u64) -> anyhow::Result<PathBuf> {
-        let ino = self.clear_vdir_bit(ino);
+    fn build_full_path(&self, ino: NormalIno) -> anyhow::Result<PathBuf> {
         let repo_ino = {
-            let repo = self.get_repo(ino)?;
+            let repo = self.get_repo(ino.into())?;
             let repo = repo.lock().map_err(|_| anyhow!("Lock poisoned"))?;
             GitFs::repo_id_to_ino(repo.repo_id)
         };
         let path = PathBuf::from(&self.repos_dir);
-        if ino == repo_ino {
+        if repo_ino == ino.to_norm_u64() {
             return Ok(path);
         }
         let db_path = &self.get_path_from_db(ino)?;
@@ -1276,44 +1363,21 @@ impl GitFs {
         Ok(())
     }
 
-    // TODO: Phase out
-    pub fn set_vdir_bit(&self, ino: u64) -> u64 {
-        ino | VDIR_BIT
-    }
-
-    // TODO: Phase out
-    pub fn clear_vdir_bit(&self, ino: u64) -> u64 {
-        ino & !VDIR_BIT
-    }
-
-    pub fn refresh_attr(&self, attr: &mut FileAttr) -> anyhow::Result<FileAttr> {
-        let ino = Inodes::NormalIno(attr.ino).to_norm();
-        let path = if self.is_in_build(ino)? {
-            let parent_oid = self.parent_commit_build_session(ino)?;
-            let build_root = self.get_path_to_build_folder(ino)?;
-
-            let repo = self.get_repo(attr.ino)?;
-            let mut repo = repo.lock().map_err(|_| anyhow!("Lock poisoned"))?;
-            let session = repo.get_or_init_build_session(parent_oid, &build_root)?;
-            drop(repo);
-            session.finish_path(self, ino)?
-        } else {
-            self.build_full_path(attr.ino)?
-        };
-        let metadata = path.metadata()?;
+    pub fn refresh_medata_using_path<P: AsRef<Path>>(
+        &self,
+        path: P,
+        ino_flag: InoFlag,
+    ) -> anyhow::Result<FileAttr> {
+        let metadata = path.as_ref().metadata()?;
         let std_type = metadata.file_type();
-        let actual = if std_type.is_dir() {
-            FileType::Directory
+
+        let mut attr: FileAttr = if std_type.is_dir() {
+            dir_attr(ino_flag).into()
         } else if std_type.is_file() {
-            FileType::RegularFile
-        } else if std_type.is_symlink() {
-            FileType::Symlink
+            file_attr(ino_flag).into()
         } else {
             bail!("Invalid input")
         };
-        if attr.kind != actual {
-            bail!("Invalid input")
-        }
 
         let atime: SystemTime = metadata.accessed()?;
         let mtime: SystemTime = metadata.modified()?;
@@ -1334,27 +1398,66 @@ impl GitFs {
         attr.gid = unsafe { libc::getgid() } as u32;
         attr.size = metadata.size();
 
-        let parent = self.get_parent_ino(attr.ino)?;
-        let name = self.get_name_from_db(attr.ino)?;
-        let _ = self.notifier.send(InvalMsg::Entry {
-            parent,
-            name: OsString::from(name),
-        });
-        let _ = self.notifier.send(InvalMsg::Inode {
-            ino: parent,
-            off: 0,
-            len: 0,
-        });
-        let _ = self.notifier.send(InvalMsg::Inode {
-            ino: attr.ino,
-            off: 0,
-            len: 0,
-        });
-
-        Ok(*attr)
+        Ok(attr)
     }
 
-    fn attr_from_path(&self, path: PathBuf) -> anyhow::Result<FileAttr> {
+    /// Finds the file on disk using an inode
+    pub fn refresh_metadata_from_disk(&self, ino: NormalIno) -> anyhow::Result<FileAttr> {
+        let path = if self.is_in_live(ino)? {
+            self.get_live_path(ino)?
+        } else if self.is_in_build(ino)? {
+            let parent_oid = self.parent_commit_build_session(ino)?;
+            let build_root = self.get_path_to_build_folder(ino)?;
+            let repo = self.get_repo(ino.into())?;
+            let mut repo = repo.lock().map_err(|_| anyhow!("Lock poisoned"))?;
+            let session = repo.get_or_init_build_session(parent_oid, &build_root)?;
+            drop(repo);
+            session.finish_path(self, ino)?
+        } else {
+            bail!(std::io::Error::from_raw_os_error(libc::EPERM));
+        };
+        let ino_flag = self.get_ino_flag_from_db(ino)?;
+        let mut attr = self.refresh_medata_using_path(path, ino_flag)?;
+        attr.ino = ino.into();
+
+        {
+            let parents = self.get_all_parents(ino.into())?;
+            let name = self.get_name_from_db(attr.ino)?;
+            for parent in parents {
+                let _ = self.notifier.send(InvalMsg::Entry {
+                    parent,
+                    name: OsString::from(&name),
+                });
+                let _ = self.notifier.send(InvalMsg::Inode {
+                    ino: parent,
+                    off: 0,
+                    len: 0,
+                });
+            }
+            let _ = self.notifier.send(InvalMsg::Inode {
+                ino: attr.ino,
+                off: 0,
+                len: 0,
+            });
+        }
+
+        Ok(attr)
+    }
+
+    pub fn update_db_metadata(&self, stored_attr: SetStoredAttr) -> anyhow::Result<FileAttr> {
+        let ino = stored_attr.ino;
+        let conn_arc = {
+            let repo = &self.get_repo(ino)?;
+            let repo = repo.lock().map_err(|_| anyhow!("Lock poisoned"))?;
+            std::sync::Arc::clone(&repo.connection)
+        };
+        let mut conn = conn_arc.lock().map_err(|_| anyhow!("Lock poisoned"))?;
+        conn.update_inodes_table(stored_attr)?;
+        let stored_attr = conn.get_metadata(ino)?;
+        Ok(stored_attr)
+    }
+
+    fn attr_from_path(&self, ino_flag: InoFlag, path: PathBuf) -> anyhow::Result<FileAttr> {
         let metadata = path.metadata()?;
         let atime: SystemTime = metadata.accessed()?;
         let mtime: SystemTime = metadata.modified()?;
@@ -1381,6 +1484,7 @@ impl GitFs {
 
         Ok(FileAttr {
             ino: 0,
+            ino_flag,
             oid: Oid::zero(),
             size: metadata.size(),
             blocks: metadata.blocks(),
@@ -1390,7 +1494,7 @@ impl GitFs {
             crtime,
             kind,
             perm: 0o775,
-            mode: st_mode,
+            git_mode: st_mode,
             nlink: metadata.nlink() as u32,
             uid: unsafe { libc::geteuid() },
             gid: unsafe { libc::getgid() },
@@ -1409,12 +1513,15 @@ impl GitFs {
         Ok(repo.clone())
     }
 
-    pub fn get_parent_commit(&self, ino: u64) -> anyhow::Result<(Oid, String)> {
-        let ino = self.clear_vdir_bit(ino);
+    pub fn get_parent_commit(&self, ino: u64) -> anyhow::Result<Oid> {
+        info!("Par commit - 1");
         let repo_arc = self.get_repo(ino)?;
+        info!("Par commit - 2");
 
         let mut cur = ino;
+        info!("Par commit - 3");
         let mut oid = self.get_oid_from_db(ino)?;
+        info!("Par commit - 4");
         let max_steps = 1000;
         let mut i = 0;
         while {
@@ -1422,46 +1529,25 @@ impl GitFs {
             repo.inner.find_commit(oid).is_err()
         } {
             i += 1;
-            let parent_ino = self.get_parent_ino(cur)?;
+            info!("Par commit - 5");
+            let parent_ino = self.get_single_parent(cur)?;
+            info!("Par commit - 6");
             oid = self.get_oid_from_db(parent_ino)?;
+            info!("Par commit - 7");
 
             cur = parent_ino;
             if i == max_steps {
                 bail!("Parent commit not found")
             }
         }
-        Ok((oid, self.get_name_from_db(cur)?))
+        Ok(oid)
     }
 
     fn is_in_build(&self, ino: NormalIno) -> anyhow::Result<bool> {
-        // One of the parents is a commit
-        if self.is_in_live(ino.to_norm_u64()) {
-            return Ok(false);
-        };
-
-        let oid = self.get_oid_from_db(ino.to_norm_u64())?;
-        if self.is_commit(ino, oid)? {
-            return Ok(true);
+        match self.get_ino_flag_from_db(ino)? {
+            InoFlag::BuildRoot | InoFlag::InsideBuild => Ok(true),
+            _ => Ok(false),
         }
-        if oid != Oid::zero() {
-            return Ok(false);
-        }
-
-        #[allow(unused_assignments)]
-        let mut cur_oid = oid;
-        let mut cur_ino = ino.to_norm_u64();
-
-        let max_loops = 1000;
-
-        for _ in 0..max_loops {
-            cur_ino = self.get_parent_ino(cur_ino)?;
-            cur_oid = self.get_oid_from_db(cur_ino)?;
-            if self.is_commit(ino, cur_oid)? {
-                return Ok(true);
-            }
-        }
-
-        Ok(false)
     }
 
     fn is_commit(&self, ino: NormalIno, oid: Oid) -> anyhow::Result<bool> {
@@ -1470,30 +1556,10 @@ impl GitFs {
         Ok(repo.inner.find_commit(oid).is_ok())
     }
 
-    fn is_in_live(&self, ino: u64) -> bool {
-        let live_ino = self.get_live_ino(ino);
-        if live_ino == ino || self.is_virtual(ino) {
-            return true;
-        }
-        let mut target_ino = ino;
-
-        loop {
-            if target_ino == ROOT_INO {
-                return false;
-            }
-            let parent = match self.get_parent_ino(target_ino) {
-                Ok(p) => p,
-                Err(_) => return false,
-            };
-            if parent == live_ino {
-                return true;
-            }
-
-            if parent == target_ino {
-                return false;
-            }
-
-            target_ino = parent;
+    fn is_in_live(&self, ino: NormalIno) -> anyhow::Result<bool> {
+        match self.get_ino_flag_from_db(ino)? {
+            InoFlag::LiveRoot | InoFlag::InsideLive => Ok(true),
+            _ => Ok(false),
         }
     }
 
@@ -1537,17 +1603,50 @@ impl GitFs {
         }
     }
 
-    pub fn get_parent_ino(&self, ino: u64) -> anyhow::Result<u64> {
-        if ino == ROOT_INO {
-            bail!("Target is ROOT_INO");
+    // TODO: FIX NEW SQL
+    pub fn get_dir_parent(&self, ino: u64) -> anyhow::Result<u64> {
+        if !self.is_dir(ino.into())? {
+            bail!("Not a directory")
+        };
+
+        if ROOT_INO == ino {
+            return Ok(ROOT_INO);
         }
+
         let conn_arc = {
             let repo = &self.get_repo(ino)?;
             let repo = repo.lock().map_err(|_| anyhow!("Lock poisoned"))?;
             std::sync::Arc::clone(&repo.connection)
         };
         let conn = conn_arc.lock().map_err(|_| anyhow!("Lock poisoned"))?;
-        conn.get_parent_ino(self.clear_vdir_bit(ino))
+        conn.get_dir_parent(ino.into())
+    }
+
+    pub fn get_all_parents(&self, ino: u64) -> anyhow::Result<Vec<u64>> {
+        let conn_arc = {
+            let repo = &self.get_repo(ino)?;
+            let repo = repo.lock().map_err(|_| anyhow!("Lock poisoned"))?;
+            std::sync::Arc::clone(&repo.connection)
+        };
+
+        let conn = conn_arc.lock().map_err(|_| anyhow!("Lock poisoned"))?;
+        conn.get_all_parents(ino)
+    }
+
+    /// Only used in 2 situatsions:
+    ///
+    /// On files when it will 100% only have one parent (git objects)
+    ///
+    /// Or when ommiting other parents doesn't matter (writing to a hard link)
+    pub fn get_single_parent(&self, ino: u64) -> anyhow::Result<u64> {
+        let conn_arc = {
+            let repo = &self.get_repo(ino)?;
+            let repo = repo.lock().map_err(|_| anyhow!("Lock poisoned"))?;
+            std::sync::Arc::clone(&repo.connection)
+        };
+
+        let conn = conn_arc.lock().map_err(|_| anyhow!("Lock poisoned"))?;
+        conn.get_single_parent(ino)
     }
 
     fn repo_id_to_ino(repo_id: u16) -> u64 {
@@ -1562,6 +1661,7 @@ impl GitFs {
         if !self.repos_dir.exists() {
             let mut attr: FileAttr = CreateFileAttr {
                 kind: FileType::Directory,
+                ino_flag: InoFlag::Root,
                 perm: 0o775,
                 mode: libc::S_IFDIR,
                 uid: 0,
@@ -1600,18 +1700,51 @@ impl GitFs {
             std::sync::Arc::clone(&repo.connection)
         };
         let conn = conn_arc.lock().map_err(|_| anyhow!("Lock poisoned"))?;
-        conn.exists_by_name(self.clear_vdir_bit(parent), name)
+        conn.exists_by_name(parent.into(), name)
+    }
+
+    pub fn get_metadata_by_name(
+        &self,
+        parent_ino: u64,
+        child_name: &str,
+    ) -> anyhow::Result<FileAttr> {
+        let conn_arc = {
+            let repo = &self.get_repo(parent_ino)?;
+            let repo = repo.lock().map_err(|_| anyhow!("Lock poisoned"))?;
+            std::sync::Arc::clone(&repo.connection)
+        };
+        let conn = conn_arc.lock().map_err(|_| anyhow!("Lock poisoned"))?;
+        conn.get_metadata_by_name(parent_ino, child_name)
+    }
+
+    pub fn get_metadata(&self, target_ino: u64) -> anyhow::Result<FileAttr> {
+        let conn_arc = {
+            let repo = &self.get_repo(target_ino)?;
+            let repo = repo.lock().map_err(|_| anyhow!("Lock poisoned"))?;
+            std::sync::Arc::clone(&repo.connection)
+        };
+        let conn = conn_arc.lock().map_err(|_| anyhow!("Lock poisoned"))?;
+        conn.get_metadata(target_ino)
+    }
+
+    pub fn get_stored_attr_by_name(&self, target_ino: u64) -> anyhow::Result<StoredAttr> {
+        let conn_arc = {
+            let repo = &self.get_repo(target_ino)?;
+            let repo = repo.lock().map_err(|_| anyhow!("Lock poisoned"))?;
+            std::sync::Arc::clone(&repo.connection)
+        };
+        let conn = conn_arc.lock().map_err(|_| anyhow!("Lock poisoned"))?;
+        conn.get_storage_node_from_db(target_ino)
     }
 
     /// Takes Inodes as virtual inodes do not "exist"
     pub fn exists(&self, ino: Inodes) -> anyhow::Result<bool> {
         let ino = ino.to_u64_n();
-        let ino = self.clear_vdir_bit(ino);
         if ino == ROOT_INO {
             return Ok(true);
         }
 
-        let res = self.get_name_from_db(ino);
+        let res = self.get_oid_from_db(ino);
         Ok(res.is_ok())
     }
 
@@ -1623,7 +1756,7 @@ impl GitFs {
         if ino == GitFs::repo_id_to_ino(repo_id) {
             return Ok(true);
         }
-        let mode = self.get_mode_from_db(ino.to_u64_n())?;
+        let mode = self.get_mode_from_db(ino.to_norm())?;
         let ino: Inodes = ino;
         match mode {
             FileMode::Tree | FileMode::Commit => match ino {
@@ -1639,9 +1772,8 @@ impl GitFs {
     }
 
     /// Needs to be passed the actual u64 inode
-    fn is_file(&self, ino: u64) -> anyhow::Result<bool> {
-        let ino = self.clear_vdir_bit(ino);
-        if ino == ROOT_INO {
+    fn is_file(&self, ino: NormalIno) -> anyhow::Result<bool> {
+        if ino.to_norm_u64() == ROOT_INO {
             return Ok(false);
         }
         let mode = self.get_mode_from_db(ino)?;
@@ -1649,12 +1781,12 @@ impl GitFs {
     }
 
     /// Needs to be passed the actual u64 inode
-    fn is_link(&self, ino: u64) -> anyhow::Result<bool> {
-        let ino = self.clear_vdir_bit(ino);
+    fn is_link(&self, ino: NormalIno) -> anyhow::Result<bool> {
+        let ino = ino.to_norm_u64();
         if ino == ROOT_INO {
             return Ok(false);
         }
-        let mode = self.get_mode_from_db(ino)?;
+        let mode = self.get_mode_from_db(ino.into())?;
         Ok(mode == FileMode::Link)
     }
 
@@ -1663,24 +1795,30 @@ impl GitFs {
     }
 
     fn get_ino_from_db(&self, parent: u64, name: &str) -> anyhow::Result<u64> {
-        let parent = self.clear_vdir_bit(parent);
+        let parent: Inodes = parent.into();
         let conn_arc = {
-            let repo = &self.get_repo(parent)?;
+            let repo = &self.get_repo(parent.into())?;
             let repo = repo.lock().map_err(|_| anyhow!("Lock poisoned"))?;
             std::sync::Arc::clone(&repo.connection)
         };
         let conn = conn_arc.lock().map_err(|_| anyhow!("Lock poisoned"))?;
-        conn.get_ino_from_db(parent, name)
+        conn.get_ino_from_db(parent.into(), name)
     }
 
-    fn remove_db_record(&self, ino: u64) -> anyhow::Result<()> {
+    /// Removes the directory entry (from dentries) for the target
+    ///
+    /// If it's the only directory entry for this inode, it will remove the inode entry as well
+    ///
+    /// TODO: Do not delete inode entry only when open fh are 0
+    /// TODO: Perform that in the fn release - using a channel
+    fn remove_db_record(&self, parent_ino: NormalIno, target_name: &str) -> anyhow::Result<()> {
         let conn_arc = {
-            let repo = &self.get_repo(ino)?;
+            let repo = &self.get_repo(parent_ino.to_norm_u64())?;
             let repo = repo.lock().map_err(|_| anyhow!("Lock poisoned"))?;
             std::sync::Arc::clone(&repo.connection)
         };
-        let conn = conn_arc.lock().map_err(|_| anyhow!("Lock poisoned"))?;
-        conn.remove_db_record(self.clear_vdir_bit(ino))
+        let mut conn = conn_arc.lock().map_err(|_| anyhow!("Lock poisoned"))?;
+        conn.remove_db_record(parent_ino.to_norm_u64(), target_name)
     }
 
     pub fn parent_commit_build_session(&self, ino: NormalIno) -> anyhow::Result<Oid> {
@@ -1695,21 +1833,22 @@ impl GitFs {
                 break;
             }
 
-            cur_ino = self.get_parent_ino(cur_ino)?;
+            cur_ino = self.get_single_parent(cur_ino)?;
             cur_oid = self.get_oid_from_db(cur_ino)?;
         }
 
         Ok(cur_oid)
     }
 
-    fn get_path_from_db(&self, ino: u64) -> anyhow::Result<PathBuf> {
+    // TODO: FIX NEW SQL
+    fn get_path_from_db(&self, ino: NormalIno) -> anyhow::Result<PathBuf> {
         let conn_arc = {
-            let repo = &self.get_repo(ino)?;
+            let repo = &self.get_repo(ino.into())?;
             let repo = repo.lock().map_err(|_| anyhow!("Lock poisoned"))?;
             std::sync::Arc::clone(&repo.connection)
         };
         let conn = conn_arc.lock().map_err(|_| anyhow!("Lock poisoned"))?;
-        conn.get_path_from_db(self.clear_vdir_bit(ino))
+        conn.get_path_from_db(ino.into())
     }
 
     fn get_oid_from_db(&self, ino: u64) -> anyhow::Result<Oid> {
@@ -1719,41 +1858,56 @@ impl GitFs {
             std::sync::Arc::clone(&repo.connection)
         };
         let conn = conn_arc.lock().map_err(|_| anyhow!("Lock poisoned"))?;
-        conn.get_oid_from_db(self.clear_vdir_bit(ino))
+        conn.get_oid_from_db(ino)
     }
 
-    fn get_mode_from_db(&self, ino: u64) -> anyhow::Result<git2::FileMode> {
-        // Live directory does not exist in the DB. Handle it separately.
-        if ino == 0 {
-            return Ok(FileMode::Tree);
-        }
+    pub fn get_ino_flag_from_db(&self, ino: NormalIno) -> anyhow::Result<InoFlag> {
         let conn_arc = {
-            let repo = &self.get_repo(ino)?;
+            let repo = &self.get_repo(ino.to_norm_u64())?;
             let repo = repo.lock().map_err(|_| anyhow!("Lock poisoned"))?;
             std::sync::Arc::clone(&repo.connection)
         };
         let conn = conn_arc.lock().map_err(|_| anyhow!("Lock poisoned"))?;
-        let mode = conn.get_mode_from_db(self.clear_vdir_bit(ino))?;
+        let mask: InoFlag = conn
+            .get_ino_flag_from_db(ino.to_norm_u64())?
+            .try_into()
+            .map_err(|_| anyhow!("Invalid ino mask"))?;
+        Ok(mask)
+    }
+
+    // TODO: FIX NEW SQL
+    fn get_mode_from_db(&self, ino: NormalIno) -> anyhow::Result<git2::FileMode> {
+        // Live directory does not exist in the DB. Handle it separately.
+        if ino.to_norm_u64() == 0 {
+            return Ok(FileMode::Tree);
+        }
+        let conn_arc = {
+            let repo = &self.get_repo(ino.into())?;
+            let repo = repo.lock().map_err(|_| anyhow!("Lock poisoned"))?;
+            std::sync::Arc::clone(&repo.connection)
+        };
+        let conn = conn_arc.lock().map_err(|_| anyhow!("Lock poisoned"))?;
+        let mode = conn.get_mode_from_db(ino.into())?;
         repo::try_into_filemode(mode).ok_or_else(|| anyhow!("Invalid filemode"))
     }
 
     fn get_name_from_db(&self, ino: u64) -> anyhow::Result<String> {
+        let ino: Inodes = ino.into();
         let conn_arc = {
-            let repo = &self.get_repo(ino)?;
+            let repo = &self.get_repo(ino.into())?;
             let repo = repo.lock().map_err(|_| anyhow!("Lock poisoned"))?;
             std::sync::Arc::clone(&repo.connection)
         };
         let conn = conn_arc.lock().map_err(|_| anyhow!("Lock poisoned"))?;
-        conn.get_name_from_db(self.clear_vdir_bit(ino))
+        conn.get_name_from_db(ino.into())
     }
 
-    /// nodes = Vec<parent inode, entry name, entry attr>
-    fn write_inodes_to_db(&self, nodes: Vec<(u64, String, FileAttr)>) -> anyhow::Result<()> {
+    fn write_inodes_to_db(&self, nodes: Vec<StorageNode>) -> anyhow::Result<()> {
         if nodes.is_empty() {
             return Ok(());
         }
         let conn_arc = {
-            let repo = &self.get_repo(nodes[0].0)?;
+            let repo = &self.get_repo(nodes[0].parent_ino)?;
             let repo = repo.lock().map_err(|_| anyhow!("Lock poisoned"))?;
             std::sync::Arc::clone(&repo.connection)
         };

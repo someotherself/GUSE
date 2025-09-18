@@ -5,7 +5,7 @@ use anyhow::{anyhow, bail};
 use crate::{
     fs::{
         FileAttr, GitFs,
-        fileattr::{FileType, dir_attr, file_attr},
+        fileattr::{FileType, InoFlag, StorageNode, dir_attr, file_attr},
     },
     inodes::NormalIno,
     mount::InvalMsg,
@@ -18,7 +18,9 @@ pub fn rename_live(
     new_parent: NormalIno,
     new_name: &str,
 ) -> anyhow::Result<()> {
-    if !fs.is_in_live(new_parent.to_norm_u64()) && !fs.is_in_build(new_parent)? {
+    let dest_in_live = fs.is_in_live(new_parent)?;
+    let dest_in_build = fs.is_in_build(new_parent)?;
+    if !dest_in_live && !dest_in_build {
         bail!(format!("New parent {} not allowed", new_parent));
     }
 
@@ -42,8 +44,8 @@ pub fn rename_live(
         }
     }
 
-    let src = fs.build_full_path(parent.to_norm_u64())?.join(name);
-    let dest = fs.build_full_path(new_parent.to_norm_u64())?.join(new_name);
+    let src = fs.build_full_path(parent)?.join(name);
+    let dest = fs.build_full_path(new_parent)?.join(new_name);
 
     std::fs::rename(src, &dest)?;
 
@@ -85,19 +87,30 @@ pub fn rename_live(
         }
     }
 
-    fs.remove_db_record(src_attr.ino)?;
+    fs.remove_db_record(parent, name)?;
     if dest_exists {
-        fs.remove_db_record(dest_old_ino)?;
+        fs.remove_db_record(new_parent, new_name)?;
     }
 
+    let ino_flag = if dest_in_live {
+        InoFlag::InsideLive
+    } else if dest_in_build {
+        InoFlag::InsideBuild
+    } else {
+        bail!("Invalid location")
+    };
+
     let mut new_attr: FileAttr = match src_attr.kind {
-        FileType::Directory => dir_attr().into(),
-        _ => file_attr().into(),
+        FileType::Directory => dir_attr(ino_flag).into(),
+        _ => file_attr(ino_flag).into(),
     };
     new_attr.ino = src_attr.ino;
 
-    let nodes: Vec<(u64, String, FileAttr)> =
-        vec![(new_parent.to_norm_u64(), new_name.to_string(), new_attr)];
+    let nodes = vec![StorageNode {
+        parent_ino: new_parent.to_norm_u64(),
+        name: new_name.into(),
+        attr: new_attr.into(),
+    }];
     fs.write_inodes_to_db(nodes)?;
     Ok(())
 }
@@ -109,10 +122,11 @@ pub fn rename_git_build(
     new_parent: NormalIno,
     new_name: &str,
 ) -> anyhow::Result<()> {
-    let dst_in_build = fs.is_in_build(new_parent)?;
+    let dest_in_build = fs.is_in_build(new_parent)?;
+    let dest_in_live = fs.is_in_live(new_parent)?;
     let oid = fs.get_oid_from_db(new_parent.into())?;
     let is_commit_folder = fs.is_commit(new_parent, oid)?;
-    if !dst_in_build && !is_commit_folder && !fs.is_in_live(new_parent.to_norm_u64()) {
+    if !dest_in_build && !is_commit_folder && !dest_in_live {
         bail!(format!("New parent {} not allowed", new_parent));
     }
     let src_attr = fs
@@ -146,7 +160,7 @@ pub fn rename_git_build(
         session.finish_path(fs, ino)?.join(name)
     };
 
-    let dest = if dst_in_build {
+    let dest = if dest_in_build {
         let ino = new_parent;
         let parent_oid = fs.parent_commit_build_session(ino)?;
         let build_root = fs.get_path_to_build_folder(ino)?;
@@ -156,7 +170,7 @@ pub fn rename_git_build(
         drop(repo);
         session.finish_path(fs, ino)?.join(new_name)
     } else {
-        fs.build_full_path(new_parent.to_norm_u64())?.join(new_name)
+        fs.build_full_path(new_parent)?.join(new_name)
     };
 
     std::fs::rename(src, &dest)?;
@@ -199,17 +213,28 @@ pub fn rename_git_build(
         }
     }
 
-    fs.remove_db_record(src_attr.ino)?;
+    fs.remove_db_record(parent, name)?;
 
     if dest_exists {
-        fs.remove_db_record(dest_old_ino)?;
+        fs.remove_db_record(new_parent, new_name)?;
     }
 
-    let mut new_attr = fs.attr_from_path(dest)?;
+    let ino_flag = if dest_in_live {
+        InoFlag::InsideLive
+    } else if dest_in_build {
+        InoFlag::InsideBuild
+    } else {
+        bail!("Invalid location")
+    };
+
+    let mut new_attr = fs.attr_from_path(ino_flag, dest)?;
     new_attr.ino = src_attr.ino;
 
-    let nodes: Vec<(u64, String, FileAttr)> =
-        vec![(new_parent.to_norm_u64(), new_name.to_string(), new_attr)];
+    let nodes = vec![StorageNode {
+        parent_ino: new_parent.to_norm_u64(),
+        name: new_name.into(),
+        attr: new_attr.into(),
+    }];
     fs.write_inodes_to_db(nodes)?;
 
     Ok(())

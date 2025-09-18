@@ -5,16 +5,18 @@ use anyhow::{anyhow, bail};
 use crate::{fs::GitFs, inodes::NormalIno, mount::InvalMsg};
 
 pub fn unlink_live(fs: &GitFs, parent: u64, name: &str) -> anyhow::Result<()> {
-    let attr = fs
-        .lookup(parent, name)?
-        .ok_or_else(|| anyhow!(format!("{name} not found in parent {parent}")))?;
-    if !fs.is_file(attr.ino)? && !fs.is_link(attr.ino)? {
-        bail!("Not a file")
+    let Ok(target_ino) = fs.get_ino_from_db(parent, name) else {
+        tracing::error!("Target does not exist");
+        bail!(std::io::Error::from_raw_os_error(libc::ENOENT))
+    };
+    if !fs.is_file(target_ino.into())? && !fs.is_link(target_ino.into())? {
+        tracing::error!("Not a file");
+        bail!(std::io::Error::from_raw_os_error(libc::EISDIR))
     }
-    let path = fs.build_full_path(attr.ino)?;
+    let path = fs.build_full_path(target_ino.into())?;
     std::fs::remove_file(path)?;
 
-    fs.remove_db_record(attr.ino)?;
+    fs.remove_db_record(parent.into(), name)?;
 
     let _ = fs.notifier.send(InvalMsg::Entry {
         parent,
@@ -26,7 +28,7 @@ pub fn unlink_live(fs: &GitFs, parent: u64, name: &str) -> anyhow::Result<()> {
         len: 0,
     });
     let _ = fs.notifier.send(InvalMsg::Inode {
-        ino: attr.ino,
+        ino: target_ino,
         off: 0,
         len: 0,
     });
@@ -35,11 +37,13 @@ pub fn unlink_live(fs: &GitFs, parent: u64, name: &str) -> anyhow::Result<()> {
 }
 
 pub fn unlink_build_dir(fs: &GitFs, parent: NormalIno, name: &str) -> anyhow::Result<()> {
-    let attr = fs
-        .lookup(parent.to_norm_u64(), name)?
-        .ok_or_else(|| anyhow!(format!("{name} not found in parent {parent}")))?;
-    if !fs.is_file(attr.ino)? && !fs.is_link(attr.ino)? {
-        bail!("Not a file")
+    let Ok(target_ino) = fs.get_ino_from_db(parent.into(), name) else {
+        tracing::error!("Target does not exist");
+        bail!(std::io::Error::from_raw_os_error(libc::ENOENT))
+    };
+    if !fs.is_file(target_ino.into())? && !fs.is_link(target_ino.into())? {
+        tracing::error!("Not a file");
+        bail!(std::io::Error::from_raw_os_error(libc::EISDIR))
     }
 
     let path = {
@@ -64,11 +68,11 @@ pub fn unlink_build_dir(fs: &GitFs, parent: NormalIno, name: &str) -> anyhow::Re
         len: 0,
     });
     let _ = fs.notifier.send(InvalMsg::Inode {
-        ino: attr.ino,
+        ino: target_ino,
         off: 0,
         len: 0,
     });
 
-    fs.remove_db_record(attr.ino)?;
+    fs.remove_db_record(parent, name)?;
     Ok(())
 }

@@ -2,54 +2,63 @@ use std::ffi::OsString;
 
 use anyhow::{anyhow, bail};
 
-use crate::{
-    fs::GitFs,
-    inodes::{Inodes, NormalIno},
-    mount::InvalMsg,
-};
+use crate::{fs::GitFs, inodes::NormalIno, mount::InvalMsg};
 
 pub fn rmdir_live(fs: &GitFs, parent: NormalIno, name: &str) -> anyhow::Result<()> {
-    let parent = parent.to_norm_u64();
-    let attr = fs
-        .lookup(parent, name)?
-        .ok_or_else(|| anyhow!(format!("{name} not found in parent {parent}")))?;
-    if !fs.is_dir(attr.ino.into())? {
-        bail!("Not a directory")
+    let Ok(target_ino) = fs.get_ino_from_db(parent.into(), name) else {
+        tracing::error!("Target does not exist");
+        bail!(std::io::Error::from_raw_os_error(libc::ENOENT))
+    };
+    if !fs.is_dir(target_ino.into())? {
+        tracing::error!("Not a dir");
+        bail!(std::io::Error::from_raw_os_error(libc::EISDIR))
     }
-    let entries = fs.readdir(attr.ino)?;
+    let entries = fs.readdir(target_ino)?;
     if !entries.is_empty() {
-        bail!("Parent is not empty")
+        tracing::error!("Parent is not empty");
+        bail!(std::io::Error::from_raw_os_error(libc::ENOTEMPTY))
     }
-    let path = fs.build_full_path(attr.ino)?;
+    let Ok(path) = fs.get_live_path(target_ino.into()) else {
+        tracing::error!("Target does not exist");
+        bail!(std::io::Error::from_raw_os_error(libc::ENOENT))
+    };
     std::fs::remove_dir(path)?;
 
-    fs.remove_db_record(attr.ino)?;
+    fs.remove_db_record(parent, name)?;
 
-    let _ = fs.notifier.send(InvalMsg::Entry {
-        parent,
-        name: OsString::from(name),
-    });
-    let _ = fs.notifier.send(InvalMsg::Inode {
-        ino: parent,
-        off: 0,
-        len: 0,
-    });
-    let _ = fs.notifier.send(InvalMsg::Inode {
-        ino: attr.ino,
-        off: 0,
-        len: 0,
-    });
+    {
+        let _ = fs.notifier.send(InvalMsg::Entry {
+            parent: parent.into(),
+            name: OsString::from(name),
+        });
+        let _ = fs.notifier.send(InvalMsg::Inode {
+            ino: parent.into(),
+            off: 0,
+            len: 0,
+        });
+        let _ = fs.notifier.send(InvalMsg::Inode {
+            ino: target_ino,
+            off: 0,
+            len: 0,
+        });
+    }
 
     Ok(())
 }
 
 pub fn rmdir_git(fs: &GitFs, parent: NormalIno, name: &str) -> anyhow::Result<()> {
-    let attr = fs
-        .lookup(parent.to_norm_u64(), name)?
-        .ok_or_else(|| anyhow!(format!("{name} not found in parent {parent}")))?;
-    let target_ino: Inodes = attr.ino.into();
-    if !fs.is_dir(target_ino)? {
-        bail!("Not a dir")
+    let Ok(target_ino) = fs.get_ino_from_db(parent.into(), name) else {
+        tracing::error!("Target does not exist");
+        bail!(std::io::Error::from_raw_os_error(libc::ENOENT))
+    };
+    if !fs.is_dir(target_ino.into())? {
+        tracing::error!("Not a dir");
+        bail!(std::io::Error::from_raw_os_error(libc::EISDIR))
+    }
+    let entries = fs.readdir(target_ino)?;
+    if !entries.is_empty() {
+        tracing::error!("Parent is not empty");
+        bail!(std::io::Error::from_raw_os_error(libc::ENOTEMPTY))
     }
 
     let path = {
@@ -64,22 +73,24 @@ pub fn rmdir_git(fs: &GitFs, parent: NormalIno, name: &str) -> anyhow::Result<()
 
     std::fs::remove_dir(path)?;
 
-    fs.remove_db_record(attr.ino)?;
+    fs.remove_db_record(parent, name)?;
 
-    let _ = fs.notifier.send(InvalMsg::Entry {
-        parent: parent.to_norm_u64(),
-        name: OsString::from(name),
-    });
-    let _ = fs.notifier.send(InvalMsg::Inode {
-        ino: parent.to_norm_u64(),
-        off: 0,
-        len: 0,
-    });
-    let _ = fs.notifier.send(InvalMsg::Inode {
-        ino: attr.ino,
-        off: 0,
-        len: 0,
-    });
+    {
+        let _ = fs.notifier.send(InvalMsg::Entry {
+            parent: parent.to_norm_u64(),
+            name: OsString::from(name),
+        });
+        let _ = fs.notifier.send(InvalMsg::Inode {
+            ino: parent.to_norm_u64(),
+            off: 0,
+            len: 0,
+        });
+        let _ = fs.notifier.send(InvalMsg::Inode {
+            ino: target_ino,
+            off: 0,
+            len: 0,
+        });
+    }
 
     Ok(())
 }
