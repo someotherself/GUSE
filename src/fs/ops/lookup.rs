@@ -289,7 +289,7 @@ pub fn lookup_git(fs: &GitFs, parent: NormalIno, name: &str) -> anyhow::Result<O
                 let repo = repo.lock().map_err(|_| anyhow!("Lock poisoned"))?;
                 repo.find_in_commit(ctx.parent_commit(), oid)?
             };
-            let attr = fs.object_to_file_attr(ctx.attr.ino, &obj_attr)?;
+            let attr = fs.object_to_file_attr(ctx.attr.ino, &obj_attr, ctx.ino_flag)?;
             Ok(Some(attr))
         }
         TargetAttr::InsideBuild(ctx) => {
@@ -312,6 +312,6 @@ pub fn lookup_vdir(fs: &GitFs, parent: VirtualIno, name: &str) -> anyhow::Result
     let Some((entry_ino, object)) = v_node.log.get(name) else {
         return Ok(None);
     };
-    let attr = fs.object_to_file_attr(*entry_ino, object)?;
+    let attr = fs.object_to_file_attr(*entry_ino, object, InoFlag::InsideSnap)?;
     Ok(Some(attr))
 }

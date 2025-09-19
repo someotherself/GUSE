@@ -156,7 +156,8 @@ pub fn getattr_git_dir(fs: &GitFs, ino: NormalIno) -> anyhow::Result<FileAttr> {
                 let repo = repo.lock().map_err(|_| anyhow!("Lock poisoned"))?;
                 repo.find_in_commit(ctx.parent_commit(), ctx.attr.oid)?
             };
-            let mut attr = fs.object_to_file_attr(ino.to_norm_u64(), &object_attr)?;
+            let mut attr =
+                fs.object_to_file_attr(ino.to_norm_u64(), &object_attr, InoFlag::InsideSnap)?;
             attr.ino = ino.to_norm_u64();
             Ok(attr)
         }

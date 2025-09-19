@@ -1,4 +1,3 @@
-use std::collections::btree_map::Entry;
 use std::ffi::{OsStr, OsString};
 use std::fs::File;
 use std::os::unix::fs::{FileExt, MetadataExt, PermissionsExt};
@@ -6,7 +5,7 @@ use std::path::Path;
 use std::sync::{Arc, Mutex, OnceLock, RwLock};
 use std::time::{Duration, UNIX_EPOCH};
 use std::{
-    collections::{BTreeMap, HashMap, HashSet},
+    collections::{BTreeMap, HashMap, HashSet, btree_map::Entry},
     path::PathBuf,
     sync::atomic::{AtomicU64, Ordering},
     time::SystemTime,
@@ -95,7 +94,7 @@ impl FsOperationContext {
 //---------└── YYYY-MM/  <-
 //
 // Structure of INODES
-// Each repo has a repo_id--<16bits repo-id>
+// Each repo has a repo_id--<16bits repo-id><48 bits for ino>
 // repo_id for repo 1       0000000000000001
 // ino for repo 1 root dir  0000000000000001000000000....0000
 // ino for repo_1 live dir: 0000000000000001000000000....0001
@@ -699,7 +698,12 @@ impl GitFs {
         Ok(true)
     }
 
-    fn object_to_file_attr(&self, ino: u64, git_attr: &ObjectAttr) -> anyhow::Result<FileAttr> {
+    fn object_to_file_attr(
+        &self,
+        ino: u64,
+        git_attr: &ObjectAttr,
+        ino_flag: InoFlag,
+    ) -> anyhow::Result<FileAttr> {
         let blocks = git_attr.size.div_ceil(512);
 
         // Compute atime and mtime from commit_time
@@ -721,12 +725,6 @@ impl GitFs {
         let rdev = 0;
         let blksize = 4096;
         let flags = 0;
-
-        let ino_flag = if git_attr.kind == ObjectType::Commit {
-            InoFlag::SnapFolder
-        } else {
-            InoFlag::InsideSnap
-        };
 
         Ok(FileAttr {
             ino,
@@ -1620,6 +1618,17 @@ impl GitFs {
         };
         let conn = conn_arc.lock().map_err(|_| anyhow!("Lock poisoned"))?;
         conn.get_dir_parent(ino.into())
+    }
+
+    pub fn count_children(&self, ino: NormalIno) -> anyhow::Result<usize> {
+        let conn_arc = {
+            let repo = &self.get_repo(ino.to_norm_u64())?;
+            let repo = repo.lock().map_err(|_| anyhow!("Lock poisoned"))?;
+            std::sync::Arc::clone(&repo.connection)
+        };
+
+        let conn = conn_arc.lock().map_err(|_| anyhow!("Lock poisoned"))?;
+        conn.count_children(ino.to_norm_u64())
     }
 
     pub fn get_all_parents(&self, ino: u64) -> anyhow::Result<Vec<u64>> {

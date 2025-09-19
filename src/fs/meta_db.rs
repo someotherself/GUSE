@@ -273,6 +273,19 @@ impl MetaDb {
         Ok(out)
     }
 
+    pub fn count_children(&self, ino: u64) -> anyhow::Result<usize> {
+        let mut stmt = self.conn.prepare(
+            "
+            SELECT COUNT(*) 
+            FROM dentries 
+            WHERE parent_inode = ?1
+            ",
+        )?;
+
+        let count: usize = stmt.query_row([ino], |row| row.get(0))?;
+        Ok(count)
+    }
+
     pub fn get_single_parent(&self, ino: u64) -> anyhow::Result<u64> {
         let mut stmt = self.conn.prepare(
             r#"

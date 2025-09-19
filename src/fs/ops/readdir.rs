@@ -1,7 +1,7 @@
 use std::{collections::btree_map::Entry, ffi::OsString, path::Path};
 
 use anyhow::{anyhow, bail};
-use git2::{FileMode, Oid};
+use git2::{FileMode, ObjectType, Oid};
 
 use crate::{
     fs::{
@@ -9,7 +9,7 @@ use crate::{
         builds::BuildOperationCtx,
         fileattr::{FileType, InoFlag, ObjectAttr, StorageNode, dir_attr},
     },
-    inodes::{Inodes, NormalIno, VirtualIno},
+    inodes::{NormalIno, VirtualIno},
 };
 
 #[derive(Debug)]
@@ -18,17 +18,17 @@ pub struct DirectoryEntry {
     pub oid: Oid,
     pub name: String,
     pub kind: FileType,
-    pub filemode: u32,
+    pub git_mode: u32,
 }
 
 impl DirectoryEntry {
-    pub fn new(ino: u64, oid: Oid, name: String, kind: FileType, filemode: u32) -> Self {
+    pub fn new(ino: u64, oid: Oid, name: String, kind: FileType, git_mode: u32) -> Self {
         Self {
             ino,
             oid,
             name,
             kind,
-            filemode,
+            git_mode,
         }
     }
 }
@@ -36,6 +36,26 @@ impl DirectoryEntry {
 pub struct DirectoryEntryPlus {
     pub entry: DirectoryEntry,
     pub attr: FileAttr,
+}
+
+impl From<ObjectAttr> for DirectoryEntry {
+    fn from(attr: ObjectAttr) -> Self {
+        let kind = match attr.kind {
+            ObjectType::Blob => FileType::RegularFile,
+            ObjectType::Tree => FileType::Directory,
+            ObjectType::Commit => FileType::RegularFile,
+            ObjectType::Tag => FileType::RegularFile,
+            _ => FileType::RegularFile,
+        };
+
+        DirectoryEntry {
+            ino: 0, // default as requested
+            oid: attr.oid,
+            name: attr.name,
+            kind,
+            git_mode: attr.git_mode,
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -108,7 +128,7 @@ pub fn readdir_repo_dir(fs: &GitFs, ino: u64) -> anyhow::Result<Vec<DirectoryEnt
         for month in object_entries {
             let dir_entry = match fs.exists_by_name(ino, &month.name)? {
                 Some(i) => {
-                    let mut attr = fs.object_to_file_attr(i, &month)?;
+                    let mut attr = fs.object_to_file_attr(i, &month, InoFlag::MonthFolder)?;
                     attr.perm = 0o555;
                     DirectoryEntry::new(i, attr.oid, month.name.clone(), attr.kind, attr.git_mode)
                 }
@@ -248,10 +268,10 @@ fn populate_build_entries(
     Ok(out)
 }
 
-pub fn readdir_git_dir_1(fs: &GitFs, parent: NormalIno) -> anyhow::Result<Vec<DirectoryEntry>> {
+pub fn readdir_git_dir(fs: &GitFs, parent: NormalIno) -> anyhow::Result<Vec<DirectoryEntry>> {
     let ino_flag = fs.get_ino_flag_from_db(parent)?;
     let repo = fs.get_repo(parent.into())?;
-    match ino_flag {
+    let dir_entries = match ino_flag {
         InoFlag::MonthFolder => {
             // The objects are Snap folders
             let Ok(DirCase::Month { year, month }) = classify_inode(fs, parent.to_norm_u64())
@@ -260,91 +280,138 @@ pub fn readdir_git_dir_1(fs: &GitFs, parent: NormalIno) -> anyhow::Result<Vec<Di
             };
             let repo = repo.lock().map_err(|_| anyhow!("Lock poisoned"))?;
             let objects = repo.month_commits(&format!("{year:04}-{month:02}"))?;
-            todo!()
+            drop(repo);
+            objects_to_dir_entries(fs, parent, objects, InoFlag::MonthFolder)?
         }
         InoFlag::SnapFolder => {
+            // The Oid will be a commit oid
+            // Will also contain everything in the build folder
             let oid = fs.get_oid_from_db(parent.into())?;
             let repo = repo.lock().map_err(|_| anyhow!("Lock poisoned"))?;
             let objects = repo.list_tree(oid, None)?;
+            drop(repo);
+            let mut dir_entries = objects_to_dir_entries(fs, parent, objects, InoFlag::InsideSnap)?;
+            let build_objects = read_build_dir(fs, parent)?;
+            dir_entries.extend(build_objects);
+            dir_entries
         }
         InoFlag::InsideSnap => {
+            // The Oid will be a tree oid
+            // Is one of the folders (Tree) inside Snap. Only list git objects in it
             let oid = fs.get_oid_from_db(parent.into())?;
             let repo = repo.lock().map_err(|_| anyhow!("Lock poisoned"))?;
-            let objects = repo.list_tree(oid, Some(tree_oid)).unwrap_or_default();
+            let objects = repo.list_tree(oid, Some(oid)).unwrap_or_default();
+            drop(repo);
+            objects_to_dir_entries(fs, parent, objects, InoFlag::InsideSnap)?
         }
-        InoFlag::BuildRoot => {}
-        InoFlag::InsideBuild => {}
-
+        InoFlag::InsideBuild | InoFlag::BuildRoot => {
+            // Only contains the build folder
+            // InoFlag::BuildRoot - only happens when accessing the build folder from RepoRoot
+            read_build_dir(fs, parent)?
+        }
         _ => {
             todo!()
         }
-    }
-
-    todo!()
-}
-
-pub fn readdir_git_dir(fs: &GitFs, ino: NormalIno) -> anyhow::Result<Vec<DirectoryEntry>> {
-    let ino = ino.to_norm_u64();
-    let repo = fs.get_repo(ino)?;
-    let git_objects = match classify_inode(fs, ino)? {
-        DirCase::Month { year, month } => {
-            let repo = repo.lock().map_err(|_| anyhow!("Lock poisoned"))?;
-            repo.month_commits(&format!("{year:04}-{month:02}"))?
-        }
-        DirCase::Commit { oid } => {
-            let commit_oid = fs.get_parent_commit(ino)?;
-            // The root of a commit will have the commit_id as attr.oid
-            if commit_oid == oid {
-                // parent tree_oid is the commit.tree_oid()
-                let repo = repo.lock().map_err(|_| anyhow!("Lock poisoned"))?;
-                repo.list_tree(commit_oid, None)?
-            } else {
-                // else, get parent oid from db
-                let tree_oid = oid;
-                let repo = repo.lock().map_err(|_| anyhow!("Lock poisoned"))?;
-                repo.list_tree(commit_oid, Some(tree_oid))
-                    .unwrap_or_default()
-            }
-        }
     };
-
-    let mut nodes: Vec<StorageNode> = vec![];
-
-    let mut entries: Vec<DirectoryEntry> = vec![];
-    for entry in git_objects {
-        let dir_entry = match fs.exists_by_name(ino, &entry.name)? {
-            Some(i) => {
-                let attr = fs.object_to_file_attr(i, &entry)?;
-                DirectoryEntry::new(i, entry.oid, entry.name.clone(), attr.kind, entry.git_mode)
-            }
-            None => {
-                let entry_ino = fs.next_inode_checked(ino)?;
-                let attr = fs.object_to_file_attr(entry_ino, &entry)?;
-                nodes.push(StorageNode {
-                    parent_ino: ino,
-                    name: entry.name.clone(),
-                    attr: attr.into(),
-                });
-                DirectoryEntry::new(
-                    entry_ino,
-                    entry.oid,
-                    entry.name.clone(),
-                    attr.kind,
-                    entry.git_mode,
-                )
-            }
-        };
-        entries.push(dir_entry);
-    }
-    drop(repo);
-
-    let inode: Inodes = ino.into();
-    let build_nodes = read_build_dir(fs, inode.to_norm())?;
-    entries.extend(build_nodes);
-
-    fs.write_inodes_to_db(nodes)?;
-    Ok(entries)
+    Ok(dir_entries)
 }
+
+/// Takes in Vec<ObjectAttr> and converts them to Vec<DirectoryEntry>
+///
+///  Checks if they exist in DB and assigns ino according.
+fn objects_to_dir_entries(
+    fs: &GitFs,
+    parent: NormalIno,
+    objects: Vec<ObjectAttr>,
+    ino_flag: InoFlag,
+) -> anyhow::Result<Vec<DirectoryEntry>> {
+    let enties_exist = fs.count_children(parent)? == objects.len();
+    let mut nodes: Vec<StorageNode> = vec![];
+    let mut dir_entries: Vec<DirectoryEntry> = vec![];
+    for entry in objects {
+        let ino = if enties_exist {
+            fs.get_ino_from_db(parent.to_norm_u64(), &entry.name)?
+        } else {
+            let ino = fs.next_inode_checked(parent.to_norm_u64())?;
+            let mut attr: FileAttr = dir_attr(ino_flag).into();
+            attr.ino = ino;
+            nodes.push(StorageNode {
+                parent_ino: parent.to_norm_u64(),
+                name: entry.name.clone(),
+                attr: attr.into(),
+            });
+            ino
+        };
+        let mut dir_entry: DirectoryEntry = entry.into();
+        dir_entry.ino = ino;
+        dir_entries.push(dir_entry);
+    }
+    fs.write_inodes_to_db(nodes)?;
+    Ok(dir_entries)
+}
+
+// pub fn readdir_git_dir_1(fs: &GitFs, ino: NormalIno) -> anyhow::Result<Vec<DirectoryEntry>> {
+//     let ino = ino.to_norm_u64();
+//     let repo = fs.get_repo(ino)?;
+//     let git_objects = match classify_inode(fs, ino)? {
+//         DirCase::Month { year, month } => {
+//             let repo = repo.lock().map_err(|_| anyhow!("Lock poisoned"))?;
+//             repo.month_commits(&format!("{year:04}-{month:02}"))?
+//         }
+//         DirCase::Commit { oid } => {
+//             let commit_oid = fs.get_parent_commit(ino)?;
+//             // The root of a commit will have the commit_id as attr.oid
+//             if commit_oid == oid {
+//                 // parent tree_oid is the commit.tree_oid()
+//                 let repo = repo.lock().map_err(|_| anyhow!("Lock poisoned"))?;
+//                 repo.list_tree(commit_oid, None)?
+//             } else {
+//                 // else, get parent oid from db
+//                 let tree_oid = oid;
+//                 let repo = repo.lock().map_err(|_| anyhow!("Lock poisoned"))?;
+//                 repo.list_tree(commit_oid, Some(tree_oid))
+//                     .unwrap_or_default()
+//             }
+//         }
+//     };
+
+//     let mut nodes: Vec<StorageNode> = vec![];
+
+//     let mut entries: Vec<DirectoryEntry> = vec![];
+//     for entry in git_objects {
+//         let dir_entry = match fs.exists_by_name(ino, &entry.name)? {
+//             Some(i) => {
+//                 let attr = fs.object_to_file_attr(i, &entry, InoFlag::InsideSnap)?;
+//                 DirectoryEntry::new(i, entry.oid, entry.name.clone(), attr.kind, entry.git_mode)
+//             }
+//             None => {
+//                 let entry_ino = fs.next_inode_checked(ino)?;
+//                 let attr = fs.object_to_file_attr(entry_ino, &entry, InoFlag::InsideSnap)?;
+//                 nodes.push(StorageNode {
+//                     parent_ino: ino,
+//                     name: entry.name.clone(),
+//                     attr: attr.into(),
+//                 });
+//                 DirectoryEntry::new(
+//                     entry_ino,
+//                     entry.oid,
+//                     entry.name.clone(),
+//                     attr.kind,
+//                     entry.git_mode,
+//                 )
+//             }
+//         };
+//         entries.push(dir_entry);
+//     }
+//     drop(repo);
+
+//     let inode: Inodes = ino.into();
+//     let build_nodes = read_build_dir(fs, inode.to_norm())?;
+//     entries.extend(build_nodes);
+
+//     fs.write_inodes_to_db(nodes)?;
+//     Ok(entries)
+// }
 
 fn get_history_objects(fs: &GitFs, ino: u64, oid: Oid) -> anyhow::Result<Vec<ObjectAttr>> {
     let repo = fs.get_repo(ino)?;
@@ -398,7 +465,8 @@ pub fn read_virtual_dir(fs: &GitFs, ino: VirtualIno) -> anyhow::Result<Vec<Direc
             let name = format!("{name}{file_ext}");
             if let Entry::Vacant(e) = v_node.log.entry(name.clone()) {
                 e.insert(entry.clone());
-                let mut attr = fs.object_to_file_attr(entry.0, &entry.1.clone())?;
+                let mut attr =
+                    fs.object_to_file_attr(entry.0, &entry.1.clone(), InoFlag::InsideSnap)?;
                 attr.perm = 0o555;
                 nodes.push(StorageNode {
                     parent_ino: ino.to_norm_u64(),
