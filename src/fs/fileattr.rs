@@ -236,6 +236,9 @@ pub enum InoFlag {
     InsideBuild = 1 << 7,
     InsideLive = 1 << 8,
     VirtualFile = 1 << 9,
+    // .git folder recreated in each Snap folder
+    DotGitRoot = 1 << 10,
+    InsideDotGit = 1 << 11,
 }
 impl InoFlag {
     pub const fn as_str(&self) -> &'static str {
@@ -250,6 +253,8 @@ impl InoFlag {
             InoFlag::InsideBuild => "InsideBuild",
             InoFlag::InsideLive => "InsideLive",
             InoFlag::VirtualFile => "VirtualFile",
+            InoFlag::DotGitRoot => "DotGitRoot",
+            InoFlag::InsideDotGit => "InsideDotGit",
         }
     }
 }

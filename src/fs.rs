@@ -1714,16 +1714,16 @@ impl GitFs {
 
     pub fn get_metadata_by_name(
         &self,
-        parent_ino: u64,
+        parent_ino: NormalIno,
         child_name: &str,
     ) -> anyhow::Result<FileAttr> {
         let conn_arc = {
-            let repo = &self.get_repo(parent_ino)?;
+            let repo = &self.get_repo(parent_ino.to_norm_u64())?;
             let repo = repo.lock().map_err(|_| anyhow!("Lock poisoned"))?;
             std::sync::Arc::clone(&repo.connection)
         };
         let conn = conn_arc.lock().map_err(|_| anyhow!("Lock poisoned"))?;
-        conn.get_metadata_by_name(parent_ino, child_name)
+        conn.get_metadata_by_name(parent_ino.to_norm_u64(), child_name)
     }
 
     pub fn get_metadata(&self, target_ino: u64) -> anyhow::Result<FileAttr> {
