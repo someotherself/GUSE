@@ -1050,10 +1050,7 @@ impl GitFs {
                     Inodes::VirtualIno(_) => ops::readdir::read_virtual_dir(self, parent.to_virt()),
                 },
                 FsOperationContext::InsideGitDir { ino: _ } => match parent {
-                    Inodes::NormalIno(_) => {
-                        tracing::error!("readdir - git");
-                        ops::readdir::readdir_git_dir(self, parent.to_norm())
-                    }
+                    Inodes::NormalIno(_) => ops::readdir::readdir_git_dir(self, parent.to_norm()),
                     Inodes::VirtualIno(_) => ops::readdir::read_virtual_dir(self, parent.to_virt()),
                 },
             }

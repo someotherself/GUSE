@@ -7,7 +7,7 @@ use crate::{
     fs::{
         FileAttr, GitFs,
         builds::BuildOperationCtx,
-        fileattr::{FileType, InoFlag, ObjectAttr, StorageNode, dir_attr},
+        fileattr::{FileType, InoFlag, ObjectAttr, StorageNode, dir_attr, file_attr},
     },
     inodes::{NormalIno, VirtualIno},
 };
@@ -285,7 +285,7 @@ pub fn readdir_git_dir(fs: &GitFs, parent: NormalIno) -> anyhow::Result<Vec<Dire
             let repo = repo.lock().map_err(|_| anyhow!("Lock poisoned"))?;
             let objects = repo.month_commits(&format!("{year:04}-{month:02}"))?;
             drop(repo);
-            objects_to_dir_entries(fs, parent, objects, InoFlag::MonthFolder)?
+            objects_to_dir_entries(fs, parent, objects, InoFlag::SnapFolder)?
         }
         InoFlag::SnapFolder => {
             // The Oid will be a commit oid
@@ -337,7 +337,11 @@ fn objects_to_dir_entries(
             Some(i) => i,
             None => {
                 let ino = fs.next_inode_checked(parent.to_norm_u64())?;
-                let mut attr: FileAttr = dir_attr(ino_flag).into();
+                let mut attr: FileAttr = match entry.kind {
+                    ObjectType::Tree | ObjectType::Commit => dir_attr(ino_flag).into(),
+                    _ => file_attr(ino_flag).into(),
+                };
+                attr.oid = entry.oid;
                 attr.ino = ino;
                 nodes.push(StorageNode {
                     parent_ino: parent.to_norm_u64(),
