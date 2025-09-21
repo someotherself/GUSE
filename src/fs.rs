@@ -1286,7 +1286,6 @@ impl GitFs {
         for _ in 0..max_loops {
             (cur_par_ino, cur_par_name) = {
                 let conn = conn_arc.lock().map_err(|_| anyhow!("Lock poisoned"))?;
-                tracing::error!("Getting {cur_par_ino} {cur_par_name}");
                 conn.get_parent_name_from_child(cur_par_ino, &cur_par_name)?
             };
 
@@ -1538,7 +1537,7 @@ impl GitFs {
 
     fn is_in_build(&self, ino: NormalIno) -> anyhow::Result<bool> {
         match self.get_ino_flag_from_db(ino)? {
-            InoFlag::BuildRoot | InoFlag::InsideBuild => Ok(true),
+            InoFlag::BuildRoot | InoFlag::SnapFolder | InoFlag::InsideBuild => Ok(true),
             _ => Ok(false),
         }
     }

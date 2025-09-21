@@ -2,7 +2,7 @@
 
 use anyhow::{Context, anyhow};
 use fuser::{
-    BackgroundSession, MountOption, ReplyAttr, ReplyData, ReplyEntry, ReplyOpen, ReplyWrite,
+    consts, BackgroundSession, MountOption, ReplyAttr, ReplyData, ReplyEntry, ReplyOpen, ReplyWrite
 };
 use git2::Oid;
 use libc::{EACCES, EIO, EISDIR, ENOENT, ENOTDIR, O_DIRECTORY};
@@ -69,7 +69,7 @@ pub fn mount_fuse(opts: MountPoint) -> anyhow::Result<()> {
     }
 
     let mut options = vec![
-        MountOption::FSName("GitFs".to_string()),
+        MountOption::FSName("GUSE".to_string()),
         MountOption::AutoUnmount,
         MountOption::DefaultPermissions,
     ];
@@ -146,6 +146,7 @@ impl fuser::Filesystem for GitFsAdapter {
         _req: &fuser::Request<'_>,
         config: &mut fuser::KernelConfig,
     ) -> Result<(), libc::c_int> {
+        config.add_capabilities(consts::FUSE_WRITEBACK_CACHE).unwrap();
         config.set_max_readahead(128 * 1024).unwrap();
         Ok(())
     }

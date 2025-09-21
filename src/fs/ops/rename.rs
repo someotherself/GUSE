@@ -123,20 +123,23 @@ pub fn rename_git_build(
     new_name: &str,
 ) -> anyhow::Result<()> {
     let dest_in_build = fs.is_in_build(new_parent)?;
+    tracing::info!("{dest_in_build}");
     let dest_in_live = fs.is_in_live(new_parent)?;
+    tracing::info!("{dest_in_live}");
     let oid = fs.get_oid_from_db(new_parent.into())?;
     let is_commit_folder = fs.is_commit(new_parent, oid)?;
     if !dest_in_build && !is_commit_folder && !dest_in_live {
         bail!(format!("New parent {} not allowed", new_parent));
     }
-    let src_attr = fs
-        .lookup(parent.to_norm_u64(), name)?
-        .ok_or_else(|| anyhow!("Source does not exist"))?;
+    let src_attr = fs.get_metadata_by_name(parent, name)?;
+    tracing::info!("1");
 
     let mut dest_exists = false;
     let mut dest_old_ino: u64 = 0;
+    tracing::info!("2");
 
-    if let Some(dest_attr) = fs.lookup(new_parent.to_norm_u64(), new_name)? {
+    if let Ok(dest_attr) = fs.get_metadata_by_name(new_parent, new_name) {
+        tracing::info!("3");
         dest_exists = true;
         dest_old_ino = dest_attr.ino;
 
@@ -148,32 +151,42 @@ pub fn rename_git_build(
             bail!("Source and destination are not the same type")
         }
     }
+    tracing::info!("4");
 
     let src = {
         let ino = parent;
+        tracing::info!("Path for src parent - {ino}");
         let parent_oid = fs.parent_commit_build_session(ino)?;
         let build_root = fs.get_path_to_build_folder(ino)?;
         let repo = fs.get_repo(ino.to_norm_u64())?;
         let mut repo = repo.lock().map_err(|_| anyhow!("Lock poisoned"))?;
         let session = repo.get_or_init_build_session(parent_oid, &build_root)?;
+        tracing::info!("Path for src - {}", session.folder.path().display());
         drop(repo);
         session.finish_path(fs, ino)?.join(name)
     };
+    tracing::info!("5");
+    tracing::info!("{}", src.display());
 
     let dest = if dest_in_build {
         let ino = new_parent;
+        tracing::info!("Path for src parent - {ino}");
         let parent_oid = fs.parent_commit_build_session(ino)?;
         let build_root = fs.get_path_to_build_folder(ino)?;
         let repo = fs.get_repo(ino.to_norm_u64())?;
         let mut repo = repo.lock().map_err(|_| anyhow!("Lock poisoned"))?;
         let session = repo.get_or_init_build_session(parent_oid, &build_root)?;
+        tracing::info!("Path for src - {}", session.folder.path().display());
         drop(repo);
         session.finish_path(fs, ino)?.join(new_name)
     } else {
         fs.build_full_path(new_parent)?.join(new_name)
     };
+    tracing::info!("6");
+    tracing::info!("{}", dest.display());
 
     std::fs::rename(src, &dest)?;
+    tracing::info!("7");
 
     {
         let _ = fs.notifier.send(InvalMsg::Entry {
@@ -212,8 +225,10 @@ pub fn rename_git_build(
             });
         }
     }
+    tracing::info!("8");
 
     fs.remove_db_record(parent, name)?;
+    tracing::info!("9");
 
     if dest_exists {
         fs.remove_db_record(new_parent, new_name)?;
