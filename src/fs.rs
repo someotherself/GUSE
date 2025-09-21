@@ -1042,13 +1042,18 @@ impl GitFs {
             let ctx = FsOperationContext::get_operation(self, parent);
             match ctx? {
                 FsOperationContext::Root => ops::readdir::readdir_root_dir(self),
-                FsOperationContext::RepoDir { ino } => ops::readdir::readdir_repo_dir(self, ino),
+                FsOperationContext::RepoDir { ino: _ } => {
+                    ops::readdir::readdir_repo_dir(self, parent.to_norm())
+                }
                 FsOperationContext::InsideLiveDir { ino: _ } => match parent {
                     Inodes::NormalIno(_) => ops::readdir::readdir_live_dir(self, parent.to_norm()),
                     Inodes::VirtualIno(_) => ops::readdir::read_virtual_dir(self, parent.to_virt()),
                 },
                 FsOperationContext::InsideGitDir { ino: _ } => match parent {
-                    Inodes::NormalIno(_) => ops::readdir::readdir_git_dir(self, parent.to_norm()),
+                    Inodes::NormalIno(_) => {
+                        tracing::error!("readdir - git");
+                        ops::readdir::readdir_git_dir(self, parent.to_norm())
+                    }
                     Inodes::VirtualIno(_) => ops::readdir::read_virtual_dir(self, parent.to_virt()),
                 },
             }
@@ -1512,14 +1517,10 @@ impl GitFs {
     }
 
     pub fn get_parent_commit(&self, ino: u64) -> anyhow::Result<Oid> {
-        info!("Par commit - 1");
         let repo_arc = self.get_repo(ino)?;
-        info!("Par commit - 2");
 
         let mut cur = ino;
-        info!("Par commit - 3");
         let mut oid = self.get_oid_from_db(ino)?;
-        info!("Par commit - 4");
         let max_steps = 1000;
         let mut i = 0;
         while {
@@ -1527,11 +1528,8 @@ impl GitFs {
             repo.inner.find_commit(oid).is_err()
         } {
             i += 1;
-            info!("Par commit - 5");
             let parent_ino = self.get_single_parent(cur)?;
-            info!("Par commit - 6");
             oid = self.get_oid_from_db(parent_ino)?;
-            info!("Par commit - 7");
 
             cur = parent_ino;
             if i == max_steps {
@@ -1569,6 +1567,7 @@ impl GitFs {
             let ino = self.next_inode_raw(parent)?;
 
             if repo.res_inodes.insert(ino) {
+                info!("Issuing {ino}");
                 return Ok(ino);
             }
         }

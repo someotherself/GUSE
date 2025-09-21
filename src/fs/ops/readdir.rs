@@ -5,7 +5,7 @@ use git2::{FileMode, ObjectType, Oid};
 
 use crate::{
     fs::{
-        FileAttr, GitFs, REPO_SHIFT,
+        FileAttr, GitFs,
         builds::BuildOperationCtx,
         fileattr::{FileType, InoFlag, ObjectAttr, StorageNode, dir_attr},
     },
@@ -87,8 +87,9 @@ pub fn readdir_root_dir(fs: &GitFs) -> anyhow::Result<Vec<DirectoryEntry>> {
 }
 
 // TODO: DOUBLE CHECK
-pub fn readdir_repo_dir(fs: &GitFs, ino: u64) -> anyhow::Result<Vec<DirectoryEntry>> {
-    let repo_id = (ino >> REPO_SHIFT) as u16;
+pub fn readdir_repo_dir(fs: &GitFs, parent: NormalIno) -> anyhow::Result<Vec<DirectoryEntry>> {
+    let parent = parent.to_norm_u64();
+    let repo_id = GitFs::ino_to_repo_id(parent);
 
     if !fs.repos_list.contains_key(&repo_id) {
         bail!("Repo not found!")
@@ -96,7 +97,7 @@ pub fn readdir_repo_dir(fs: &GitFs, ino: u64) -> anyhow::Result<Vec<DirectoryEnt
 
     let mut entries: Vec<DirectoryEntry> = vec![];
 
-    let live_ino = fs.get_ino_from_db(ino, "live")?;
+    let live_ino = fs.get_ino_from_db(parent, "live")?;
     let live_entry = DirectoryEntry::new(
         live_ino,
         Oid::zero(),
@@ -105,7 +106,7 @@ pub fn readdir_repo_dir(fs: &GitFs, ino: u64) -> anyhow::Result<Vec<DirectoryEnt
         libc::S_IFDIR,
     );
 
-    let build_ino = fs.get_ino_from_db(ino, "build")?;
+    let build_ino = fs.get_ino_from_db(parent, "build")?;
     let build_entry = DirectoryEntry::new(
         build_ino,
         Oid::zero(),
@@ -118,25 +119,28 @@ pub fn readdir_repo_dir(fs: &GitFs, ino: u64) -> anyhow::Result<Vec<DirectoryEnt
     entries.push(build_entry);
 
     let object_entries = {
-        let repo = fs.get_repo(ino)?;
+        let repo = fs.get_repo(parent)?;
         let repo = repo.lock().map_err(|_| anyhow!("Lock poisoned"))?;
         repo.month_folders()?
     };
 
+    let mut nodes: Vec<StorageNode> = vec![];
     if !object_entries.is_empty() {
-        let mut nodes: Vec<StorageNode> = vec![];
         for month in object_entries {
-            let dir_entry = match fs.exists_by_name(ino, &month.name)? {
-                Some(i) => {
-                    let mut attr = fs.object_to_file_attr(i, &month, InoFlag::MonthFolder)?;
-                    attr.perm = 0o555;
-                    DirectoryEntry::new(i, attr.oid, month.name.clone(), attr.kind, attr.git_mode)
-                }
+            let dir_entry = match fs.exists_by_name(parent, &month.name)? {
+                Some(i) => DirectoryEntry::new(
+                    i,
+                    Oid::zero(),
+                    month.name.clone(),
+                    FileType::Directory,
+                    month.git_mode,
+                ),
                 None => {
-                    let entry_ino = fs.next_inode_checked(ino)?;
-                    let attr: FileAttr = dir_attr(InoFlag::MonthFolder).into();
+                    let entry_ino = fs.next_inode_checked(parent)?;
+                    let mut attr: FileAttr = dir_attr(InoFlag::MonthFolder).into();
+                    attr.ino = entry_ino;
                     nodes.push(StorageNode {
-                        parent_ino: ino,
+                        parent_ino: parent,
                         name: month.name.clone(),
                         attr: attr.into(),
                     });
@@ -151,8 +155,8 @@ pub fn readdir_repo_dir(fs: &GitFs, ino: u64) -> anyhow::Result<Vec<DirectoryEnt
             };
             entries.push(dir_entry);
         }
-        fs.write_inodes_to_db(nodes)?;
     }
+    fs.write_inodes_to_db(nodes)?;
     Ok(entries)
 }
 
@@ -310,7 +314,8 @@ pub fn readdir_git_dir(fs: &GitFs, parent: NormalIno) -> anyhow::Result<Vec<Dire
             read_build_dir(fs, parent)?
         }
         _ => {
-            todo!()
+            tracing::error!("WRONG BRANCH");
+            bail!("Wrong ino_flag")
         }
     };
     Ok(dir_entries)
@@ -325,22 +330,22 @@ fn objects_to_dir_entries(
     objects: Vec<ObjectAttr>,
     ino_flag: InoFlag,
 ) -> anyhow::Result<Vec<DirectoryEntry>> {
-    let entries_exist = fs.count_children(parent)? == objects.len();
     let mut nodes: Vec<StorageNode> = vec![];
     let mut dir_entries: Vec<DirectoryEntry> = vec![];
     for entry in objects {
-        let ino = if entries_exist {
-            fs.get_ino_from_db(parent.to_norm_u64(), &entry.name)?
-        } else {
-            let ino = fs.next_inode_checked(parent.to_norm_u64())?;
-            let mut attr: FileAttr = dir_attr(ino_flag).into();
-            attr.ino = ino;
-            nodes.push(StorageNode {
-                parent_ino: parent.to_norm_u64(),
-                name: entry.name.clone(),
-                attr: attr.into(),
-            });
-            ino
+        let ino = match fs.exists_by_name(parent.to_norm_u64(), &entry.name)? {
+            Some(i) => i,
+            None => {
+                let ino = fs.next_inode_checked(parent.to_norm_u64())?;
+                let mut attr: FileAttr = dir_attr(ino_flag).into();
+                attr.ino = ino;
+                nodes.push(StorageNode {
+                    parent_ino: parent.to_norm_u64(),
+                    name: entry.name.clone(),
+                    attr: attr.into(),
+                });
+                ino
+            }
         };
         let mut dir_entry: DirectoryEntry = entry.into();
         dir_entry.ino = ino;
