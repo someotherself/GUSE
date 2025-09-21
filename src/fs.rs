@@ -1809,7 +1809,7 @@ impl GitFs {
         conn.get_ino_from_db(parent.into(), name)
     }
 
-    pub fn update_size_in_db(&self, ino: NormalIno, size: usize) -> anyhow::Result<()> {
+    pub fn update_size_in_db(&self, ino: NormalIno, size: u64) -> anyhow::Result<()> {
         let conn_arc = {
             let repo = &self.get_repo(ino.into())?;
             let repo = repo.lock().map_err(|_| anyhow!("Lock poisoned"))?;

@@ -337,7 +337,7 @@ impl MetaDb {
         Ok(child)
     }
 
-    pub fn update_size_in_db(&self, ino: u64, new_size: usize) -> anyhow::Result<()> {
+    pub fn update_size_in_db(&self, ino: u64, new_size: u64) -> anyhow::Result<()> {
         let ino_i64 = i64::try_from(ino)?;
         let size_i64 = i64::try_from(new_size)?;
         self.conn.execute(

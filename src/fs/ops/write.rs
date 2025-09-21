@@ -19,6 +19,8 @@ pub fn write_live(fs: &GitFs, ino: u64, offset: u64, buf: &[u8], fh: u64) -> any
         bail!("Invalid handle.")
     }
     let bytes_written = ctx.file.write_at(buf, offset)?;
+    let new_size = ctx.file.size()?;
+    fs.update_size_in_db(ino.into(), new_size)?;
 
     let _ = fs.notifier.send(InvalMsg::Inode {
         ino,
@@ -51,6 +53,8 @@ pub fn write_git(
         bail!("Write not permitted")
     };
     let bytes_written = ctx.file.write_at(buf, offset)?;
+    let new_size = ctx.file.size()?;
+    fs.update_size_in_db(ino.into(), new_size)?;
 
     let _ = fs.notifier.send(InvalMsg::Inode {
         ino: ino.to_norm_u64(),
