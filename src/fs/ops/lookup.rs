@@ -86,7 +86,6 @@ pub fn lookup_git(fs: &GitFs, parent: NormalIno, name: &str) -> anyhow::Result<O
     let Ok(attr) = fs.get_metadata_by_name(parent, name) else {
         return Ok(None);
     };
-    // TODO: Should do anything more for build folder? TODO
     Ok(Some(attr))
 }
 

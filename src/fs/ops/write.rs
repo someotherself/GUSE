@@ -28,7 +28,6 @@ pub fn write_live(fs: &GitFs, ino: u64, offset: u64, buf: &[u8], fh: u64) -> any
         len: 0,
     });
 
-    // Look into syncing
     Ok(bytes_written)
 }
 
