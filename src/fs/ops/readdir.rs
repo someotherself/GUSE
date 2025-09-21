@@ -343,6 +343,7 @@ fn objects_to_dir_entries(
                 };
                 attr.oid = entry.oid;
                 attr.ino = ino;
+                attr.size = entry.size;
                 nodes.push(StorageNode {
                     parent_ino: parent.to_norm_u64(),
                     name: entry.name.clone(),
@@ -411,9 +412,8 @@ pub fn read_virtual_dir(fs: &GitFs, ino: VirtualIno) -> anyhow::Result<Vec<Direc
             let name = format!("{name}{file_ext}");
             if let Entry::Vacant(e) = v_node.log.entry(name.clone()) {
                 e.insert(entry.clone());
-                let mut attr =
+                let attr =
                     fs.object_to_file_attr(entry.0, &entry.1.clone(), InoFlag::InsideSnap)?;
-                attr.perm = 0o555;
                 nodes.push(StorageNode {
                     parent_ino: ino.to_norm_u64(),
                     name: name.clone(),

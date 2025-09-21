@@ -274,12 +274,19 @@ impl GitRepo {
         };
         for entry in tree.iter() {
             let name = entry.name().unwrap_or("").to_string();
+            let kind = entry.kind().ok_or_else(|| anyhow!("Invalid object"))?;
+
+            let mut size = 0;
+            if kind == git2::ObjectType::Blob {
+                let blob = self.inner.find_blob(entry.id())?;
+                size = blob.size() as u64;
+            }
             entries.push(ObjectAttr {
                 name,
                 oid: entry.id(),
                 kind: entry.kind().ok_or_else(|| anyhow!("Invalid object"))?,
                 git_mode: entry.filemode() as u32,
-                size: 0,
+                size,
                 commit_time: Time::new(0, 0),
             });
         }
