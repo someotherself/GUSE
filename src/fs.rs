@@ -1597,7 +1597,6 @@ impl GitFs {
         }
     }
 
-    // TODO: FIX NEW SQL
     pub fn get_dir_parent(&self, ino: u64) -> anyhow::Result<u64> {
         if !self.is_dir(ino.into())? {
             bail!("Not a directory")
@@ -1810,6 +1809,16 @@ impl GitFs {
         conn.get_ino_from_db(parent.into(), name)
     }
 
+    pub fn update_size_in_db(&self, ino: NormalIno, size: usize) -> anyhow::Result<()> {
+        let conn_arc = {
+            let repo = &self.get_repo(ino.into())?;
+            let repo = repo.lock().map_err(|_| anyhow!("Lock poisoned"))?;
+            std::sync::Arc::clone(&repo.connection)
+        };
+        let conn = conn_arc.lock().map_err(|_| anyhow!("Lock poisoned"))?;
+        conn.update_size_in_db(ino.into(), size)
+    }
+
     /// Removes the directory entry (from dentries) for the target
     ///
     /// If it's the only directory entry for this inode, it will remove the inode entry as well
@@ -1880,7 +1889,6 @@ impl GitFs {
         Ok(mask)
     }
 
-    // TODO: FIX NEW SQL
     fn get_mode_from_db(&self, ino: NormalIno) -> anyhow::Result<git2::FileMode> {
         // Live directory does not exist in the DB. Handle it separately.
         if ino.to_norm_u64() == 0 {

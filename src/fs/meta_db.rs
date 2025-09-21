@@ -337,6 +337,18 @@ impl MetaDb {
         Ok(child)
     }
 
+    pub fn update_size_in_db(&self, ino: u64, new_size: usize) -> anyhow::Result<()> {
+        let ino_i64 = i64::try_from(ino)?;
+        let size_i64 = i64::try_from(new_size)?;
+        self.conn.execute(
+            "UPDATE inode_map
+             SET size = ?1
+             WHERE inode = ?2",
+            rusqlite::params![size_i64, ino_i64],
+        )?;
+        Ok(())
+    }
+
     pub fn get_mode_from_db(&self, ino: u64) -> anyhow::Result<u64> {
         let mut stmt = self.conn.prepare(
             "SELECT git_mode
