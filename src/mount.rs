@@ -750,7 +750,11 @@ impl fuser::Filesystem for GitFsAdapter {
                 return reply.error(EIO);
             }
         };
-        todo!()
+        let res = fs.link(ino, newparent, newname);
+        match res {
+            Ok(attr) => return reply.entry(&TTL, &attr.into(), 0),
+            Err(e) => reply.error(errno_from_anyhow(&e)),
+        }
     }
 
     fn create(

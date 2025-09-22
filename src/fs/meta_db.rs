@@ -2,7 +2,7 @@ use std::{collections::HashSet, path::PathBuf};
 
 use anyhow::{Context, anyhow, bail};
 use git2::Oid;
-use rusqlite::{Connection, OptionalExtension, params};
+use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
 
 use crate::{
     fs::{
@@ -473,6 +473,69 @@ impl MetaDb {
             "#,
             params![repo_ino, low48_mask],
         )?;
+
+        tx.commit()?;
+        Ok(())
+    }
+
+    pub fn write_dentry(
+        &mut self,
+        source_ino: u64,
+        parent_ino: u64,
+        target_name: &str,
+    ) -> anyhow::Result<()> {
+        let parent_i64 = i64::try_from(parent_ino)?;
+        let source_i64 = i64::try_from(source_ino)?;
+
+        let tx = self
+            .conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .context("begin write_dentry tx")?;
+
+        let parent_exists: Option<i64> = tx
+            .prepare("SELECT 1 FROM inode_map WHERE inode = ?1")?
+            .query_row(params![parent_i64], |r| r.get(0))
+            .optional()?;
+        if parent_exists.is_none() {
+            bail!("write_dentry: parent inode {} does not exist", parent_ino);
+        }
+
+        let target_exists: Option<i64> = tx
+            .prepare("SELECT 1 FROM inode_map WHERE inode = ?1")?
+            .query_row(params![source_i64], |r| r.get(0))
+            .optional()?;
+        if target_exists.is_none() {
+            bail!("write_dentry: Source inode {} does not exist", source_ino);
+        }
+
+        let inserted = tx.execute(
+            r#"
+            INSERT INTO dentries (parent_inode, target_inode, name)
+            VALUES (?1, ?2, ?3)
+            "#,
+            params![parent_i64, source_i64, target_name],
+        )?;
+        if inserted != 1 {
+            bail!(
+                "write_dentry: expected to insert 1 dentry, inserted {}",
+                inserted
+            );
+        }
+
+        let updated = tx.execute(
+            r#"
+            UPDATE inode_map
+            SET nlink = (SELECT COUNT(*) FROM dentries WHERE target_inode = ?1)
+            WHERE inode = ?1
+            "#,
+            params![source_i64],
+        )?;
+        if updated != 1 {
+            bail!(
+                "write_dentry: failed to update nlink for inode {}",
+                source_ino
+            );
+        }
 
         tx.commit()?;
         Ok(())

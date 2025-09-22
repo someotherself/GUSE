@@ -860,6 +860,9 @@ impl GitFs {
         let newname = newname
             .to_str()
             .ok_or_else(|| anyhow!("Not a valid UTF-8 name"))?;
+        if newname.is_empty() || newname == "." || newname == ".." || newname.contains('/') {
+            bail!(std::io::Error::from_raw_os_error(libc::EINVAL));
+        }
 
         if self.read_only {
             bail!("Filesystem is in read only");
@@ -1610,7 +1613,6 @@ impl GitFs {
             let ino = self.next_inode_raw(parent)?;
 
             if repo.res_inodes.insert(ino) {
-                info!("Issuing {ino}");
                 return Ok(ino);
             }
         }
@@ -1879,6 +1881,25 @@ impl GitFs {
         };
         let mut conn = conn_arc.lock().map_err(|_| anyhow!("Lock poisoned"))?;
         conn.remove_db_record(parent_ino.to_norm_u64(), target_name)
+    }
+
+    pub fn write_dentry(
+        &self,
+        parent_ino: NormalIno,
+        target_ino: NormalIno,
+        target_name: &str,
+    ) -> anyhow::Result<()> {
+        let conn_arc = {
+            let repo = &self.get_repo(parent_ino.to_norm_u64())?;
+            let repo = repo.lock().map_err(|_| anyhow!("Lock poisoned"))?;
+            std::sync::Arc::clone(&repo.connection)
+        };
+        let mut conn = conn_arc.lock().map_err(|_| anyhow!("Lock poisoned"))?;
+        conn.write_dentry(
+            parent_ino.to_norm_u64(),
+            target_ino.to_norm_u64(),
+            target_name,
+        )
     }
 
     pub fn parent_commit_build_session(&self, ino: NormalIno) -> anyhow::Result<Oid> {
