@@ -53,7 +53,7 @@ pub fn write_git(
     };
     let bytes_written = ctx.file.write_at(buf, offset)?;
     let new_size = ctx.file.size()?;
-    fs.update_size_in_db(ino.into(), new_size)?;
+    fs.update_size_in_db(ino, new_size)?;
 
     let _ = fs.notifier.send(InvalMsg::Inode {
         ino: ino.to_norm_u64(),

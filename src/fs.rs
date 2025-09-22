@@ -525,6 +525,12 @@ impl GitFs {
         //   inode_flag   INTEGER   NOT NULL        -> InoFlag
         //   uid          INTEGER   NOT NULL
         //   gid          INTEGER   NOT NULL
+        //   atime_secs   INTEGER   NOT NULL
+        //   atime_nsecs  INTEGER   NOT NULL
+        //   mtime_secs   INTEGER   NOT NULL
+        //   mtime_nsecs  INTEGER   NOT NULL
+        //   ctime_secs   INTEGER   NOT NULL
+        //   ctime_nsecs  INTEGER   NOT NULL
         //   nlink        INTEGER   NOT NULL        -> calculated by sql
         //   rdev         INTEGER   NOT NULL
         //   flags        INTEGER   NOT NULL
@@ -538,6 +544,12 @@ impl GitFs {
                     inode_flag   INTEGER NOT NUll,
                     uid          INTEGER NOT NULL,
                     gid          INTEGER NOT NULL,
+                    atime_secs   INTEGER NOT NULL,
+                    atime_nsecs  INTEGER NOT NULL,
+                    mtime_secs   INTEGER NOT NULL,
+                    mtime_nsecs  INTEGER NOT NULL,
+                    ctime_secs   INTEGER NOT NULL,
+                    ctime_nsecs  INTEGER NOT NULL,
                     nlink        INTEGER NOT NULL,
                     rdev         INTEGER NOT NULL,
                     flags        INTEGER NOT NULL
@@ -837,6 +849,41 @@ impl GitFs {
             }
             FsOperationContext::InsideGitDir { ino: _ } => {
                 ops::mkdir::mkdir_git(self, parent.to_norm(), name, dir_attr(InoFlag::InsideBuild))
+            }
+        }
+    }
+
+    #[instrument(level = "debug", skip(self), fields(ino = %ino, newparent = %newparent), ret(level = Level::DEBUG), err(Display))]
+    pub fn link(&self, ino: u64, newparent: u64, newname: &OsStr) -> anyhow::Result<FileAttr> {
+        let ino: Inodes = ino.into();
+        let newparent: Inodes = newparent.into();
+        let newname = newname
+            .to_str()
+            .ok_or_else(|| anyhow!("Not a valid UTF-8 name"))?;
+
+        if self.read_only {
+            bail!("Filesystem is in read only");
+        }
+        if !self.exists(ino)? {
+            bail!(format!("Parent {} does not exist", ino));
+        }
+
+        let ctx = FsOperationContext::get_operation(self, ino);
+        match ctx? {
+            FsOperationContext::Root => {
+                tracing::error!("This directory is read only");
+                bail!("This directory is read only")
+            }
+            FsOperationContext::RepoDir { ino: _ } => {
+                tracing::error!("This directory is read only");
+                bail!("This directory is read only")
+            }
+            FsOperationContext::InsideLiveDir { ino: _ } => {
+                tracing::error!("This directory is read only");
+                bail!("This directory is read only")
+            }
+            FsOperationContext::InsideGitDir { ino: _ } => {
+                ops::link::link_git(self, ino.to_norm(), newparent.to_norm(), newname)
             }
         }
     }

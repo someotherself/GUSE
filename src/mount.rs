@@ -2,7 +2,8 @@
 
 use anyhow::{Context, anyhow};
 use fuser::{
-    consts, BackgroundSession, MountOption, ReplyAttr, ReplyData, ReplyEntry, ReplyOpen, ReplyWrite
+    BackgroundSession, MountOption, ReplyAttr, ReplyData, ReplyEntry, ReplyOpen, ReplyWrite,
+    TimeOrNow, consts,
 };
 use git2::Oid;
 use libc::{EACCES, EIO, EISDIR, ENOENT, ENOTDIR, O_DIRECTORY};
@@ -146,7 +147,9 @@ impl fuser::Filesystem for GitFsAdapter {
         _req: &fuser::Request<'_>,
         config: &mut fuser::KernelConfig,
     ) -> Result<(), libc::c_int> {
-        config.add_capabilities(consts::FUSE_WRITEBACK_CACHE).unwrap();
+        config
+            .add_capabilities(consts::FUSE_WRITEBACK_CACHE)
+            .unwrap();
         config.set_max_readahead(128 * 1024).unwrap();
         Ok(())
     }
@@ -623,9 +626,9 @@ impl fuser::Filesystem for GitFsAdapter {
         uid: Option<u32>,
         gid: Option<u32>,
         size: Option<u64>,
-        _atime: Option<fuser::TimeOrNow>,
-        _mtime: Option<fuser::TimeOrNow>,
-        _ctime: Option<SystemTime>,
+        atime: Option<fuser::TimeOrNow>,
+        mtime: Option<fuser::TimeOrNow>,
+        ctime: Option<SystemTime>,
         fh: Option<u64>,
         _crtime: Option<SystemTime>,
         _chgtime: Option<SystemTime>,
@@ -641,12 +644,26 @@ impl fuser::Filesystem for GitFsAdapter {
                 return reply.error(EIO);
             }
         };
+        let atime = match atime {
+            Some(TimeOrNow::Now) => Some(SystemTime::now()),
+            Some(TimeOrNow::SpecificTime(t)) => Some(t),
+            None => None,
+        };
+        let mtime = match mtime {
+            Some(TimeOrNow::Now) => Some(SystemTime::now()),
+            Some(TimeOrNow::SpecificTime(t)) => Some(t),
+            None => None,
+        };
+
         let set_stored_attr: SetStoredAttr = SetStoredAttr {
             ino,
             size,
             uid,
             gid,
             flags,
+            atime,
+            mtime,
+            ctime,
         };
         let attr = match fs.update_db_metadata(set_stored_attr) {
             Ok(a) => a,
@@ -715,6 +732,25 @@ impl fuser::Filesystem for GitFsAdapter {
         }
 
         reply.opened(0, 0);
+    }
+
+    fn link(
+        &mut self,
+        _req: &fuser::Request<'_>,
+        ino: u64,
+        newparent: u64,
+        newname: &OsStr,
+        reply: ReplyEntry,
+    ) {
+        let fs_arc = self.getfs();
+        let fs = match fs_arc.lock() {
+            Ok(fs) => fs,
+            Err(e) => {
+                error!(e = %e);
+                return reply.error(EIO);
+            }
+        };
+        todo!()
     }
 
     fn create(
