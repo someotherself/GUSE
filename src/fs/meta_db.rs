@@ -10,6 +10,7 @@ use crate::{
         fileattr::{
             FileAttr, FileType, InoFlag, SetStoredAttr, StorageNode, StoredAttr, try_into_filetype,
         },
+        ops::readdir::DirectoryEntry,
     },
     inodes::NormalIno,
 };
@@ -284,6 +285,57 @@ impl MetaDb {
 
         let count: usize = stmt.query_row([ino], |row| row.get(0))?;
         Ok(count)
+    }
+
+    pub fn read_children(&self, parent_ino: u64) -> anyhow::Result<Vec<DirectoryEntry>> {
+        let sql = r#"
+            SELECT d.name, d.target_inode, im.oid, im.git_mode
+            FROM dentries AS d
+            JOIN inode_map AS im ON im.inode = d.target_inode
+            WHERE d.parent_inode = ?1
+            ORDER BY d.name
+        "#;
+
+        let mut stmt = self
+            .conn
+            .prepare_cached(sql)
+            .context("prepare read_dir_entries")?;
+
+        let mut rows = stmt
+            .query(params![parent_ino as i64])
+            .context("query read_dir_entries")?;
+
+        let mut out = Vec::new();
+
+        while let Some(row) = rows.next().context("iterate read_dir_entries rows")? {
+            let name: String = row.get(0)?;
+            let child_i64: i64 = row.get(1)?;
+            let oid_str: String = row.get(2)?;
+            let git_mode_i64: i64 = row.get(3)?;
+
+            let ino = u64::try_from(child_i64)
+                .map_err(|_| anyhow!("child_ino out of range: {}", child_i64))?;
+            let git_mode = u32::try_from(git_mode_i64)
+                .map_err(|_| anyhow!("git_mode out of range: {}", git_mode_i64))?;
+            let kind = match git_mode & 0o170000 {
+                0o040000 => FileType::Directory,
+                0o120000 => FileType::Symlink,
+                _ => FileType::RegularFile,
+            };
+
+            let oid = Oid::from_str(&oid_str)
+                .with_context(|| format!("invalid OID '{}' for inode {}", oid_str, ino))?;
+
+            out.push(DirectoryEntry {
+                ino,
+                oid,
+                name,
+                kind,
+                git_mode,
+            });
+        }
+
+        Ok(out)
     }
 
     pub fn get_single_parent(&self, ino: u64) -> anyhow::Result<u64> {

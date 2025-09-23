@@ -1662,6 +1662,17 @@ impl GitFs {
         conn.count_children(ino.to_norm_u64())
     }
 
+    pub fn read_children(&self, parent_ino: NormalIno) -> anyhow::Result<Vec<DirectoryEntry>> {
+        let conn_arc = {
+            let repo = &self.get_repo(parent_ino.to_norm_u64())?;
+            let repo = repo.lock().map_err(|_| anyhow!("Lock poisoned"))?;
+            std::sync::Arc::clone(&repo.connection)
+        };
+
+        let conn = conn_arc.lock().map_err(|_| anyhow!("Lock poisoned"))?;
+        conn.read_children(parent_ino.to_norm_u64())
+    }
+
     pub fn get_all_parents(&self, ino: u64) -> anyhow::Result<Vec<u64>> {
         let conn_arc = {
             let repo = &self.get_repo(ino)?;
