@@ -210,10 +210,8 @@ pub fn rename_git_build(
             });
         }
     }
-    tracing::info!("8");
 
     fs.remove_db_record(parent, name)?;
-    tracing::info!("9");
 
     if dest_exists {
         fs.remove_db_record(new_parent, new_name)?;

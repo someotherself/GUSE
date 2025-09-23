@@ -11,7 +11,7 @@ pub fn rmdir_live(fs: &GitFs, parent: NormalIno, name: &str) -> anyhow::Result<(
     };
     if !fs.is_dir(target_ino.into())? {
         tracing::error!("Not a dir");
-        bail!(std::io::Error::from_raw_os_error(libc::EISDIR))
+        bail!(std::io::Error::from_raw_os_error(libc::ENOTDIR))
     }
     let entries = fs.readdir(target_ino)?;
     if !entries.is_empty() {
@@ -53,7 +53,7 @@ pub fn rmdir_git(fs: &GitFs, parent: NormalIno, name: &str) -> anyhow::Result<()
     };
     if !fs.is_dir(target_ino.into())? {
         tracing::error!("Not a dir");
-        bail!(std::io::Error::from_raw_os_error(libc::EISDIR))
+        bail!(std::io::Error::from_raw_os_error(libc::ENOTDIR))
     }
     let entries = fs.readdir(target_ino)?;
     if !entries.is_empty() {

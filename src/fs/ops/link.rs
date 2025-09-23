@@ -1,8 +1,11 @@
+use std::ffi::OsString;
+
 use anyhow::{anyhow, bail};
 
 use crate::{
     fs::{GitFs, fileattr::FileAttr},
     inodes::NormalIno,
+    mount::InvalMsg,
 };
 
 pub fn link_git(
@@ -41,6 +44,22 @@ pub fn link_git(
         session.finish_path(fs, ino)?.join(newname)
     };
     std::fs::hard_link(original, link)?;
-    fs.write_dentry(source_ino, newparent, newname)?;
+    {
+        let _ = fs.notifier.send(InvalMsg::Entry {
+            parent: newparent.to_norm_u64(),
+            name: OsString::from(newname),
+        });
+        let _ = fs.notifier.send(InvalMsg::Inode {
+            ino: newparent.to_norm_u64(),
+            off: 0,
+            len: 0,
+        });
+        let _ = fs.notifier.send(InvalMsg::Inode {
+            ino: source_ino.to_norm_u64(),
+            off: 0,
+            len: 0,
+        });
+    }
+    fs.write_dentry(newparent, source_ino, newname)?;
     fs.get_metadata(source_ino.to_norm_u64())
 }

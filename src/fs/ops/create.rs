@@ -39,22 +39,22 @@ pub fn create_live(
         attr: attr.into(),
     }];
     fs.write_inodes_to_db(nodes)?;
-
-    let _ = fs.notifier.send(InvalMsg::Entry {
-        parent,
-        name: OsString::from(name),
-    });
-    let _ = fs.notifier.send(InvalMsg::Inode {
-        ino: parent,
-        off: 0,
-        len: 0,
-    });
-    let _ = fs.notifier.send(InvalMsg::Inode {
-        ino,
-        off: 0,
-        len: 0,
-    });
-
+    {
+        let _ = fs.notifier.send(InvalMsg::Entry {
+            parent,
+            name: OsString::from(name),
+        });
+        let _ = fs.notifier.send(InvalMsg::Inode {
+            ino: parent,
+            off: 0,
+            len: 0,
+        });
+        let _ = fs.notifier.send(InvalMsg::Inode {
+            ino,
+            off: 0,
+            len: 0,
+        });
+    }
     let fh = fs.open(ino, read, write, false)?;
     Ok((attr, fh))
 }
