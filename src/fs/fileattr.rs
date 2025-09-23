@@ -1,4 +1,4 @@
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::SystemTime;
 
 use anyhow::bail;
 use git2::{ObjectType, Oid};
@@ -181,33 +181,8 @@ pub struct StoredAttr {
     pub git_mode: u32,
     pub uid: u32,
     pub gid: u32,
-    pub atime_secs: i64,
-    pub atime_nsecs: i32,
-    pub mtime_secs: i64,
-    pub mtime_nsecs: i32,
-    pub ctime_secs: i64,
-    pub ctime_nsecs: i32,
     pub rdev: u32,
     pub flags: u32,
-}
-
-pub fn system_time_to_pair(t: SystemTime) -> (i64, i32) {
-    match t.duration_since(UNIX_EPOCH) {
-        Ok(dur) => (dur.as_secs() as i64, dur.subsec_nanos() as i32),
-        Err(e) => {
-            let d = e.duration();
-            (-(d.as_secs() as i64), -(d.subsec_nanos() as i32))
-        }
-    }
-}
-
-pub fn pair_to_system_time(secs: i64, nsecs: i32) -> SystemTime {
-    use std::time::{Duration, UNIX_EPOCH};
-    if secs >= 0 {
-        UNIX_EPOCH + Duration::new(secs as u64, nsecs as u32)
-    } else {
-        UNIX_EPOCH - Duration::new((-secs) as u64, nsecs as u32)
-    }
 }
 
 pub struct SetStoredAttr {
@@ -215,9 +190,6 @@ pub struct SetStoredAttr {
     pub size: Option<u64>,
     pub uid: Option<u32>,
     pub gid: Option<u32>,
-    pub atime: Option<SystemTime>,
-    pub mtime: Option<SystemTime>,
-    pub ctime: Option<SystemTime>,
     pub flags: Option<u32>,
 }
 
@@ -237,10 +209,6 @@ pub struct StorageNode {
 
 impl From<FileAttr> for StoredAttr {
     fn from(value: FileAttr) -> Self {
-        let (atime_secs, atime_nsecs) = system_time_to_pair(value.atime);
-        let (mtime_secs, mtime_nsecs) = system_time_to_pair(value.mtime);
-        let (ctime_secs, ctime_nsecs) = system_time_to_pair(value.ctime);
-
         Self {
             ino: value.ino,
             ino_flag: value.ino_flag,
@@ -249,12 +217,6 @@ impl From<FileAttr> for StoredAttr {
             git_mode: value.git_mode,
             uid: value.uid,
             gid: value.gid,
-            atime_secs,
-            atime_nsecs,
-            mtime_secs,
-            mtime_nsecs,
-            ctime_secs,
-            ctime_nsecs,
             rdev: value.rdev,
             flags: value.flags,
         }

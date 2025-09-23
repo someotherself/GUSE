@@ -525,12 +525,6 @@ impl GitFs {
         //   inode_flag   INTEGER   NOT NULL        -> InoFlag
         //   uid          INTEGER   NOT NULL
         //   gid          INTEGER   NOT NULL
-        //   atime_secs   INTEGER   NOT NULL
-        //   atime_nsecs  INTEGER   NOT NULL
-        //   mtime_secs   INTEGER   NOT NULL
-        //   mtime_nsecs  INTEGER   NOT NULL
-        //   ctime_secs   INTEGER   NOT NULL
-        //   ctime_nsecs  INTEGER   NOT NULL
         //   nlink        INTEGER   NOT NULL        -> calculated by sql
         //   rdev         INTEGER   NOT NULL
         //   flags        INTEGER   NOT NULL
@@ -544,12 +538,6 @@ impl GitFs {
                     inode_flag   INTEGER NOT NUll,
                     uid          INTEGER NOT NULL,
                     gid          INTEGER NOT NULL,
-                    atime_secs   INTEGER NOT NULL,
-                    atime_nsecs  INTEGER NOT NULL,
-                    mtime_secs   INTEGER NOT NULL,
-                    mtime_nsecs  INTEGER NOT NULL,
-                    ctime_secs   INTEGER NOT NULL,
-                    ctime_nsecs  INTEGER NOT NULL,
                     nlink        INTEGER NOT NULL,
                     rdev         INTEGER NOT NULL,
                     flags        INTEGER NOT NULL

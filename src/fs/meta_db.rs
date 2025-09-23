@@ -1,4 +1,4 @@
-use std::{collections::HashSet, path::PathBuf};
+use std::{collections::HashSet, path::PathBuf, time::SystemTime};
 
 use anyhow::{Context, anyhow, bail};
 use git2::Oid;
@@ -8,8 +8,7 @@ use crate::{
     fs::{
         GitFs, ROOT_INO,
         fileattr::{
-            FileAttr, FileType, InoFlag, SetStoredAttr, StorageNode, StoredAttr,
-            pair_to_system_time, try_into_filetype,
+            FileAttr, FileType, InoFlag, SetStoredAttr, StorageNode, StoredAttr, try_into_filetype,
         },
     },
     inodes::NormalIno,
@@ -27,21 +26,15 @@ impl MetaDb {
             let mut upsert_inode = tx.prepare(
                 r#"
             INSERT INTO inode_map
-                (inode, oid, git_mode, size, inode_flag, uid, gid, atime_secs, atime_nsecs, nlink, mtime_secs, mtime_nsecs, ctime_secs, ctime_nsecs, rdev, flags)
+                (inode, oid, git_mode, size, inode_flag, uid, gid, nlink, rdev, flags)
             VALUES
-                (?1, ?2, ?3, ?4, ?5, ?6, ?7, 0, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)
+                (?1, ?2, ?3, ?4, ?5, ?6, ?7, 0, ?8, ?9)
             ON CONFLICT(inode) DO UPDATE SET
                 oid         = excluded.oid,
                 git_mode    = excluded.git_mode,
                 size        = excluded.size,
                 uid         = excluded.uid,
                 gid         = excluded.gid,
-                atime_secs  = excluded.atime_secs,
-                atime_nsecs = excluded.atime_nsecs,
-                mtime_secs  = excluded.mtime_secs,
-                mtime_nsecs = excluded.mtime_nsecs,
-                ctime_secs  = excluded.ctime_secs,
-                ctime_nsecs = excluded.ctime_nsecs,
                 rdev        = excluded.rdev,
                 flags       = excluded.flags
             ;
@@ -66,12 +59,6 @@ impl MetaDb {
                     a.ino_flag as i64,
                     a.uid as i64,
                     a.gid as i64,
-                    a.atime_secs,
-                    a.atime_nsecs as i64,
-                    a.mtime_secs,
-                    a.mtime_nsecs as i64,
-                    a.ctime_secs,
-                    a.ctime_nsecs as i64,
                     a.rdev as i64,
                     a.flags as i64,
                 ])?;
@@ -100,9 +87,9 @@ impl MetaDb {
         tx.execute(
             r#"
         INSERT INTO inode_map
-            (inode, oid, git_mode, size, inode_flag, uid, gid, atime_secs, atime_nsecs, mtime_secs, mtime_nsecs, ctime_secs, ctime_nsecs, nlink, rdev, flags)
+            (inode, oid, git_mode, size, inode_flag, uid, gid, nlink, rdev, flags)
         VALUES
-            (?1, '', 0, ?2, ?3, 0, ?4, 0, 0, 0, 0, 0, 0, 1, 0, 0)
+            (?1, '', 0, ?2, ?3, 0, ?4, 1, 0, 0)
         ON CONFLICT(inode) DO NOTHING;
         "#,
             rusqlite::params![
@@ -683,12 +670,6 @@ impl MetaDb {
                 inode_flag,
                 uid,
                 gid,
-                atime_secs,
-                atime_nsecs,
-                mtime_secs,
-                mtime_nsecs,
-                ctime_secs,
-                ctime_nsecs,
                 nlink,
                 rdev,
                 flags
@@ -698,33 +679,9 @@ impl MetaDb {
             "#,
         )?;
 
-        #[allow(clippy::type_complexity)]
-        let (
-            ino,
-            oid,
-            git_mode,
-            size,
-            inode_flag,
-            uid,
-            gid,
-            atime_secs,
-            atime_nsecs,
-            mtime_secs,
-            mtime_nsecs,
-            ctime_secs,
-            ctime_nsecs,
-            nlink,
-            rdev,
-            flags,
-        ): (
+        let (ino, oid, git_mode, size, inode_flag, uid, gid, nlink, rdev, flags): (
             i64,
             String,
-            i64,
-            i64,
-            i64,
-            i64,
-            i64,
-            i64,
             i64,
             i64,
             i64,
@@ -745,12 +702,6 @@ impl MetaDb {
                 row.get(7)?,
                 row.get(8)?,
                 row.get(9)?,
-                row.get(10)?,
-                row.get(11)?,
-                row.get(12)?,
-                row.get(13)?,
-                row.get(14)?,
-                row.get(15)?,
             ))
         })?;
 
@@ -759,11 +710,9 @@ impl MetaDb {
         let ino_flag = InoFlag::try_from(ino_flag)?;
         let kind: FileType =
             try_into_filetype(git_mode as u64).ok_or_else(|| anyhow!("Invalid filetype"))?;
+        let now = SystemTime::now();
         let size = size as u64;
         let blocks = size.div_ceil(512);
-        let atime = pair_to_system_time(atime_secs, atime_nsecs as i32);
-        let mtime = pair_to_system_time(mtime_secs, mtime_nsecs as i32);
-        let ctime = pair_to_system_time(ctime_secs, ctime_nsecs as i32);
 
         let perm = match kind {
             FileType::Directory => 0o775,
@@ -783,10 +732,10 @@ impl MetaDb {
             oid,
             size,
             blocks,
-            atime,
-            mtime,
-            ctime,
-            crtime: ctime,
+            atime: now,
+            mtime: now,
+            ctime: now,
+            crtime: now,
             kind,
             perm,
             git_mode: git_mode as u32,
@@ -837,12 +786,6 @@ impl MetaDb {
                     row.get::<_, i64>(7)?,
                     row.get::<_, i64>(8)?,
                     row.get::<_, i64>(9)?,
-                    row.get::<_, i64>(10)?,
-                    row.get::<_, i64>(11)?,
-                    row.get::<_, i64>(12)?,
-                    row.get::<_, i64>(13)?,
-                    row.get::<_, i64>(14)?,
-                    row.get::<_, i64>(15)?,
                 ))
             })
             .optional()?
@@ -856,12 +799,6 @@ impl MetaDb {
             inode_flag_i,
             uid_i,
             gid_i,
-            atime_secs,
-            atime_nsecs,
-            mtime_secs,
-            mtime_nsecs,
-            ctime_secs,
-            ctime_nsecs,
             _nlink_i,
             rdev_i,
             flags_i,
@@ -881,12 +818,6 @@ impl MetaDb {
             git_mode: u32::try_from(git_mode_i)?,
             uid: u32::try_from(uid_i)?,
             gid: u32::try_from(gid_i)?,
-            atime_secs,
-            atime_nsecs: i32::try_from(atime_nsecs)?,
-            mtime_secs,
-            mtime_nsecs: i32::try_from(mtime_nsecs)?,
-            ctime_secs,
-            ctime_nsecs: i32::try_from(ctime_nsecs)?,
             rdev: u32::try_from(rdev_i)?,
             flags: u32::try_from(flags_i)?,
         })

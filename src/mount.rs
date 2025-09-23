@@ -644,16 +644,6 @@ impl fuser::Filesystem for GitFsAdapter {
                 return reply.error(EIO);
             }
         };
-        let atime = match atime {
-            Some(TimeOrNow::Now) => Some(SystemTime::now()),
-            Some(TimeOrNow::SpecificTime(t)) => Some(t),
-            None => None,
-        };
-        let mtime = match mtime {
-            Some(TimeOrNow::Now) => Some(SystemTime::now()),
-            Some(TimeOrNow::SpecificTime(t)) => Some(t),
-            None => None,
-        };
 
         let set_stored_attr: SetStoredAttr = SetStoredAttr {
             ino,
@@ -661,14 +651,25 @@ impl fuser::Filesystem for GitFsAdapter {
             uid,
             gid,
             flags,
-            atime,
-            mtime,
-            ctime,
         };
-        let attr = match fs.update_db_metadata(set_stored_attr) {
+        let mut attr = match fs.update_db_metadata(set_stored_attr) {
             Ok(a) => a,
             Err(e) => return reply.error(errno_from_anyhow(&e)),
         };
+        match atime {
+            Some(TimeOrNow::Now) => attr.atime = SystemTime::now(),
+            Some(TimeOrNow::SpecificTime(t)) => attr.atime = t,
+            _ => {}
+        };
+        match mtime {
+            Some(TimeOrNow::Now) => attr.mtime = SystemTime::now(),
+            Some(TimeOrNow::SpecificTime(t)) => attr.mtime = t,
+            _ => {}
+        };
+        if let Some(ctime) = ctime {
+            attr.ctime = ctime;
+        }
+
         reply.attr(&TTL, &attr.into());
     }
 
