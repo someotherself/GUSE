@@ -123,10 +123,9 @@ pub fn rename_git_build(
     new_name: &str,
 ) -> anyhow::Result<()> {
     let dest_in_build = fs.is_in_build(new_parent)?;
-    let dest_in_live = fs.is_in_live(new_parent)?;
     let oid = fs.get_oid_from_db(new_parent.into())?;
     let is_commit_folder = fs.is_commit(new_parent, oid)?;
-    if !dest_in_build && !is_commit_folder && !dest_in_live {
+    if !dest_in_build && !is_commit_folder {
         bail!(format!("New parent {} not allowed", new_parent));
     }
     let src_attr = fs.get_metadata_by_name(parent, name)?;
@@ -138,9 +137,11 @@ pub fn rename_git_build(
         dest_exists = true;
         dest_old_ino = dest_attr.ino;
 
-        if dest_attr.kind == FileType::Directory && fs.readdir(new_parent.to_norm_u64())?.is_empty()
-        {
-            bail!("Directory is not empty")
+        if dest_attr.kind == FileType::Directory {
+            let children = fs.count_children(dest_old_ino.into())?;
+            if children > 0 {
+                bail!(std::io::Error::from_raw_os_error(libc::ENOTEMPTY));
+            }
         }
         if dest_attr.kind != src_attr.kind {
             bail!("Source and destination are not the same type")
@@ -158,7 +159,7 @@ pub fn rename_git_build(
         session.finish_path(fs, ino)?.join(name)
     };
 
-    let dest = if dest_in_build {
+    let dest = {
         let ino = new_parent;
         let parent_oid = fs.parent_commit_build_session(ino)?;
         let build_root = fs.get_path_to_build_folder(ino)?;
@@ -167,8 +168,6 @@ pub fn rename_git_build(
         let session = repo.get_or_init_build_session(parent_oid, &build_root)?;
         drop(repo);
         session.finish_path(fs, ino)?.join(new_name)
-    } else {
-        fs.build_full_path(new_parent)?.join(new_name)
     };
 
     std::fs::rename(src, &dest)?;
@@ -217,9 +216,7 @@ pub fn rename_git_build(
         fs.remove_db_record(new_parent, new_name)?;
     }
 
-    let ino_flag = if dest_in_live {
-        InoFlag::InsideLive
-    } else if dest_in_build {
+    let ino_flag = if dest_in_build {
         InoFlag::InsideBuild
     } else {
         bail!("Invalid location")

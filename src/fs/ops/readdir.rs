@@ -2,6 +2,7 @@ use std::{collections::btree_map::Entry, ffi::OsString, path::Path};
 
 use anyhow::{anyhow, bail};
 use git2::{FileMode, ObjectType, Oid};
+use tracing::instrument;
 
 use crate::{
     fs::{
@@ -43,7 +44,7 @@ impl From<ObjectAttr> for DirectoryEntry {
         let kind = match attr.kind {
             ObjectType::Blob => FileType::RegularFile,
             ObjectType::Tree => FileType::Directory,
-            ObjectType::Commit => FileType::RegularFile,
+            ObjectType::Commit => FileType::Directory,
             ObjectType::Tag => FileType::RegularFile,
             _ => FileType::RegularFile,
         };
@@ -234,6 +235,7 @@ pub fn classify_inode(fs: &GitFs, ino: u64) -> anyhow::Result<DirCase> {
 // Performance is a priority
 // Build folder does not persist on disk
 // Get metadata from DB, do not check files on disk for metadata
+#[instrument(level = "error", skip(fs), fields(ino = %ino), err(Display))]
 fn read_build_dir(fs: &GitFs, ino: NormalIno) -> anyhow::Result<Vec<DirectoryEntry>> {
     let mut out = Vec::new();
 
@@ -246,29 +248,34 @@ fn read_build_dir(fs: &GitFs, ino: NormalIno) -> anyhow::Result<Vec<DirectoryEnt
     Ok(out)
 }
 
+#[instrument(level = "error", skip(fs), err(Display))]
 fn populate_build_entries(
     fs: &GitFs,
     ino: NormalIno,
     build_path: &Path,
 ) -> anyhow::Result<Vec<DirectoryEntry>> {
-    let ino_flag = fs.get_ino_flag_from_db(ino)?;
-    // Makes sure we don't read the project files if we are in the SnapFolder
-    let ino: NormalIno = if ino_flag == InoFlag::SnapFolder {
-        fs.get_build_ino(ino)?.into()
-    } else {
-        ino
-    };
-    let disk_entries_len = build_path.read_dir()?.count();
-    let db_entries = fs.read_children(ino)?;
+    let mut out: Vec<DirectoryEntry> = Vec::new();
 
-    if disk_entries_len != db_entries.len() {
-        tracing::error!("Disk: {}, DB: {}", disk_entries_len, db_entries.len());
-        bail!("Error reading directory entries!")
-    };
-
-    Ok(db_entries)
+    for node in build_path.read_dir()? {
+        let node = node?;
+        let node_name = node.file_name();
+        let node_name_str = node_name.to_string_lossy();
+        let (kind, filemode) = if node.file_type()?.is_dir() {
+            (FileType::Directory, libc::S_IFDIR)
+        } else if node.file_type()?.is_file() {
+            (FileType::RegularFile, libc::S_IFREG)
+        } else {
+            (FileType::Symlink, libc::S_IFLNK)
+        };
+        let entry_ino = fs.get_ino_from_db(ino.into(), &node_name_str)?;
+        let entry =
+            DirectoryEntry::new(entry_ino, Oid::zero(), node_name_str.into(), kind, filemode);
+        out.push(entry);
+    }
+    Ok(out)
 }
 
+#[instrument(level = "error", skip(fs), err(Display))]
 pub fn readdir_git_dir(fs: &GitFs, parent: NormalIno) -> anyhow::Result<Vec<DirectoryEntry>> {
     let ino_flag = fs.get_ino_flag_from_db(parent)?;
     let repo = fs.get_repo(parent.into())?;
@@ -301,7 +308,11 @@ pub fn readdir_git_dir(fs: &GitFs, parent: NormalIno) -> anyhow::Result<Vec<Dire
             // Is one of the folders (Tree) inside Snap. Only list git objects in it
             let oid = fs.get_oid_from_db(parent.into())?;
             let repo = repo.lock().map_err(|_| anyhow!("Lock poisoned"))?;
-            let objects = repo.list_tree(oid, Some(oid)).unwrap_or_default();
+            drop(repo);
+            let commit_oid = fs.get_parent_commit(parent.into())?;
+            let repo = fs.get_repo(parent.into())?;
+            let repo = repo.lock().map_err(|_| anyhow!("Lock poisoned"))?;
+            let objects = repo.list_tree(commit_oid, Some(oid)).unwrap_or_default();
             drop(repo);
             objects_to_dir_entries(fs, parent, objects, InoFlag::InsideSnap)?
         }

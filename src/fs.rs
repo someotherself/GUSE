@@ -75,14 +75,16 @@ impl FsOperationContext {
 // MOUNT_POINT/
 // repos/repo_dir1/
 //---------├── .git/
-//---------└── fs_meta.db
-// repos/repo_dir2/
-//---------├── .git/
-//---------└── fs_meta.db
+//---------├── build/           <- contents will show under each Snap folder
+//---------------└── build_HASH/    <- Will show in the Snap folder
+//---------------------└── target/    <- Will show in the Snap folder for HASH (commit oid)
+//---------└── meta_fs.db
+//---------All other contents will show under /live
 //
 // Perceived disk structure
 // repos/repo_dir1/
 //---------├── live/            <- everything in repo_dir1 except for .git and fs_meta.db
+//---------├── build/           <- used for running builds
 //---------├── YYYY-MM/         <- List month groups where commits were made
 //---------------├── Snaps_on_MM.DD.YYYY/   <- List day  groups where commits were made
 //---------------└── Snaps_on_MM.DD.YYYY/   <-
@@ -1072,7 +1074,6 @@ impl GitFs {
         }
     }
 
-    #[instrument(level = "debug", skip(self), fields(parent, return_len = field::Empty), err(Display))]
     pub fn readdir(&self, parent: u64) -> anyhow::Result<Vec<DirectoryEntry>> {
         let ret: anyhow::Result<Vec<DirectoryEntry>> = {
             let parent: Inodes = parent.into();

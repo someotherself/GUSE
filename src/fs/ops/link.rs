@@ -60,7 +60,6 @@ pub fn link_git(
             len: 0,
         });
     }
-    tracing::error!("Writing link: {newname} into {newparent}");
     fs.write_dentry(newparent, source_ino, newname)?;
     fs.get_metadata(source_ino.to_norm_u64())
 }

@@ -8,7 +8,7 @@ use fuser::{
 use git2::Oid;
 use libc::{EACCES, EIO, EISDIR, ENOENT, ENOTDIR, O_DIRECTORY};
 use ratatui::crossterm::style::Stylize;
-use tracing::{Level, Span, info};
+use tracing::{Level, Span, info, instrument};
 use tracing::{debug, error, trace, warn};
 
 use std::ffi::{OsStr, OsString};
@@ -436,7 +436,7 @@ impl fuser::Filesystem for GitFsAdapter {
             Ok(ent) => ent,
             Err(e) => {
                 error!(e = %e, "Fetching dir entries");
-                return reply.error(EIO);
+                return reply.error(ENOENT);
             }
         };
         for entry in gitfs_entries {
