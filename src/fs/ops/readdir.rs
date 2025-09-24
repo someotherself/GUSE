@@ -233,7 +233,7 @@ pub fn classify_inode(fs: &GitFs, ino: u64) -> anyhow::Result<DirCase> {
 // Performance is a priority
 // Build folder does not persist on disk
 // Get metadata from DB, do not check files on disk for metadata
-#[instrument(level = "error", skip(fs), fields(ino = %ino), err(Display))]
+#[instrument(level = "debug", skip(fs), fields(ino = %ino), err(Display))]
 fn read_build_dir(fs: &GitFs, ino: NormalIno) -> anyhow::Result<Vec<DirectoryEntry>> {
     let mut out = Vec::new();
 
@@ -246,7 +246,7 @@ fn read_build_dir(fs: &GitFs, ino: NormalIno) -> anyhow::Result<Vec<DirectoryEnt
     Ok(out)
 }
 
-#[instrument(level = "error", skip(fs), err(Display))]
+#[instrument(level = "debug", skip(fs), err(Display))]
 fn populate_build_entries(
     fs: &GitFs,
     ino: NormalIno,
@@ -273,7 +273,7 @@ fn populate_build_entries(
     Ok(out)
 }
 
-#[instrument(level = "error", skip(fs), err(Display))]
+#[instrument(level = "debug", skip(fs), err(Display))]
 pub fn readdir_git_dir(fs: &GitFs, parent: NormalIno) -> anyhow::Result<Vec<DirectoryEntry>> {
     let ino_flag = fs.get_ino_flag_from_db(parent)?;
     let repo = fs.get_repo(parent.into())?;

@@ -70,7 +70,7 @@ pub struct BuildOperationCtx {
 }
 
 impl BuildOperationCtx {
-    #[instrument(level = "error", skip(fs), err(Display))]
+    #[instrument(level = "debug", skip(fs), err(Display))]
     pub fn new(fs: &GitFs, ino: NormalIno) -> anyhow::Result<Option<Self>> {
         let case = classify_inode(fs, ino.to_norm_u64())?;
 

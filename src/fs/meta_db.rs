@@ -587,7 +587,6 @@ impl MetaDb {
     pub fn update_db_record(&mut self, node: StorageNode) -> anyhow::Result<()> {
         let tx = self.conn.transaction()?;
 
-        // 1) Upsert inode row (keeps same inode id; updates metadata fields).
         {
             let a = &node.attr;
             tx.execute(
@@ -620,7 +619,6 @@ impl MetaDb {
             )?;
         }
 
-        // 2) Move dentry: drop any existing links for this inode, then insert the new one.
         {
             let a = &node.attr;
             tx.execute(
@@ -637,7 +635,6 @@ impl MetaDb {
             )?;
         }
 
-        // 3) Recompute nlink (count of dentries pointing at each inode).
         tx.execute_batch(
             r#"
             UPDATE inode_map
