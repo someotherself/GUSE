@@ -26,18 +26,12 @@ pub fn write_live(fs: &GitFs, ino: u64, offset: u64, buf: &[u8], fh: u64) -> any
         if new_size != old_size {
             fs.update_size_in_db(ino.into(), new_size)?;
         }
-        let _ = fs.notifier.send(InvalMsg::Inode {
+        fs.notifier.try_send(InvalMsg::Inode {
             ino,
             off: 0,
             len: 0,
-        });
+        })?;
     }
-
-    let _ = fs.notifier.send(InvalMsg::Inode {
-        ino,
-        off: 0,
-        len: 0,
-    });
 
     Ok(bytes_written)
 }
@@ -70,11 +64,11 @@ pub fn write_git(
         if new_size != old_size {
             fs.update_size_in_db(ino, new_size)?;
         }
-        let _ = fs.notifier.send(InvalMsg::Inode {
+        fs.notifier.try_send(InvalMsg::Inode {
             ino: ino.to_norm_u64(),
             off: 0,
             len: 0,
-        });
+        })?;
     }
 
     Ok(bytes_written)

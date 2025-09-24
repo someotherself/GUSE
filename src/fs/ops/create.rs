@@ -40,22 +40,17 @@ pub fn create_live(
     }];
     fs.write_inodes_to_db(nodes)?;
     {
-        let _ = fs.notifier.send(InvalMsg::Entry {
+        fs.notifier.try_send(InvalMsg::Entry {
             parent,
             name: OsString::from(name),
-        });
-        let _ = fs.notifier.send(InvalMsg::Inode {
+        })?;
+        fs.notifier.try_send(InvalMsg::Inode {
             ino: parent,
             off: 0,
             len: 0,
-        });
-        let _ = fs.notifier.send(InvalMsg::Inode {
-            ino,
-            off: 0,
-            len: 0,
-        });
+        })?;
     }
-    let fh = fs.open(ino, read, write, false)?;
+    let fh = fs.open(ino, true, write, false)?;
     Ok((attr, fh))
 }
 
@@ -89,22 +84,16 @@ pub fn create_git(
         attr: attr.into(),
     }];
     fs.write_inodes_to_db(nodes)?;
-
-    let _ = fs.notifier.send(InvalMsg::Entry {
+    fs.notifier.try_send(InvalMsg::Entry {
         parent: parent.to_norm_u64(),
         name: OsString::from(name),
-    });
-    let _ = fs.notifier.send(InvalMsg::Inode {
+    })?;
+    fs.notifier.try_send(InvalMsg::Inode {
         ino: parent.to_norm_u64(),
         off: 0,
         len: 0,
-    });
-    let _ = fs.notifier.send(InvalMsg::Inode {
-        ino,
-        off: 0,
-        len: 0,
-    });
+    })?;
 
-    let fh = fs.open(ino, read, write, false)?;
+    let fh = fs.open(ino, true, write, false)?;
     Ok((attr, fh))
 }

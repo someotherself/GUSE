@@ -27,6 +27,7 @@ pub struct BuildSession {
 impl BuildSession {
     pub fn finish_path(&self, fs: &GitFs, ino: NormalIno) -> anyhow::Result<PathBuf> {
         let temp_dir_path = self.folder.path().to_path_buf();
+        // let build_ino = fs.get_build_ino(ino)?;
 
         let mut components = vec![];
 
@@ -39,6 +40,9 @@ impl BuildSession {
             if cur_oid != Oid::zero() {
                 break;
             }
+            // if cur_ino == build_ino {
+            //     break;
+            // }
             components.push(fs.get_name_from_db(cur_ino)?);
             cur_ino = fs.get_single_parent(cur_ino)?;
             cur_oid = fs.get_oid_from_db(cur_ino)?;

@@ -29,14 +29,11 @@ pub fn rename_live(
         .ok_or_else(|| anyhow!("Source does not exist"))?;
 
     let mut dest_exists = false;
-    let mut dest_old_ino: u64 = 0;
 
     if let Some(dest_attr) = fs.lookup(new_parent.to_norm_u64(), new_name)? {
         dest_exists = true;
-        dest_old_ino = dest_attr.ino;
 
-        if dest_attr.kind == FileType::Directory && fs.readdir(new_parent.to_norm_u64())?.is_empty()
-        {
+        if dest_attr.kind == FileType::Directory && fs.readdir(dest_attr.ino)?.is_empty() {
             bail!("Directory is not empty")
         }
         if dest_attr.kind != src_attr.kind {
@@ -49,47 +46,33 @@ pub fn rename_live(
 
     std::fs::rename(src, &dest)?;
 
-    {
-        let _ = fs.notifier.send(InvalMsg::Entry {
-            parent: parent.to_norm_u64(),
-            name: OsString::from(name),
-        });
-        let _ = fs.notifier.send(InvalMsg::Entry {
-            parent: new_parent.to_norm_u64(),
-            name: OsString::from(new_name),
-        });
-
-        let _ = fs.notifier.send(InvalMsg::Inode {
-            ino: parent.to_norm_u64(),
-            off: 0,
-            len: 0,
-        });
-        if new_parent.to_norm_u64() != parent.to_norm_u64() {
-            let _ = fs.notifier.send(InvalMsg::Inode {
-                ino: new_parent.to_norm_u64(),
-                off: 0,
-                len: 0,
-            });
-        }
-
-        let _ = fs.notifier.send(InvalMsg::Inode {
-            ino: src_attr.ino,
-            off: 0,
-            len: 0,
-        });
-
-        if dest_exists {
-            let _ = fs.notifier.send(InvalMsg::Inode {
-                ino: dest_old_ino,
-                off: 0,
-                len: 0,
-            });
-        }
-    }
-
     fs.remove_db_record(parent, name)?;
     if dest_exists {
         fs.remove_db_record(new_parent, new_name)?;
+    }
+
+    {
+        fs.notifier.try_send(InvalMsg::Entry {
+            parent: parent.to_norm_u64(),
+            name: OsString::from(name),
+        })?;
+        fs.notifier.try_send(InvalMsg::Entry {
+            parent: new_parent.to_norm_u64(),
+            name: OsString::from(new_name),
+        })?;
+
+        fs.notifier.try_send(InvalMsg::Inode {
+            ino: parent.to_norm_u64(),
+            off: 0,
+            len: 0,
+        })?;
+        if new_parent.to_norm_u64() != parent.to_norm_u64() {
+            fs.notifier.try_send(InvalMsg::Inode {
+                ino: new_parent.to_norm_u64(),
+                off: 0,
+                len: 0,
+            })?;
+        }
     }
 
     let ino_flag = if dest_in_live {
@@ -131,14 +114,12 @@ pub fn rename_git_build(
     let src_attr = fs.get_metadata_by_name(parent, name)?;
 
     let mut dest_exists = false;
-    let mut dest_old_ino: u64 = 0;
 
     if let Ok(dest_attr) = fs.get_metadata_by_name(new_parent, new_name) {
         dest_exists = true;
-        dest_old_ino = dest_attr.ino;
 
         if dest_attr.kind == FileType::Directory {
-            let children = fs.count_children(dest_old_ino.into())?;
+            let children = fs.count_children(dest_attr.ino.into())?;
             if children > 0 {
                 bail!(std::io::Error::from_raw_os_error(libc::ENOTEMPTY));
             }
@@ -172,48 +153,32 @@ pub fn rename_git_build(
 
     std::fs::rename(src, &dest)?;
 
+    fs.remove_db_record(parent, name)?;
+    if dest_exists {
+        fs.remove_db_record(new_parent, new_name)?;
+    }
     {
-        let _ = fs.notifier.send(InvalMsg::Entry {
+        fs.notifier.try_send(InvalMsg::Entry {
             parent: parent.to_norm_u64(),
             name: OsString::from(name),
-        });
-        let _ = fs.notifier.send(InvalMsg::Entry {
+        })?;
+        fs.notifier.try_send(InvalMsg::Entry {
             parent: new_parent.to_norm_u64(),
             name: OsString::from(new_name),
-        });
+        })?;
 
-        let _ = fs.notifier.send(InvalMsg::Inode {
+        fs.notifier.try_send(InvalMsg::Inode {
             ino: parent.to_norm_u64(),
             off: 0,
             len: 0,
-        });
+        })?;
         if new_parent.to_norm_u64() != parent.to_norm_u64() {
-            let _ = fs.notifier.send(InvalMsg::Inode {
+            fs.notifier.try_send(InvalMsg::Inode {
                 ino: new_parent.to_norm_u64(),
                 off: 0,
                 len: 0,
-            });
+            })?;
         }
-
-        let _ = fs.notifier.send(InvalMsg::Inode {
-            ino: src_attr.ino,
-            off: 0,
-            len: 0,
-        });
-
-        if dest_exists {
-            let _ = fs.notifier.send(InvalMsg::Inode {
-                ino: dest_old_ino,
-                off: 0,
-                len: 0,
-            });
-        }
-    }
-
-    fs.remove_db_record(parent, name)?;
-
-    if dest_exists {
-        fs.remove_db_record(new_parent, new_name)?;
     }
 
     let ino_flag = if dest_in_build {

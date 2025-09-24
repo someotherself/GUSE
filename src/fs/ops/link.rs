@@ -44,22 +44,17 @@ pub fn link_git(
         session.finish_path(fs, ino)?.join(newname)
     };
     std::fs::hard_link(original, link)?;
+    fs.write_dentry(newparent, source_ino, newname)?;
     {
-        let _ = fs.notifier.send(InvalMsg::Entry {
+        fs.notifier.try_send(InvalMsg::Entry {
             parent: newparent.to_norm_u64(),
             name: OsString::from(newname),
-        });
-        let _ = fs.notifier.send(InvalMsg::Inode {
+        })?;
+        fs.notifier.try_send(InvalMsg::Inode {
             ino: newparent.to_norm_u64(),
             off: 0,
             len: 0,
-        });
-        let _ = fs.notifier.send(InvalMsg::Inode {
-            ino: source_ino.to_norm_u64(),
-            off: 0,
-            len: 0,
-        });
+        })?;
     }
-    fs.write_dentry(newparent, source_ino, newname)?;
     fs.get_metadata(source_ino.to_norm_u64())
 }

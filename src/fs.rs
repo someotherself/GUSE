@@ -1476,21 +1476,16 @@ impl GitFs {
             let parents = self.get_all_parents(ino.into())?;
             let name = self.get_name_from_db(attr.ino)?;
             for parent in parents {
-                let _ = self.notifier.send(InvalMsg::Entry {
+                self.notifier.try_send(InvalMsg::Entry {
                     parent,
                     name: OsString::from(&name),
-                });
-                let _ = self.notifier.send(InvalMsg::Inode {
+                })?;
+                self.notifier.try_send(InvalMsg::Inode {
                     ino: parent,
                     off: 0,
                     len: 0,
-                });
+                })?;
             }
-            let _ = self.notifier.send(InvalMsg::Inode {
-                ino: attr.ino,
-                off: 0,
-                len: 0,
-            });
         }
 
         Ok(attr)
