@@ -64,6 +64,8 @@ pub fn create_git(
     let ino = fs.next_inode_checked(parent.to_norm_u64())?;
     let mut attr: FileAttr = file_attr(InoFlag::InsideBuild).into();
     attr.ino = ino;
+    attr.oid = ctx.commit_oid();
+
     let file = std::fs::File::create_new(&file_path)?;
     std::fs::set_permissions(&file_path, std::fs::Permissions::from_mode(0o775))?;
     file.sync_all()?;

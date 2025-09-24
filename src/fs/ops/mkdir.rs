@@ -108,6 +108,7 @@ pub fn mkdir_git(
     let mut attr: FileAttr = create_attr.into();
 
     attr.ino = new_ino;
+    attr.oid = ctx.commit_oid();
 
     let nodes = vec![StorageNode {
         parent_ino: parent.to_norm_u64(),

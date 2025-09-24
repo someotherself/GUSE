@@ -117,4 +117,11 @@ impl BuildOperationCtx {
     pub fn path(&self) -> PathBuf {
         self.full_path.clone()
     }
+
+    pub fn commit_oid(&self) -> Oid {
+        match self.target {
+            TargetCommit::Commit(oid) => oid,
+            TargetCommit::BuildHead(oid) => oid,
+        }
+    }
 }

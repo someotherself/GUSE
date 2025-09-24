@@ -50,7 +50,7 @@ impl From<ObjectAttr> for DirectoryEntry {
         };
 
         DirectoryEntry {
-            ino: 0, // default as requested
+            ino: 0,
             oid: attr.oid,
             name: attr.name,
             kind,
@@ -87,7 +87,6 @@ pub fn readdir_root_dir(fs: &GitFs) -> anyhow::Result<Vec<DirectoryEntry>> {
     Ok(entries)
 }
 
-// TODO: DOUBLE CHECK
 pub fn readdir_repo_dir(fs: &GitFs, parent: NormalIno) -> anyhow::Result<Vec<DirectoryEntry>> {
     let parent = parent.to_norm_u64();
     let repo_id = GitFs::ino_to_repo_id(parent);

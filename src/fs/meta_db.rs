@@ -605,15 +605,21 @@ impl MetaDb {
             tx.execute(
                 r#"
                 INSERT INTO inode_map
-                    (inode, oid, git_mode, size, inode_flag, uid, gid, nlink, rdev, flags)
+                    (inode, oid, git_mode, size, inode_flag, uid, gid, atime_secs, atime_nsecs, nlink, mtime_secs, mtime_nsecs, ctime_secs, ctime_nsecs, rdev, flags)
                 VALUES
-                    (?1, ?2, ?3, ?4, ?5, ?6, ?7, 0, ?8, ?9)
+                    (?1, ?2, ?3, ?4, ?5, ?6, ?7, 0, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)
                 ON CONFLICT(inode) DO UPDATE SET
                     oid      = excluded.oid,
                     git_mode = excluded.git_mode,
                     size     = excluded.size,
                     uid      = excluded.uid,
                     gid      = excluded.gid,
+                    atime_secs  = excluded.atime_secs,
+                    atime_nsecs = excluded.atime_nsecs,
+                    mtime_secs  = excluded.mtime_secs,
+                    mtime_nsecs = excluded.mtime_nsecs,
+                    ctime_secs  = excluded.ctime_secs,
+                    ctime_nsecs = excluded.ctime_nsecs,
                     rdev     = excluded.rdev,
                     flags    = excluded.flags
                 ;
@@ -626,6 +632,12 @@ impl MetaDb {
                     a.ino_flag as i64,
                     a.uid as i64,
                     a.gid as i64,
+                    a.atime_secs,
+                    a.atime_nsecs as i64,
+                    a.mtime_secs,
+                    a.mtime_nsecs as i64,
+                    a.ctime_secs,
+                    a.ctime_nsecs as i64,
                     a.rdev as i64,
                     a.flags as i64,
                 ],

@@ -119,8 +119,7 @@ pub fn rename_git_build(
         dest_exists = true;
 
         if dest_attr.kind == FileType::Directory {
-            let children = fs.count_children(dest_attr.ino.into())?;
-            if children > 0 {
+            if !fs.readdir(dest_attr.ino)?.is_empty() {
                 bail!(std::io::Error::from_raw_os_error(libc::ENOTEMPTY));
             }
         }

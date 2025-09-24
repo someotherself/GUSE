@@ -430,7 +430,7 @@ fn test_rename_live_overwrite_nonempty_dir_fails() -> anyhow::Result<()> {
             // Attempt to rename src_dir -> dst_dir
             let err = fs.rename(live, src, live, dst).unwrap_err();
             let msg = format!("{err:#}");
-            assert!(msg.starts_with("Directory not empty"));
+            assert!(msg.starts_with("Directory is not empty"));
 
             // Nothing should have changed
             assert!(fs.lookup(live, "src_dir")?.is_some());
