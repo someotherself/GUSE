@@ -642,7 +642,7 @@ impl fuser::Filesystem for GitFsAdapter {
         size: Option<u64>,
         atime: Option<fuser::TimeOrNow>,
         mtime: Option<fuser::TimeOrNow>,
-        _ctime: Option<SystemTime>,
+        ctime: Option<SystemTime>,
         _fh: Option<u64>,
         _crtime: Option<SystemTime>,
         _chgtime: Option<SystemTime>,
@@ -658,6 +658,22 @@ impl fuser::Filesystem for GitFsAdapter {
                 return reply.error(EIO);
             }
         };
+        let atime_opt = match atime {
+            Some(TimeOrNow::Now) => {
+                let a = libc::timespec {
+                    tv_sec: 0,
+                    tv_nsec: libc::UTIME_NOW,
+                };
+                Some(SystemTime::now())
+            }
+            Some(TimeOrNow::SpecificTime(t)) => Some(t),
+            _ => None,
+        };
+        let mtime_opt = match mtime {
+            Some(TimeOrNow::Now) => Some(SystemTime::now()),
+            Some(TimeOrNow::SpecificTime(t)) => Some(t),
+            _ => None,
+        };
 
         let set_stored_attr: SetStoredAttr = SetStoredAttr {
             ino,
@@ -665,30 +681,21 @@ impl fuser::Filesystem for GitFsAdapter {
             uid,
             gid,
             flags,
+            atime: atime_opt,
+            mtime: mtime_opt,
+            ctime,
         };
         let mut attr = match fs.update_db_metadata(set_stored_attr) {
             Ok(a) => a,
             Err(e) => return reply.error(errno_from_anyhow(&e)),
         };
-        match atime {
-            Some(TimeOrNow::Now) => {
-                let a = libc::timespec {
-                    tv_sec: 0,
-                    tv_nsec: libc::UTIME_NOW,
-                };
-                attr.atime = SystemTime::now()
-            }
-            Some(TimeOrNow::SpecificTime(t)) => attr.atime = t,
-            _ => {}
+
+        if let Some(atime) = atime_opt {
+            attr.atime = atime;
         };
-        match mtime {
-            Some(TimeOrNow::Now) => attr.mtime = SystemTime::now(),
-            Some(TimeOrNow::SpecificTime(t)) => attr.mtime = t,
-            _ => {}
+        if let Some(mtime) = mtime_opt {
+            attr.mtime = mtime;
         };
-        if let Some(size) = size {
-            attr.size = size;
-        }
 
         reply.attr(&TTL, &attr.into());
     }

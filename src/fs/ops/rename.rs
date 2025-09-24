@@ -33,7 +33,7 @@ pub fn rename_live(
     if let Some(dest_attr) = fs.lookup(new_parent.to_norm_u64(), new_name)? {
         dest_exists = true;
 
-        if dest_attr.kind == FileType::Directory && fs.readdir(dest_attr.ino)?.is_empty() {
+        if dest_attr.kind == FileType::Directory && !fs.readdir(dest_attr.ino)?.is_empty() {
             bail!("Directory is not empty")
         }
         if dest_attr.kind != src_attr.kind {
