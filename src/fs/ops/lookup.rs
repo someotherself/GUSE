@@ -28,7 +28,6 @@ pub fn lookup_root(fs: &GitFs, name: &str) -> anyhow::Result<Option<FileAttr>> {
     Ok(attr)
 }
 
-#[instrument(level = "debug", skip(fs), fields(parent = %parent), err(Display))]
 pub fn lookup_repo(fs: &GitFs, parent: NormalIno, name: &str) -> anyhow::Result<Option<FileAttr>> {
     let repo_id = GitFs::ino_to_repo_id(parent.into());
     let repo = match fs.repos_list.get(&repo_id) {
@@ -65,7 +64,6 @@ pub fn lookup_repo(fs: &GitFs, parent: NormalIno, name: &str) -> anyhow::Result<
     Ok(Some(attr))
 }
 
-#[instrument(level = "debug", skip(fs), fields(parent = %parent), err(Display))]
 pub fn lookup_live(fs: &GitFs, parent: NormalIno, name: &str) -> anyhow::Result<Option<FileAttr>> {
     let repo_id = GitFs::ino_to_repo_id(parent.to_norm_u64());
     match fs.repos_list.get(&repo_id) {

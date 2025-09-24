@@ -6,7 +6,7 @@ use fuser::{
     TimeOrNow, consts,
 };
 use git2::Oid;
-use libc::{EACCES, EIO, EISDIR, ENOENT, ENOTDIR, O_DIRECTORY};
+use libc::{EACCES, EIO, EISDIR, ENOENT, ENOTDIR, ENOTTY, O_DIRECTORY};
 use ratatui::crossterm::style::Stylize;
 use tracing::{Level, Span, info, instrument};
 use tracing::{debug, error, trace, warn};
@@ -207,6 +207,20 @@ impl fuser::Filesystem for GitFsAdapter {
                 reply.error(EIO);
             }
         };
+    }
+
+    fn ioctl(
+        &mut self,
+        _req: &fuser::Request<'_>,
+        ino: u64,
+        fh: u64,
+        flags: u32,
+        cmd: u32,
+        in_data: &[u8],
+        out_size: u32,
+        reply: fuser::ReplyIoctl,
+    ) {
+        reply.error(ENOTTY);
     }
 
     fn getattr(&mut self, _req: &fuser::Request<'_>, ino: u64, _fh: Option<u64>, reply: ReplyAttr) {
@@ -629,7 +643,7 @@ impl fuser::Filesystem for GitFsAdapter {
         atime: Option<fuser::TimeOrNow>,
         mtime: Option<fuser::TimeOrNow>,
         ctime: Option<SystemTime>,
-        fh: Option<u64>,
+        _fh: Option<u64>,
         _crtime: Option<SystemTime>,
         _chgtime: Option<SystemTime>,
         _bkuptime: Option<SystemTime>,
@@ -668,6 +682,9 @@ impl fuser::Filesystem for GitFsAdapter {
         };
         if let Some(ctime) = ctime {
             attr.ctime = ctime;
+        }
+        if let Some(size) = size {
+            attr.size = size;
         }
 
         reply.attr(&TTL, &attr.into());
@@ -735,28 +752,28 @@ impl fuser::Filesystem for GitFsAdapter {
         reply.opened(0, 0);
     }
 
-    fn link(
-        &mut self,
-        _req: &fuser::Request<'_>,
-        ino: u64,
-        newparent: u64,
-        newname: &OsStr,
-        reply: ReplyEntry,
-    ) {
-        let fs_arc = self.getfs();
-        let fs = match fs_arc.lock() {
-            Ok(fs) => fs,
-            Err(e) => {
-                error!(e = %e);
-                return reply.error(EIO);
-            }
-        };
-        let res = fs.link(ino, newparent, newname);
-        match res {
-            Ok(attr) => reply.entry(&TTL, &attr.into(), 0),
-            Err(e) => reply.error(errno_from_anyhow(&e)),
-        }
-    }
+    // fn link(
+    //     &mut self,
+    //     _req: &fuser::Request<'_>,
+    //     ino: u64,
+    //     newparent: u64,
+    //     newname: &OsStr,
+    //     reply: ReplyEntry,
+    // ) {
+    //     let fs_arc = self.getfs();
+    //     let fs = match fs_arc.lock() {
+    //         Ok(fs) => fs,
+    //         Err(e) => {
+    //             error!(e = %e);
+    //             return reply.error(EIO);
+    //         }
+    //     };
+    //     let res = fs.link(ino, newparent, newname);
+    //     match res {
+    //         Ok(attr) => reply.entry(&TTL, &attr.into(), 0),
+    //         Err(e) => reply.error(errno_from_anyhow(&e)),
+    //     }
+    // }
 
     fn create(
         &mut self,

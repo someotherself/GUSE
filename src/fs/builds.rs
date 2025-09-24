@@ -6,6 +6,7 @@ use std::{
 use anyhow::anyhow;
 use git2::Oid;
 use tempfile::TempDir;
+use tracing::instrument;
 
 use crate::{
     fs::{
@@ -68,6 +69,7 @@ pub struct BuildOperationCtx {
 }
 
 impl BuildOperationCtx {
+    #[instrument(level = "error", skip(fs), err(Display))]
     pub fn new(fs: &GitFs, ino: NormalIno) -> anyhow::Result<Option<Self>> {
         let case = classify_inode(fs, ino.to_norm_u64())?;
 

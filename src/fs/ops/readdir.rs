@@ -183,10 +183,8 @@ pub fn readdir_live_dir(fs: &GitFs, ino: NormalIno) -> anyhow::Result<Vec<Direct
         }
         let (kind, filemode) = if node.file_type()?.is_dir() {
             (FileType::Directory, libc::S_IFDIR)
-        } else if node.file_type()?.is_file() {
-            (FileType::RegularFile, libc::S_IFREG)
         } else {
-            (FileType::Symlink, libc::S_IFLNK)
+            (FileType::RegularFile, libc::S_IFREG)
         };
         let mut attr = fs.refresh_medata_using_path(node.path(), InoFlag::InsideLive)?;
         // It is reasonable to expect the user could add entries bypassing fuse
@@ -262,10 +260,8 @@ fn populate_build_entries(
         let node_name_str = node_name.to_string_lossy();
         let (kind, filemode) = if node.file_type()?.is_dir() {
             (FileType::Directory, libc::S_IFDIR)
-        } else if node.file_type()?.is_file() {
-            (FileType::RegularFile, libc::S_IFREG)
         } else {
-            (FileType::Symlink, libc::S_IFLNK)
+            (FileType::RegularFile, libc::S_IFREG)
         };
         let entry_ino = fs.get_ino_from_db(ino.into(), &node_name_str)?;
         let entry =

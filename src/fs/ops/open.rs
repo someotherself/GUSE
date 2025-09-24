@@ -29,7 +29,7 @@ pub fn open_live(
     let ino = u64::from(ino);
     let path = fs.get_live_path(ino.into())?;
     let file = OpenOptions::new()
-        .read(read)
+        .read(true)
         .write(write)
         .truncate(truncate)
         .open(path)?;
@@ -37,7 +37,7 @@ pub fn open_live(
     let handle = Handle {
         ino,
         file: SourceTypes::RealFile(file),
-        read,
+        read: true,
         write,
     };
     {
@@ -67,7 +67,7 @@ pub fn open_git(
         };
         let path = build_session.finish_path(fs, ino)?;
         let file = OpenOptions::new()
-            .read(read)
+            .read(true)
             .write(write)
             .truncate(truncate)
             .open(path)?;
@@ -75,7 +75,7 @@ pub fn open_git(
         let handle = Handle {
             ino: ino.to_norm_u64(),
             file: SourceTypes::RealFile(file),
-            read,
+            read: true,
             write,
         };
         {
@@ -116,7 +116,7 @@ pub fn open_vfile(fs: &GitFs, ino: Inodes, read: bool, write: bool) -> anyhow::R
             let handle = Handle {
                 ino: ino.to_u64_v(),
                 file: blob_file,
-                read,
+                read: true,
                 write: false,
             };
             {
@@ -151,7 +151,7 @@ pub fn open_vfile(fs: &GitFs, ino: Inodes, read: bool, write: bool) -> anyhow::R
             let handle = Handle {
                 ino: ino.to_u64_v(),
                 file: blob_file,
-                read,
+                read: true,
                 write: false,
             };
             {
@@ -250,7 +250,7 @@ fn open_blob(fs: &GitFs, oid: Oid, ino: u64, read: bool) -> anyhow::Result<u64> 
     let handle = Handle {
         ino,
         file: blob_file,
-        read,
+        read: true,
         write: false,
     };
     {

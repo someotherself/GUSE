@@ -13,8 +13,9 @@ pub fn rmdir_live(fs: &GitFs, parent: NormalIno, name: &str) -> anyhow::Result<(
         tracing::error!("Not a dir");
         bail!(std::io::Error::from_raw_os_error(libc::ENOTDIR))
     }
-    if fs.count_children(target_ino.into())? != 0 {
-        tracing::error!("Parent is not empty");
+    let entries = fs.readdir(target_ino)?;
+    if !entries.is_empty() {
+        tracing::error!("Target dir {target_ino} is not empty: {}", entries.len());
         bail!(std::io::Error::from_raw_os_error(libc::ENOTEMPTY))
     }
     let Ok(path) = fs.get_live_path(target_ino.into()) else {
@@ -22,9 +23,6 @@ pub fn rmdir_live(fs: &GitFs, parent: NormalIno, name: &str) -> anyhow::Result<(
         bail!(std::io::Error::from_raw_os_error(libc::ENOENT))
     };
     std::fs::remove_dir(path)?;
-
-    fs.remove_db_record(parent, name)?;
-
     {
         let _ = fs.notifier.send(InvalMsg::Entry {
             parent: parent.into(),
@@ -41,6 +39,7 @@ pub fn rmdir_live(fs: &GitFs, parent: NormalIno, name: &str) -> anyhow::Result<(
             len: 0,
         });
     }
+    fs.remove_db_record(parent, name)?;
 
     Ok(())
 }
@@ -54,8 +53,9 @@ pub fn rmdir_git(fs: &GitFs, parent: NormalIno, name: &str) -> anyhow::Result<()
         tracing::error!("Not a dir");
         bail!(std::io::Error::from_raw_os_error(libc::ENOTDIR))
     }
-    if fs.count_children(target_ino.into())? != 0 {
-        tracing::error!("Parent is not empty");
+    let entries = fs.readdir(target_ino)?;
+    if !entries.is_empty() {
+        tracing::error!("Target dir {target_ino} is not empty: {}", entries.len());
         bail!(std::io::Error::from_raw_os_error(libc::ENOTEMPTY))
     }
 
@@ -70,9 +70,6 @@ pub fn rmdir_git(fs: &GitFs, parent: NormalIno, name: &str) -> anyhow::Result<()
     };
 
     std::fs::remove_dir(path)?;
-
-    fs.remove_db_record(parent, name)?;
-
     {
         let _ = fs.notifier.send(InvalMsg::Entry {
             parent: parent.to_norm_u64(),
@@ -89,6 +86,7 @@ pub fn rmdir_git(fs: &GitFs, parent: NormalIno, name: &str) -> anyhow::Result<()
             len: 0,
         });
     }
+    fs.remove_db_record(parent, name)?;
 
     Ok(())
 }

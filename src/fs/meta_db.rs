@@ -390,14 +390,21 @@ impl MetaDb {
     }
 
     pub fn update_size_in_db(&self, ino: u64, new_size: u64) -> anyhow::Result<()> {
-        let ino_i64 = i64::try_from(ino)?;
-        let size_i64 = i64::try_from(new_size)?;
-        self.conn.execute(
-            "UPDATE inode_map
-             SET size = ?1
-             WHERE inode = ?2",
+        let ino_i64 = i64::try_from(ino).context("inode does not fit in i64")?;
+        let size_i64 = i64::try_from(new_size).context("size does not fit in i64")?;
+
+        let changed = self.conn.execute(
+            "UPDATE inode_map SET size = ?1 WHERE inode = ?2",
             rusqlite::params![size_i64, ino_i64],
         )?;
+
+        if changed != 1 {
+            bail!(
+                "update_size_in_db: expected to update 1 row for ino {}, updated {}",
+                ino,
+                changed
+            );
+        }
         Ok(())
     }
 

@@ -646,35 +646,51 @@ impl GitFs {
         }
     }
 
+    #[instrument(level = "debug", skip(self, buf), fields(ino = %ino), err(Display))]
     pub fn read(&self, ino: u64, offset: u64, buf: &mut [u8], fh: u64) -> anyhow::Result<usize> {
-        let ino: Inodes = ino.into();
-        let ctx = FsOperationContext::get_operation(self, ino);
+        let ret: anyhow::Result<usize> = {
+            let ino: Inodes = ino.into();
+            let ctx = FsOperationContext::get_operation(self, ino);
 
-        match ctx? {
-            FsOperationContext::Root => bail!("Not allowed"),
-            FsOperationContext::RepoDir { ino: _ } => bail!("Not allowed"),
-            FsOperationContext::InsideLiveDir { ino: _ } => {
-                ops::read::read_live(self, ino, offset, buf, fh)
+            match ctx? {
+                FsOperationContext::Root => bail!("Not allowed"),
+                FsOperationContext::RepoDir { ino: _ } => bail!("Not allowed"),
+                FsOperationContext::InsideLiveDir { ino: _ } => {
+                    ops::read::read_live(self, ino, offset, buf, fh)
+                }
+                FsOperationContext::InsideGitDir { ino: _ } => {
+                    ops::read::read_git(self, ino, offset, buf, fh)
+                }
             }
-            FsOperationContext::InsideGitDir { ino: _ } => {
-                ops::read::read_git(self, ino, offset, buf, fh)
-            }
+        };
+        if let Ok(ref bytes_read) = ret {
+            tracing::Span::current().record("return_len", tracing::field::display(bytes_read));
+            tracing::debug!(len = *bytes_read, "Read ok");
         }
+        ret
     }
 
+    #[instrument(level = "debug", skip(self, buf), fields(ino = %ino), err(Display))]
     pub fn write(&self, ino: u64, offset: u64, buf: &[u8], fh: u64) -> anyhow::Result<usize> {
-        let ino = ino.into();
-        let ctx = FsOperationContext::get_operation(self, ino);
-        match ctx? {
-            FsOperationContext::Root => bail!("Not allowed"),
-            FsOperationContext::RepoDir { ino: _ } => bail!("Not allowed"),
-            FsOperationContext::InsideLiveDir { ino } => {
-                ops::write::write_live(self, ino, offset, buf, fh)
+        let ret: anyhow::Result<usize> = {
+            let ino = ino.into();
+            let ctx = FsOperationContext::get_operation(self, ino);
+            match ctx? {
+                FsOperationContext::Root => bail!("Not allowed"),
+                FsOperationContext::RepoDir { ino: _ } => bail!("Not allowed"),
+                FsOperationContext::InsideLiveDir { ino } => {
+                    ops::write::write_live(self, ino, offset, buf, fh)
+                }
+                FsOperationContext::InsideGitDir { ino: _ } => {
+                    ops::write::write_git(self, ino.to_norm(), offset, buf, fh)
+                }
             }
-            FsOperationContext::InsideGitDir { ino: _ } => {
-                ops::write::write_git(self, ino.to_norm(), offset, buf, fh)
-            }
+        };
+        if let Ok(ref bytes_written) = ret {
+            tracing::Span::current().record("return_len", tracing::field::display(bytes_written));
+            tracing::debug!(len = *bytes_written, "Write ok");
         }
+        ret
     }
 
     #[instrument(level = "debug", skip(self), ret(level = Level::DEBUG), err(Display))]
@@ -750,7 +766,6 @@ impl GitFs {
         })
     }
 
-    #[instrument(level = "debug", skip(self), fields(target = %target), ret(level = Level::DEBUG), err(Display))]
     pub fn getattr(&self, target: u64) -> anyhow::Result<FileAttr> {
         let perms = 0o775;
         let st_mode = libc::S_IFDIR | perms;
@@ -1114,7 +1129,6 @@ impl GitFs {
         Ok(entries_plus)
     }
 
-    #[instrument(level = "debug", skip(self), fields(name= %name), ret(level = Level::DEBUG), err(Display))]
     pub fn lookup(&self, parent: u64, name: &str) -> anyhow::Result<Option<FileAttr>> {
         // Check if name if a virtual dir
         // If not, check if the parent is a virtual dir
@@ -1143,7 +1157,7 @@ impl GitFs {
                     let ino: Inodes = attr.ino.into();
                     return Ok(Some(self.prepare_virtual_file(ino.to_virt())?));
                 }
-                return Ok(Some(attr));
+                Ok(Some(attr))
             }
             FsOperationContext::InsideLiveDir { ino: _ } => {
                 // If the target has is a virtual, either File or Dir
@@ -1902,6 +1916,7 @@ impl GitFs {
         )
     }
 
+    #[instrument(level = "error", skip(self), err(Display))]
     pub fn parent_commit_build_session(&self, ino: NormalIno) -> anyhow::Result<Oid> {
         let oid = self.get_oid_from_db(ino.to_norm_u64())?;
 

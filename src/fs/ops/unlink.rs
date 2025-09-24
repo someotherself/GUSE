@@ -16,8 +16,6 @@ pub fn unlink_live(fs: &GitFs, parent: u64, name: &str) -> anyhow::Result<()> {
     let path = fs.build_full_path(target_ino.into())?;
     std::fs::remove_file(path)?;
 
-    fs.remove_db_record(parent.into(), name)?;
-
     let _ = fs.notifier.send(InvalMsg::Entry {
         parent,
         name: OsString::from(name),
@@ -32,6 +30,7 @@ pub fn unlink_live(fs: &GitFs, parent: u64, name: &str) -> anyhow::Result<()> {
         off: 0,
         len: 0,
     });
+    fs.remove_db_record(parent.into(), name)?;
 
     Ok(())
 }
