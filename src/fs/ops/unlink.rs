@@ -17,15 +17,15 @@ pub fn unlink_live(fs: &GitFs, parent: u64, name: &str) -> anyhow::Result<()> {
     std::fs::remove_file(path)?;
     fs.remove_db_record(parent.into(), name)?;
 
-    fs.notifier.try_send(InvalMsg::Entry {
+    let _ = fs.notifier.try_send(InvalMsg::Entry {
         parent,
         name: OsString::from(name),
-    })?;
-    fs.notifier.try_send(InvalMsg::Inode {
+    });
+    let _ = fs.notifier.try_send(InvalMsg::Inode {
         ino: parent,
         off: 0,
         len: 0,
-    })?;
+    });
 
     Ok(())
 }
@@ -53,15 +53,15 @@ pub fn unlink_build_dir(fs: &GitFs, parent: NormalIno, name: &str) -> anyhow::Re
     std::fs::remove_file(path)?;
     fs.remove_db_record(parent, name)?;
 
-    fs.notifier.try_send(InvalMsg::Entry {
+    let _ = fs.notifier.try_send(InvalMsg::Entry {
         parent: parent.to_norm_u64(),
         name: OsString::from(name),
-    })?;
-    fs.notifier.try_send(InvalMsg::Inode {
+    });
+    let _ = fs.notifier.try_send(InvalMsg::Inode {
         ino: parent.to_norm_u64(),
         off: 0,
         len: 0,
-    })?;
+    });
 
     Ok(())
 }

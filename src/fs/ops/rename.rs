@@ -52,26 +52,26 @@ pub fn rename_live(
     }
 
     {
-        fs.notifier.try_send(InvalMsg::Entry {
+        let _ = fs.notifier.try_send(InvalMsg::Entry {
             parent: parent.to_norm_u64(),
             name: OsString::from(name),
-        })?;
-        fs.notifier.try_send(InvalMsg::Entry {
+        });
+        let _ = fs.notifier.try_send(InvalMsg::Entry {
             parent: new_parent.to_norm_u64(),
             name: OsString::from(new_name),
-        })?;
+        });
 
-        fs.notifier.try_send(InvalMsg::Inode {
+        let _ = fs.notifier.try_send(InvalMsg::Inode {
             ino: parent.to_norm_u64(),
             off: 0,
             len: 0,
-        })?;
+        });
         if new_parent.to_norm_u64() != parent.to_norm_u64() {
-            fs.notifier.try_send(InvalMsg::Inode {
+            let _ = fs.notifier.try_send(InvalMsg::Inode {
                 ino: new_parent.to_norm_u64(),
                 off: 0,
                 len: 0,
-            })?;
+            });
         }
     }
 
@@ -158,26 +158,26 @@ pub fn rename_git_build(
         fs.remove_db_record(new_parent, new_name)?;
     }
     {
-        fs.notifier.try_send(InvalMsg::Entry {
+        let _ = fs.notifier.try_send(InvalMsg::Entry {
             parent: parent.to_norm_u64(),
             name: OsString::from(name),
-        })?;
-        fs.notifier.try_send(InvalMsg::Entry {
+        });
+        let _ = fs.notifier.try_send(InvalMsg::Entry {
             parent: new_parent.to_norm_u64(),
             name: OsString::from(new_name),
-        })?;
+        });
 
-        fs.notifier.try_send(InvalMsg::Inode {
+        let _ = fs.notifier.try_send(InvalMsg::Inode {
             ino: parent.to_norm_u64(),
             off: 0,
             len: 0,
-        })?;
+        });
         if new_parent.to_norm_u64() != parent.to_norm_u64() {
-            fs.notifier.try_send(InvalMsg::Inode {
+            let _ = fs.notifier.try_send(InvalMsg::Inode {
                 ino: new_parent.to_norm_u64(),
                 off: 0,
                 len: 0,
-            })?;
+            });
         }
     }
 

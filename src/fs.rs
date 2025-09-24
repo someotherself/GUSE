@@ -224,10 +224,14 @@ impl GitFs {
             for msg in rx.iter() {
                 match msg {
                     InvalMsg::Entry { parent, name } => {
-                        let _ = n.inval_entry(parent, &name);
+                        if let Err(e) = n.inval_entry(parent, &name) {
+                            tracing::debug!("inval_entry failed: {e}");
+                        }
                     }
                     InvalMsg::Inode { ino, off, len } => {
-                        let _ = n.inval_inode(ino, off, len);
+                        if let Err(e) = n.inval_inode(ino, off, len) {
+                            tracing::debug!("inval_inode failed: {e}");
+                        }
                     }
                 }
             }

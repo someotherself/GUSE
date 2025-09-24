@@ -25,15 +25,15 @@ pub fn rmdir_live(fs: &GitFs, parent: NormalIno, name: &str) -> anyhow::Result<(
     std::fs::remove_dir(path)?;
     fs.remove_db_record(parent, name)?;
     {
-        fs.notifier.try_send(InvalMsg::Entry {
+        let _ = fs.notifier.try_send(InvalMsg::Entry {
             parent: parent.into(),
             name: OsString::from(name),
-        })?;
-        fs.notifier.try_send(InvalMsg::Inode {
+        });
+        let _ = fs.notifier.try_send(InvalMsg::Inode {
             ino: parent.into(),
             off: 0,
             len: 0,
-        })?;
+        });
     }
 
     Ok(())
@@ -67,15 +67,15 @@ pub fn rmdir_git(fs: &GitFs, parent: NormalIno, name: &str) -> anyhow::Result<()
     std::fs::remove_dir(path)?;
     fs.remove_db_record(parent, name)?;
     {
-        fs.notifier.try_send(InvalMsg::Entry {
+        let _ = fs.notifier.try_send(InvalMsg::Entry {
             parent: parent.to_norm_u64(),
             name: OsString::from(name),
-        })?;
-        fs.notifier.try_send(InvalMsg::Inode {
+        });
+        let _ = fs.notifier.try_send(InvalMsg::Inode {
             ino: parent.to_norm_u64(),
             off: 0,
             len: 0,
-        })?;
+        });
     }
 
     Ok(())

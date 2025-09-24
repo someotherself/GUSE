@@ -77,15 +77,15 @@ pub fn mkdir_live(
     }];
     fs.write_inodes_to_db(nodes)?;
 
-    fs.notifier.try_send(InvalMsg::Entry {
+    let _ = fs.notifier.try_send(InvalMsg::Entry {
         parent,
         name: OsString::from(name),
-    })?;
-    fs.notifier.try_send(InvalMsg::Inode {
+    });
+    let _ = fs.notifier.try_send(InvalMsg::Inode {
         ino: parent,
         off: 0,
         len: 0,
-    })?;
+    });
 
     Ok(attr)
 }
@@ -116,15 +116,15 @@ pub fn mkdir_git(
     }];
     fs.write_inodes_to_db(nodes)?;
 
-    fs.notifier.try_send(InvalMsg::Entry {
+    let _ = fs.notifier.try_send(InvalMsg::Entry {
         parent: parent.to_norm_u64(),
         name: OsString::from(name),
-    })?;
-    fs.notifier.try_send(InvalMsg::Inode {
+    });
+    let _ = fs.notifier.try_send(InvalMsg::Inode {
         ino: parent.to_norm_u64(),
         off: 0,
         len: 0,
-    })?;
+    });
 
     Ok(attr)
 }
