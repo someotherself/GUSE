@@ -1896,6 +1896,16 @@ impl GitFs {
         conn.remove_db_record(parent_ino.to_norm_u64(), target_name)
     }
 
+    fn update_db_record(&self, node: StorageNode) -> anyhow::Result<()> {
+        let conn_arc = {
+            let repo = &self.get_repo(node.attr.ino)?;
+            let repo = repo.lock().map_err(|_| anyhow!("Lock poisoned"))?;
+            std::sync::Arc::clone(&repo.connection)
+        };
+        let mut conn = conn_arc.lock().map_err(|_| anyhow!("Lock poisoned"))?;
+        conn.update_db_record(node)
+    }
+
     pub fn write_dentry(
         &self,
         parent_ino: NormalIno,

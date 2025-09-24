@@ -153,10 +153,26 @@ pub fn rename_git_build(
 
     std::fs::rename(src, &dest)?;
 
-    fs.remove_db_record(parent, name)?;
     if dest_exists {
         fs.remove_db_record(new_parent, new_name)?;
     }
+
+    let ino_flag = if dest_in_build {
+        InoFlag::InsideBuild
+    } else {
+        bail!("Invalid location")
+    };
+
+    let mut new_attr = fs.attr_from_path(ino_flag, dest)?;
+    new_attr.ino = src_attr.ino;
+
+    let node = StorageNode {
+        parent_ino: new_parent.to_norm_u64(),
+        name: new_name.into(),
+        attr: new_attr.into(),
+    };
+    fs.update_db_record(node)?;
+
     {
         let _ = fs.notifier.try_send(InvalMsg::Entry {
             parent: parent.to_norm_u64(),
@@ -180,22 +196,6 @@ pub fn rename_git_build(
             });
         }
     }
-
-    let ino_flag = if dest_in_build {
-        InoFlag::InsideBuild
-    } else {
-        bail!("Invalid location")
-    };
-
-    let mut new_attr = fs.attr_from_path(ino_flag, dest)?;
-    new_attr.ino = src_attr.ino;
-
-    let nodes = vec![StorageNode {
-        parent_ino: new_parent.to_norm_u64(),
-        name: new_name.into(),
-        attr: new_attr.into(),
-    }];
-    fs.write_inodes_to_db(nodes)?;
 
     Ok(())
 }

@@ -390,12 +390,9 @@ impl MetaDb {
     }
 
     pub fn update_size_in_db(&self, ino: u64, new_size: u64) -> anyhow::Result<()> {
-        let ino_i64 = i64::try_from(ino).context("inode does not fit in i64")?;
-        let size_i64 = i64::try_from(new_size).context("size does not fit in i64")?;
-
         let changed = self.conn.execute(
             "UPDATE inode_map SET size = ?1 WHERE inode = ?2",
-            rusqlite::params![size_i64, ino_i64],
+            rusqlite::params![new_size as i64, ino as i64],
         )?;
 
         if changed != 1 {
@@ -582,6 +579,74 @@ impl MetaDb {
                 source_ino
             );
         }
+
+        tx.commit()?;
+        Ok(())
+    }
+
+    pub fn update_db_record(&mut self, node: StorageNode) -> anyhow::Result<()> {
+        let tx = self.conn.transaction()?;
+
+        // 1) Upsert inode row (keeps same inode id; updates metadata fields).
+        {
+            let a = &node.attr;
+            tx.execute(
+                r#"
+                INSERT INTO inode_map
+                    (inode, oid, git_mode, size, inode_flag, uid, gid, nlink, rdev, flags)
+                VALUES
+                    (?1, ?2, ?3, ?4, ?5, ?6, ?7, 0, ?8, ?9)
+                ON CONFLICT(inode) DO UPDATE SET
+                    oid      = excluded.oid,
+                    git_mode = excluded.git_mode,
+                    size     = excluded.size,
+                    uid      = excluded.uid,
+                    gid      = excluded.gid,
+                    rdev     = excluded.rdev,
+                    flags    = excluded.flags
+                ;
+                "#,
+                params![
+                    a.ino as i64,
+                    a.oid.to_string(),
+                    a.git_mode as i64,
+                    a.size as i64,
+                    a.ino_flag as i64,
+                    a.uid as i64,
+                    a.gid as i64,
+                    a.rdev as i64,
+                    a.flags as i64,
+                ],
+            )?;
+        }
+
+        // 2) Move dentry: drop any existing links for this inode, then insert the new one.
+        {
+            let a = &node.attr;
+            tx.execute(
+                r#"DELETE FROM dentries WHERE target_inode = ?1"#,
+                params![a.ino as i64],
+            )?;
+
+            tx.execute(
+                r#"
+                INSERT OR REPLACE INTO dentries (parent_inode, name, target_inode)
+                VALUES (?1, ?2, ?3);
+                "#,
+                params![node.parent_ino as i64, node.name, a.ino as i64],
+            )?;
+        }
+
+        // 3) Recompute nlink (count of dentries pointing at each inode).
+        tx.execute_batch(
+            r#"
+            UPDATE inode_map
+            SET nlink = COALESCE(
+                (SELECT COUNT(*) FROM dentries d WHERE d.target_inode = inode_map.inode),
+                0
+            );
+            "#,
+        )?;
 
         tx.commit()?;
         Ok(())

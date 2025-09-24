@@ -642,7 +642,7 @@ impl fuser::Filesystem for GitFsAdapter {
         size: Option<u64>,
         atime: Option<fuser::TimeOrNow>,
         mtime: Option<fuser::TimeOrNow>,
-        ctime: Option<SystemTime>,
+        _ctime: Option<SystemTime>,
         _fh: Option<u64>,
         _crtime: Option<SystemTime>,
         _chgtime: Option<SystemTime>,
@@ -671,7 +671,13 @@ impl fuser::Filesystem for GitFsAdapter {
             Err(e) => return reply.error(errno_from_anyhow(&e)),
         };
         match atime {
-            Some(TimeOrNow::Now) => attr.atime = SystemTime::now(),
+            Some(TimeOrNow::Now) => {
+                let a = libc::timespec {
+                    tv_sec: 0,
+                    tv_nsec: libc::UTIME_NOW,
+                };
+                attr.atime = SystemTime::now()
+            }
             Some(TimeOrNow::SpecificTime(t)) => attr.atime = t,
             _ => {}
         };
@@ -680,9 +686,6 @@ impl fuser::Filesystem for GitFsAdapter {
             Some(TimeOrNow::SpecificTime(t)) => attr.mtime = t,
             _ => {}
         };
-        if let Some(ctime) = ctime {
-            attr.ctime = ctime;
-        }
         if let Some(size) = size {
             attr.size = size;
         }
@@ -797,7 +800,6 @@ impl fuser::Filesystem for GitFsAdapter {
             libc::O_RDONLY => (true, false),
             libc::O_WRONLY => (false, true),
             libc::O_RDWR => (true, true),
-            // Exactly one access mode flag must be specified
             _ => return reply.error(libc::EINVAL),
         };
 

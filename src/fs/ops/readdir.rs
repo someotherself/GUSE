@@ -263,7 +263,9 @@ fn populate_build_entries(
         } else {
             (FileType::RegularFile, libc::S_IFREG)
         };
-        let entry_ino = fs.get_ino_from_db(ino.into(), &node_name_str)?;
+        let Some(entry_ino) = fs.exists_by_name(ino.into(), &node_name_str)? else {
+            bail!("Not found: {node_name_str} under parent ino {ino}")
+        };
         let entry =
             DirectoryEntry::new(entry_ino, Oid::zero(), node_name_str.into(), kind, filemode);
         out.push(entry);
