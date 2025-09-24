@@ -925,10 +925,10 @@ impl GitFs {
                 bail!("This directory is read only")
             }
             FsOperationContext::InsideLiveDir { ino } => {
-                ops::create::create_live(self, ino, name, read, write)
+                ops::create::create_live(self, ino, name, write)
             }
             FsOperationContext::InsideGitDir { ino: _ } => {
-                ops::create::create_git(self, parent.to_norm(), name, read, write)
+                ops::create::create_git(self, parent.to_norm(), name, write)
             }
         }
     }

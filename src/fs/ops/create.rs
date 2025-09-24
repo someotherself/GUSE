@@ -17,12 +17,8 @@ pub fn create_live(
     fs: &GitFs,
     parent: u64,
     name: &str,
-    read: bool,
     write: bool,
 ) -> anyhow::Result<(FileAttr, u64)> {
-    if !read && !write {
-        bail!("read and write cannot be false at the same time")
-    };
     let ino = fs.next_inode_checked(parent)?;
     let mut attr: FileAttr = file_attr(InoFlag::InsideLive).into();
     attr.ino = ino;
@@ -58,13 +54,8 @@ pub fn create_git(
     fs: &GitFs,
     parent: NormalIno,
     name: &str,
-    read: bool,
     write: bool,
 ) -> anyhow::Result<(FileAttr, u64)> {
-    if !read && !write {
-        bail!("read and write cannot be false at the same time")
-    };
-
     let Some(ctx) = BuildOperationCtx::new(fs, parent)? else {
         bail!(std::io::Error::from_raw_os_error(EPERM))
     };
