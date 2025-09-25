@@ -9,10 +9,6 @@ pub fn unlink_live(fs: &GitFs, parent: u64, name: &str) -> anyhow::Result<()> {
         tracing::error!("Target does not exist");
         bail!(std::io::Error::from_raw_os_error(libc::ENOENT))
     };
-    if !fs.is_file(target_ino.into())? && !fs.is_link(target_ino.into())? {
-        tracing::error!("Not a file");
-        bail!(std::io::Error::from_raw_os_error(libc::EISDIR))
-    }
     let path = fs.build_full_path(target_ino.into())?;
     std::fs::remove_file(path)?;
     fs.remove_db_record(parent.into(), name)?;
@@ -31,15 +27,6 @@ pub fn unlink_live(fs: &GitFs, parent: u64, name: &str) -> anyhow::Result<()> {
 }
 
 pub fn unlink_build_dir(fs: &GitFs, parent: NormalIno, name: &str) -> anyhow::Result<()> {
-    let Ok(target_ino) = fs.get_ino_from_db(parent.into(), name) else {
-        tracing::error!("Target does not exist");
-        bail!(std::io::Error::from_raw_os_error(libc::ENOENT))
-    };
-    if !fs.is_file(target_ino.into())? && !fs.is_link(target_ino.into())? {
-        tracing::error!("Not a file");
-        bail!(std::io::Error::from_raw_os_error(libc::EISDIR))
-    }
-
     let path = {
         let parent_oid = fs.parent_commit_build_session(parent)?;
         let build_root = fs.get_path_to_build_folder(parent)?;

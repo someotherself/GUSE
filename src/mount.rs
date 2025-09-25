@@ -869,6 +869,9 @@ fn errno_from_anyhow(err: &anyhow::Error) -> i32 {
             std::io::ErrorKind::InvalidInput => libc::EINVAL,
             std::io::ErrorKind::TimedOut => libc::ETIMEDOUT,
             std::io::ErrorKind::WouldBlock => libc::EAGAIN,
+            std::io::ErrorKind::DirectoryNotEmpty => libc::ENOTEMPTY,
+            std::io::ErrorKind::IsADirectory => libc::EISDIR,
+            std::io::ErrorKind::NotADirectory => libc::ENOTDIR,
             _ => EIO,
         };
     }

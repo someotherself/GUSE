@@ -134,6 +134,7 @@ struct Handle {
 enum SourceTypes {
     RealFile(File),
     RoBlob { oid: Oid, data: Arc<Vec<u8>> },
+    DirSnapshot { entries: Arc<Vec<DirectoryEntry>> },
 }
 
 /// Used for creating virtual files.
@@ -162,10 +163,17 @@ impl SourceTypes {
         matches!(self, SourceTypes::RoBlob { oid: _, data: _ })
     }
 
+    pub fn is_dir(&self) -> bool {
+        matches!(self, SourceTypes::DirSnapshot { entries: _ })
+    }
+
     pub fn size(&self) -> anyhow::Result<u64> {
         match self {
             Self::RealFile(file) => Ok(file.metadata()?.size()),
             Self::RoBlob { oid: _, data } => Ok(data.len() as u64),
+            Self::DirSnapshot { entries: _ } => {
+                bail!(std::io::Error::from_raw_os_error(libc::EROFS))
+            }
         }
     }
 }
@@ -184,6 +192,7 @@ impl FileExt for SourceTypes {
                 buf[..src.len()].copy_from_slice(src);
                 Ok(src.len())
             }
+            Self::DirSnapshot { entries: _ } => Err(std::io::Error::from_raw_os_error(libc::EROFS)),
         }
     }
 
@@ -191,6 +200,7 @@ impl FileExt for SourceTypes {
         match self {
             Self::RealFile(file) => file.write_at(buf, offset),
             Self::RoBlob { oid: _, data: _ } => Err(std::io::Error::from_raw_os_error(libc::EROFS)),
+            Self::DirSnapshot { entries: _ } => Err(std::io::Error::from_raw_os_error(libc::EROFS)),
         }
     }
 }
@@ -1474,7 +1484,7 @@ impl GitFs {
         let path = if self.is_in_live(ino)? {
             self.get_live_path(ino)?
         } else if self.is_in_build(ino)? {
-            let parent_oid = self.parent_commit_build_session(ino)?;
+            let parent_oid = self.get_oid_from_db(ino.into())?;
             let build_root = self.get_path_to_build_folder(ino)?;
             let repo = self.get_repo(ino.into())?;
             let mut repo = repo.lock().map_err(|_| anyhow!("Lock poisoned"))?;

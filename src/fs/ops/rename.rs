@@ -33,9 +33,6 @@ pub fn rename_live(
     if let Some(dest_attr) = fs.lookup(new_parent.to_norm_u64(), new_name)? {
         dest_exists = true;
 
-        if dest_attr.kind == FileType::Directory && !fs.readdir(dest_attr.ino)?.is_empty() {
-            bail!("Directory is not empty")
-        }
         if dest_attr.kind != src_attr.kind {
             bail!("Source and destination are not the same type")
         }
@@ -118,11 +115,6 @@ pub fn rename_git_build(
     if let Ok(dest_attr) = fs.get_metadata_by_name(new_parent, new_name) {
         dest_exists = true;
 
-        if dest_attr.kind == FileType::Directory {
-            if !fs.readdir(dest_attr.ino)?.is_empty() {
-                bail!(std::io::Error::from_raw_os_error(libc::ENOTEMPTY));
-            }
-        }
         if dest_attr.kind != src_attr.kind {
             bail!("Source and destination are not the same type")
         }
