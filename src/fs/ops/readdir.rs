@@ -13,17 +13,24 @@ use crate::{
     inodes::{NormalIno, VirtualIno},
 };
 
+#[derive(Default)]
+pub struct DirectoryIter {
+    pub last_offset: i64,
+    pub last_name: Option<OsString>,
+    pub next_offset: i64,
+}
+
 #[derive(Debug)]
 pub struct DirectoryEntry {
     pub ino: u64,
     pub oid: Oid,
-    pub name: String,
+    pub name: OsString,
     pub kind: FileType,
     pub git_mode: u32,
 }
 
 impl DirectoryEntry {
-    pub fn new(ino: u64, oid: Oid, name: String, kind: FileType, git_mode: u32) -> Self {
+    pub fn new(ino: u64, oid: Oid, name: OsString, kind: FileType, git_mode: u32) -> Self {
         Self {
             ino,
             oid,
@@ -52,7 +59,7 @@ impl From<ObjectAttr> for DirectoryEntry {
         DirectoryEntry {
             ino: 0,
             oid: attr.oid,
-            name: attr.name,
+            name: OsString::from(attr.name),
             kind,
             git_mode: attr.git_mode,
         }
@@ -78,7 +85,7 @@ pub fn readdir_root_dir(fs: &GitFs) -> anyhow::Result<Vec<DirectoryEntry>> {
         let dir_entry = DirectoryEntry::new(
             repo_ino,
             Oid::zero(),
-            repo_dir,
+            OsString::from(repo_dir),
             FileType::Directory,
             libc::S_IFDIR,
         );
@@ -101,7 +108,7 @@ pub fn readdir_repo_dir(fs: &GitFs, parent: NormalIno) -> anyhow::Result<Vec<Dir
     let live_entry = DirectoryEntry::new(
         live_ino,
         Oid::zero(),
-        "live".to_string(),
+        OsString::from("live"),
         FileType::Directory,
         libc::S_IFDIR,
     );
@@ -110,7 +117,7 @@ pub fn readdir_repo_dir(fs: &GitFs, parent: NormalIno) -> anyhow::Result<Vec<Dir
     let build_entry = DirectoryEntry::new(
         build_ino,
         Oid::zero(),
-        "build".to_string(),
+        OsString::from("build"),
         FileType::Directory,
         libc::S_IFDIR,
     );
@@ -131,7 +138,7 @@ pub fn readdir_repo_dir(fs: &GitFs, parent: NormalIno) -> anyhow::Result<Vec<Dir
                 Some(i) => DirectoryEntry::new(
                     i,
                     Oid::zero(),
-                    month.name.clone(),
+                    OsString::from(month.name),
                     FileType::Directory,
                     month.git_mode,
                 ),
@@ -147,7 +154,7 @@ pub fn readdir_repo_dir(fs: &GitFs, parent: NormalIno) -> anyhow::Result<Vec<Dir
                     DirectoryEntry::new(
                         entry_ino,
                         attr.oid,
-                        month.name.clone(),
+                        OsString::from(month.name),
                         attr.kind,
                         attr.git_mode,
                     )
@@ -176,7 +183,7 @@ pub fn readdir_live_dir(fs: &GitFs, ino: NormalIno) -> anyhow::Result<Vec<Direct
     for node in path.read_dir()? {
         let node = node?;
         let node_name = node.file_name();
-        let node_name_str = node_name.to_string_lossy();
+        let node_name_str: String = node_name.to_string_lossy().into();
         if ignore_list.contains(&node_name) {
             continue;
         }
@@ -200,10 +207,11 @@ pub fn readdir_live_dir(fs: &GitFs, ino: NormalIno) -> anyhow::Result<Vec<Direct
             }
         };
         let entry =
-            DirectoryEntry::new(attr.ino, Oid::zero(), node_name_str.into(), kind, filemode);
+            DirectoryEntry::new(attr.ino, Oid::zero(), node_name, kind, filemode);
         entries.push(entry);
     }
     fs.write_inodes_to_db(nodes)?;
+    entries.sort_unstable_by(|a, b| a.name.as_encoded_bytes().cmp(b.name.as_encoded_bytes()));
     Ok(entries)
 }
 
@@ -266,7 +274,7 @@ fn populate_build_entries(
             bail!("Not found: {node_name_str} under parent ino {ino}")
         };
         let entry =
-            DirectoryEntry::new(entry_ino, Oid::zero(), node_name_str.into(), kind, filemode);
+            DirectoryEntry::new(entry_ino, Oid::zero(), node_name, kind, filemode);
         out.push(entry);
     }
     Ok(out)
@@ -276,7 +284,7 @@ fn populate_build_entries(
 pub fn readdir_git_dir(fs: &GitFs, parent: NormalIno) -> anyhow::Result<Vec<DirectoryEntry>> {
     let ino_flag = fs.get_ino_flag_from_db(parent)?;
     let repo = fs.get_repo(parent.into())?;
-    let dir_entries = match ino_flag {
+    let mut dir_entries = match ino_flag {
         InoFlag::MonthFolder => {
             // The objects are Snap folders
             let Ok(DirCase::Month { year, month }) = classify_inode(fs, parent.to_norm_u64())
@@ -323,6 +331,7 @@ pub fn readdir_git_dir(fs: &GitFs, parent: NormalIno) -> anyhow::Result<Vec<Dire
             bail!("Wrong ino_flag")
         }
     };
+    dir_entries.sort_unstable_by(|a, b| a.name.as_encoded_bytes().cmp(b.name.as_encoded_bytes()));
     Ok(dir_entries)
 }
 
@@ -428,7 +437,7 @@ pub fn read_virtual_dir(fs: &GitFs, ino: VirtualIno) -> anyhow::Result<Vec<Direc
             dir_entries.push(DirectoryEntry::new(
                 entry.0,
                 entry.1.oid,
-                name.clone(),
+                OsString::from(name),
                 FileType::RegularFile,
                 entry.1.git_mode,
             ));
@@ -447,7 +456,7 @@ pub fn read_virtual_dir(fs: &GitFs, ino: VirtualIno) -> anyhow::Result<Vec<Direc
             dir_entries.push(DirectoryEntry::new(
                 *ino,
                 entry.oid,
-                name.clone(),
+                OsString::from(name),
                 FileType::RegularFile,
                 entry.git_mode,
             ));

@@ -36,7 +36,7 @@ pub fn open_live(
     let fh = fs.next_file_handle();
     let handle = Handle {
         ino,
-        file: SourceTypes::RealFile(file),
+        source: SourceTypes::RealFile(file),
         read: true,
         write,
     };
@@ -74,7 +74,7 @@ pub fn open_git(
         let fh = fs.next_file_handle();
         let handle = Handle {
             ino: ino.to_norm_u64(),
-            file: SourceTypes::RealFile(file),
+            source: SourceTypes::RealFile(file),
             read: true,
             write,
         };
@@ -115,7 +115,7 @@ pub fn open_vfile(fs: &GitFs, ino: Inodes, read: bool, write: bool) -> anyhow::R
             let fh = fs.next_file_handle();
             let handle = Handle {
                 ino: ino.to_u64_v(),
-                file: blob_file,
+                source: blob_file,
                 read: true,
                 write: false,
             };
@@ -150,7 +150,7 @@ pub fn open_vfile(fs: &GitFs, ino: Inodes, read: bool, write: bool) -> anyhow::R
             let fh = fs.next_file_handle();
             let handle = Handle {
                 ino: ino.to_u64_v(),
-                file: blob_file,
+                source: blob_file,
                 read: true,
                 write: false,
             };
@@ -249,7 +249,7 @@ fn open_blob(fs: &GitFs, oid: Oid, ino: u64, read: bool) -> anyhow::Result<u64> 
     let fh = fs.next_file_handle();
     let handle = Handle {
         ino,
-        file: blob_file,
+        source: blob_file,
         read: true,
         write: false,
     };

@@ -17,21 +17,21 @@ pub fn read_live(
     let ctx = guard
         .get(&fh)
         .ok_or_else(|| anyhow!(format!("Handle {} for ino {} does not exist", fh, ino)))?;
-    if !ctx.file.is_file() {
+    if !ctx.source.is_file() {
         bail!("Invalid handle - wrong file type")
     }
     if ctx.ino != *ino {
         bail!("Invalid handle - wrong inode")
     }
 
-    let len = ctx.file.size()?;
+    let len = ctx.source.size()?;
     if offset >= len {
         return Ok(0);
     }
 
     let avail = (len - offset) as usize;
     let want = buf.len().min(avail);
-    let n = ctx.file.read_at(&mut buf[..want], offset)?;
+    let n = ctx.source.read_at(&mut buf[..want], offset)?;
     Ok(n)
 }
 
@@ -50,5 +50,5 @@ pub fn read_git(
     if ctx.ino != *ino {
         bail!("Invalid handle - wrong inode")
     }
-    Ok(ctx.file.read_at(buf, offset)?)
+    Ok(ctx.source.read_at(buf, offset)?)
 }

@@ -15,14 +15,14 @@ pub fn write_live(fs: &GitFs, ino: u64, offset: u64, buf: &[u8], fh: u64) -> any
     if !ctx.write {
         bail!("Write not permitted")
     };
-    if !ctx.file.is_file() {
+    if !ctx.source.is_file() {
         bail!("Invalid handle.")
     }
-    let old_size = ctx.file.size()?;
-    let bytes_written = ctx.file.write_at(buf, offset)?;
+    let old_size = ctx.source.size()?;
+    let bytes_written = ctx.source.write_at(buf, offset)?;
 
     if bytes_written > 0 {
-        let new_size = ctx.file.size()?;
+        let new_size = ctx.source.size()?;
         if new_size != old_size {
             fs.update_size_in_db(ino.into(), new_size)?;
         }
@@ -50,17 +50,17 @@ pub fn write_git(
     if ctx.ino != ino.to_norm_u64() {
         bail!("Invalid filehandle")
     }
-    if ctx.file.is_blob() {
+    if ctx.source.is_blob() {
         bail!("Cannot write to blobs")
     }
     if !ctx.write {
         bail!("Write not permitted")
     };
-    let old_size = ctx.file.size()?;
-    let bytes_written = ctx.file.write_at(buf, offset)?;
+    let old_size = ctx.source.size()?;
+    let bytes_written = ctx.source.write_at(buf, offset)?;
 
     if bytes_written > 0 {
-        let new_size = ctx.file.size()?;
+        let new_size = ctx.source.size()?;
         if new_size != old_size {
             fs.update_size_in_db(ino, new_size)?;
         }

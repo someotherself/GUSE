@@ -4,6 +4,7 @@ pub mod link;
 pub mod lookup;
 pub mod mkdir;
 pub mod open;
+pub mod opendir;
 pub mod read;
 pub mod readdir;
 pub mod rename;

@@ -21,7 +21,7 @@ use crate::fs::fileattr::{
     StoredAttr, build_attr_dir, dir_attr, file_attr,
 };
 use crate::fs::meta_db::MetaDb;
-use crate::fs::ops::readdir::{DirectoryEntry, DirectoryEntryPlus};
+use crate::fs::ops::readdir::{DirectoryEntry, DirectoryEntryPlus, DirectoryIter};
 use crate::fs::repo::{GitRepo, VirtualNode};
 use crate::inodes::{Inodes, NormalIno, VirtualIno};
 use crate::mount::InvalMsg;
@@ -118,23 +118,28 @@ pub struct GitFs {
     repos_map: HashMap<String, u16>, // <repo_name, repo_id>
     next_inode: HashMap<u16, AtomicU64>, // Each Repo has a set of inodes
     current_handle: AtomicU64,
-    handles: RwLock<HashMap<u64, Handle>>, // (fh, Handle)
+    pub handles: RwLock<HashMap<u64, Handle>>, // (fh, Handle)
     read_only: bool,
     vfile_entry: RwLock<HashMap<VirtualIno, VFileEntry>>,
     notifier: crossbeam_channel::Sender<InvalMsg>,
 }
 
-struct Handle {
-    ino: u64,
-    file: SourceTypes,
+pub struct Handle {
+    pub ino: u64,
+    pub source: SourceTypes,
     read: bool,
     write: bool,
 }
 
-enum SourceTypes {
+pub enum SourceTypes {
     RealFile(File),
-    RoBlob { oid: Oid, data: Arc<Vec<u8>> },
-    DirSnapshot { entries: Arc<Vec<DirectoryEntry>> },
+    RoBlob {
+        oid: Oid,
+        data: Arc<Vec<u8>>,
+    },
+    DirSnapshot {
+        entries: Arc<Mutex<DirectoryIter>>,
+    },
 }
 
 /// Used for creating virtual files.
@@ -164,14 +169,21 @@ impl SourceTypes {
     }
 
     pub fn is_dir(&self) -> bool {
-        matches!(self, SourceTypes::DirSnapshot { entries: _ })
+        matches!(
+            self,
+            SourceTypes::DirSnapshot {
+                entries: _
+            }
+        )
     }
 
     pub fn size(&self) -> anyhow::Result<u64> {
         match self {
             Self::RealFile(file) => Ok(file.metadata()?.size()),
             Self::RoBlob { oid: _, data } => Ok(data.len() as u64),
-            Self::DirSnapshot { entries: _ } => {
+            Self::DirSnapshot {
+                entries: _,
+            } => {
                 bail!(std::io::Error::from_raw_os_error(libc::EROFS))
             }
         }
@@ -192,7 +204,9 @@ impl FileExt for SourceTypes {
                 buf[..src.len()].copy_from_slice(src);
                 Ok(src.len())
             }
-            Self::DirSnapshot { entries: _ } => Err(std::io::Error::from_raw_os_error(libc::EROFS)),
+            Self::DirSnapshot {
+                entries: _,
+            } => Err(std::io::Error::from_raw_os_error(libc::EROFS)),
         }
     }
 
@@ -200,7 +214,9 @@ impl FileExt for SourceTypes {
         match self {
             Self::RealFile(file) => file.write_at(buf, offset),
             Self::RoBlob { oid: _, data: _ } => Err(std::io::Error::from_raw_os_error(libc::EROFS)),
-            Self::DirSnapshot { entries: _ } => Err(std::io::Error::from_raw_os_error(libc::EROFS)),
+            Self::DirSnapshot {
+                entries: _,
+            } => Err(std::io::Error::from_raw_os_error(libc::EROFS)),
         }
     }
 }
@@ -605,9 +621,6 @@ impl GitFs {
         if write && self.read_only {
             bail!("Filesystem is in read only");
         }
-        if !write && !read {
-            bail!("Read and write cannot be false at the same time");
-        }
         if self.is_dir(ino)? {
             bail!("Target is a directory");
         }
@@ -668,6 +681,27 @@ impl GitFs {
                     ),
                     _ => bail!("Invalid filemode"),
                 }
+            }
+        }
+    }
+
+    #[instrument(level = "debug", skip(self), fields(ino = %ino), err(Display))]
+    pub fn opendir(&self, ino: u64) -> anyhow::Result<u64> {
+        let ino: Inodes = ino.into();
+
+        let ctx = FsOperationContext::get_operation(self, ino);
+        match ctx? {
+            FsOperationContext::Root => 
+                ops::opendir::opendir_root(self, ino.to_norm())
+            ,
+            FsOperationContext::RepoDir { ino: _ } => 
+                ops::opendir::opendir_repo(self, ino.to_norm())
+            ,
+            FsOperationContext::InsideLiveDir { ino: _ } => {
+                ops::opendir::opendir_live(self, ino.to_norm())
+            }
+            FsOperationContext::InsideGitDir { ino: _ } => {
+                ops::opendir::opendir_git(self, ino.to_norm())
             }
         }
     }
@@ -1147,7 +1181,7 @@ impl GitFs {
         let entries = self.readdir(parent)?;
         for entry in entries {
             let attr = self
-                .lookup(parent, &entry.name)?
+                .lookup(parent, &entry.name.to_string_lossy())?
                 .ok_or_else(|| anyhow!("Repo not found"))?;
             let entry_plus = DirectoryEntryPlus { entry, attr };
             entries_plus.push(entry_plus);

@@ -342,7 +342,7 @@ impl MetaDb {
             out.push(DirectoryEntry {
                 ino,
                 oid,
-                name,
+                name: name.into(),
                 kind,
                 git_mode,
             });

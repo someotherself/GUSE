@@ -25,7 +25,7 @@ use std::{num::NonZeroU32, path::PathBuf};
 
 use crate::fs::fileattr::{CreateFileAttr, FileAttr, FileType, InoFlag, SetStoredAttr, dir_attr};
 use crate::fs::ops::readdir::{DirectoryEntry, DirectoryEntryPlus};
-use crate::fs::{GitFs, REPO_SHIFT, ROOT_INO, repo};
+use crate::fs::{repo, GitFs, SourceTypes, REPO_SHIFT, ROOT_INO};
 use crate::internals::sock::{socket_path, start_control_server};
 
 const TTL: Duration = Duration::from_secs(1);
@@ -412,57 +412,116 @@ impl fuser::Filesystem for GitFsAdapter {
         mut reply: fuser::ReplyDirectory,
     ) {
         let fs_arc = self.getfs();
-        let fs: std::sync::MutexGuard<'_, GitFs> = match fs_arc.lock() {
+        let fs = match fs_arc.lock() {
             Ok(fs) => fs,
             Err(e) => {
                 error!(e = %e);
                 return reply.error(EIO);
             }
         };
-        let mask: u64 = (1u64 << 48) - 1;
         let parent_ino = if ino == ROOT_INO {
             ROOT_INO
         } else {
             fs.get_dir_parent(ino).unwrap_or(ROOT_INO)
         };
-        let parent_entries: Vec<DirectoryEntry> = vec![
-            DirectoryEntry {
-                ino,
-                oid: Oid::zero(),
-                kind: FileType::Directory,
-                name: ".".to_string(),
-                git_mode: libc::S_IFDIR,
-            },
-            DirectoryEntry {
-                ino: parent_ino,
-                oid: Oid::zero(),
-                kind: FileType::Directory,
-                name: "..".to_string(),
-                git_mode: libc::S_IFDIR,
-            },
-        ];
+
+        let state_arc = {
+            let handles = fs.handles.read().unwrap();
+            let h = match handles.get(&fh) {
+                Some(h) if h.ino == ino => h,
+                _ => {
+                    reply.error(libc::ENOTDIR);
+                    return;
+                }
+            };
+            let state_arc = match &h.source {
+                SourceTypes::DirSnapshot { entries } => Arc::clone(entries),
+                _ => {
+                    reply.error(libc::ENOTDIR);
+                    return;
+                }
+            };
+            state_arc
+        };
+
+        let root_entry: DirectoryEntry = DirectoryEntry {
+            ino,
+            oid: Oid::zero(),
+            kind: FileType::Directory,
+            name: OsString::from("."),
+            git_mode: libc::S_IFDIR,
+        };
+        let parent_entry: DirectoryEntry = DirectoryEntry {
+            ino: parent_ino,
+            oid: Oid::zero(),
+            kind: FileType::Directory,
+            name: OsString::from(".."),
+            git_mode: libc::S_IFDIR,
+        };
         let mut entries: Vec<DirectoryEntry> = vec![];
-        for entry in parent_entries {
-            entries.push(entry);
+        if offset == 0 {
+            entries.push(root_entry);
         }
+        if offset <= 1 {
+            entries.push(parent_entry);
+        }
+
+        let (mut next_offset, start_idx) = {
+            let state = state_arc.lock().unwrap();
+
+            let resumt_idx = if offset >= 3 {
+                if let Some(last) = &state.last_name {
+                    upper_bound_by_name(&entries, last.as_encoded_bytes())
+                } else {
+                    0
+                }
+            } else {
+                0
+            };
+            (state.next_offset, resumt_idx)
+        };
+
+        let mut last_name: Option<OsString> = None;
+
         let res_entries = fs.readdir(ino);
-        let gitfs_entries = match res_entries {
+        let mut gitfs_entries = match res_entries {
             Ok(ent) => ent,
             Err(e) => {
                 error!(e = %e, "Fetching dir entries");
-                return reply.error(ENOENT);
+                reply.error(ENOENT);
+                return;
             }
         };
-        for entry in gitfs_entries {
-            entries.push(entry);
-        }
 
-        for (i, entry) in entries.into_iter().enumerate().skip(offset as usize) {
-            if reply.add(entry.ino, (i + 1) as i64, entry.kind.into(), entry.name) {
-                break;
+        entries.append(&mut gitfs_entries);
+        entries.sort_unstable_by(|a, b| a.name.as_encoded_bytes().cmp(b.name.as_encoded_bytes()));
+
+        for i in start_idx..entries.len() {
+            let entry = &entries[i];
+
+            let offset = next_offset;
+            next_offset += 1;
+
+            last_name = Some(entry.name.clone());
+
+            if reply.add(entry.ino, offset, entry.kind.into(), &entry.name) {
+                if let Ok(mut st) = state_arc.lock() {
+                    st.last_offset = offset;
+                    st.last_name = last_name;
+                    st.next_offset = next_offset;
+                }
             }
+            reply.ok();
+            return;
         }
-        reply.ok();
+    if let Ok(mut st) = state_arc.lock() {
+        if let Some(name) = last_name {
+            st.last_offset = next_offset - 1;
+            st.last_name = Some(name);
+        }
+        st.next_offset= next_offset;
+    }
+    reply.ok();
     }
 
     fn readdirplus(
@@ -486,14 +545,14 @@ impl fuser::Filesystem for GitFsAdapter {
                 ino: ROOT_INO,
                 oid: Oid::zero(),
                 kind: FileType::Directory,
-                name: ".".to_string(),
+                name: OsString::from("."),
                 git_mode: libc::S_IFDIR,
             },
             DirectoryEntry {
                 ino: ROOT_INO,
                 oid: Oid::zero(),
                 kind: FileType::Directory,
-                name: "..".to_string(),
+                name: OsString::from(".."),
                 git_mode: libc::S_IFDIR,
             },
         ];
@@ -747,19 +806,11 @@ impl fuser::Filesystem for GitFsAdapter {
             }
         };
 
-        let attr = match fs.getattr(ino) {
-            Ok(a) => a,
-            Err(e) => {
-                error!("getattr({}) failed: {:?}", ino, e);
-                return reply.error(libc::ENOENT);
-            }
-        };
-
-        if fuser::FileType::Directory != attr.kind.into() {
-            return reply.error(libc::ENOTDIR);
+        let res = fs.opendir(ino);
+        match res {
+            Ok(fh) => reply.opened(fh, 0),
+            Err(e) => reply.error(errno_from_anyhow(&e))
         }
-
-        reply.opened(0, 0);
     }
 
     // fn link(
@@ -819,6 +870,15 @@ impl fuser::Filesystem for GitFsAdapter {
 
         reply.created(&TTL, &attr.into(), 0, fh, flags as u32);
     }
+}
+
+fn upper_bound_by_name(entries: &[DirectoryEntry], last: &[u8]) -> usize {
+    let (mut lo, mut hi) = (0usize, entries.len());
+    while lo < hi {
+        let mid = (lo + hi) / 2;
+        if entries[mid].name.as_encoded_bytes() <= last { lo = mid + 1; } else { hi = mid; }
+    }
+    lo
 }
 
 impl From<FileAttr> for fuser::FileAttr {

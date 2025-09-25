@@ -33,7 +33,8 @@ fn test_mkdir_fetch() -> anyhow::Result<()> {
             assert_eq!(root_attr.kind, FileType::Directory);
 
             // READ DIR ROOT
-            let read_dir_root = fs.readdir(ROOT_INO)?;
+            let fh_dir_root = fs.opendir(ROOT_INO)?;
+            let read_dir_root = fs.readdir(ROOT_INO, fh_dir_root)?;
             for node in &read_dir_root {
                 dbg!(&node.name);
             }
@@ -54,49 +55,54 @@ fn test_mkdir_fetch() -> anyhow::Result<()> {
             assert_eq!(repo_attr.kind, FileType::Directory);
 
             // READ DIR REPO_DIR
-            let read_dir_repo = fs.readdir(REPO_DIR_INO)?;
+            let fh_dir_repo = fs.opendir(REPO_DIR_INO)?;
+            let read_dir_repo = fs.readdir(REPO_DIR_INO, fh_dir_repo)?;
             assert_eq!(read_dir_repo[0].name, "live");
             assert_eq!(read_dir_repo.len(), 4);
             let snap_1_parent = &read_dir_repo[2];
-            let snap_1_parent_name: &String = &snap_1_parent.name;
+            let snap_1_parent_name: &String = &snap_1_parent.name.clone().into_string().unwrap();
             let parent_snap_attr = fs.lookup(REPO_DIR_INO, snap_1_parent_name)?.unwrap();
             let parent_snap_ino = parent_snap_attr.ino;
 
-            for a in fs.readdir(parent_snap_ino)? {
+            let a_fh = fs.opendir(parent_snap_ino)?;
+            for a in fs.readdir(parent_snap_ino, a_fh)? {
                 let a_attr_1 = fs.getattr(a.ino)?;
                 dbg!(&a.name);
                 assert_eq!(a.ino, a_attr_1.ino);
                 if a.kind == FileType::Directory {
                     let a_attr = fs
-                        .lookup(parent_snap_ino, &a.name)?
+                        .lookup(parent_snap_ino, &a.name.into_string().unwrap())?
                         .ok_or_else(|| anyhow!("Invalid input"))?;
                     assert_eq!(a.ino, a_attr.ino);
 
-                    for b in fs.readdir(a_attr.ino)? {
+                    let b_fh = fs.opendir(a_attr.ino)?;
+                    for b in fs.readdir(a_attr.ino, b_fh)? {
                         dbg!(&b.name);
                         let b_attr_1 = fs.getattr(b.ino)?;
                         assert_eq!(b.ino, b_attr_1.ino);
                         if b.kind == FileType::Directory {
                             let b_attr = fs
-                                .lookup(a_attr.ino, &b.name)?
+                                .lookup(a_attr.ino, &b.name.into_string().unwrap())?
                                 .ok_or_else(|| anyhow!("Invalid input"))?;
                             assert_eq!(b.ino, b_attr.ino);
-                            for c in fs.readdir(b_attr.ino)? {
+                            let c_fh = fs.opendir(b_attr.ino)?;
+                            for c in fs.readdir(b_attr.ino, c_fh)? {
                                 let c_attr_1 = fs.getattr(c.ino)?;
                                 assert_eq!(c.ino, c_attr_1.ino);
                                 if c.kind == FileType::Directory {
                                     let _c_attr = fs.getattr(c.ino)?;
                                     let c_attr = fs
-                                        .lookup(b_attr.ino, &c.name)?
+                                        .lookup(b_attr.ino, &c.name.clone().into_string().unwrap())?
                                         .ok_or_else(|| anyhow!("Invalid input"))?;
                                     assert_eq!(c.ino, c_attr.ino);
                                 }
                                 dbg!("startig v_dir search");
                                 if c.oid != Oid::zero() && c.kind == FileType::RegularFile {
-                                    let name = format!("{}@", c.name);
-                                    let v_dir_attr = fs.lookup(b_attr.ino, &name)?.unwrap();
+                                    let name = format!("{}@", c.name.into_string().unwrap());
+                                    let v_dir_attr = fs.lookup(b_attr.ino, &name.clone())?.unwrap();
                                     dbg!(v_dir_attr.ino);
-                                    let v_dir_entries = fs.readdir(v_dir_attr.ino)?;
+                                    let v_dir_fh = fs.opendir(v_dir_attr.ino)?;
+                                    let v_dir_entries = fs.readdir(v_dir_attr.ino, v_dir_fh)?;
                                     dbg!(v_dir_entries.len());
 
                                     dbg!(&v_dir_entries[0].name);
@@ -104,7 +110,7 @@ fn test_mkdir_fetch() -> anyhow::Result<()> {
                                     dbg!(v_dir_attr.ino);
 
                                     let lookup_attr =
-                                        fs.lookup(v_dir_attr.ino, &v_dir_entries[0].name)?.unwrap();
+                                        fs.lookup(v_dir_attr.ino, &v_dir_entries[0].name.clone().into_string().unwrap())?.unwrap();
                                     dbg!(lookup_attr.ino);
 
                                     let getattr_attr = fs.getattr(v_dir_entries[0].ino)?;
@@ -141,7 +147,8 @@ fn test_mkdir_fetch() -> anyhow::Result<()> {
             assert_eq!(live_attr.kind, FileType::Directory);
 
             // READ DIR LIVE
-            let read_dir_live = fs.readdir(LIVE_DIR_INO)?;
+            let read_dir_live_fh = fs.opendir(LIVE_DIR_INO)?;
+            let read_dir_live = fs.readdir(LIVE_DIR_INO, read_dir_live_fh)?;
             assert_eq!(read_dir_live.len(), 0);
             Ok(())
         },
@@ -176,16 +183,18 @@ fn test_mkdir_normal() -> anyhow::Result<()> {
             assert_eq!(live_attr.ino, LIVE_DIR_INO);
 
             // READ DIR
-            let read_dir = fs.readdir(ROOT_INO)?;
+            let read_dir_fh = fs.opendir(ROOT_INO)?;
+            let read_dir = fs.readdir(ROOT_INO, read_dir_fh)?;
             assert_eq!(read_dir.len(), 1);
 
             assert_eq!(read_dir[0].name, "new_repo");
             let _folder_attr = fs.lookup(ROOT_INO, "new_repo")?.unwrap();
 
-            let read_dir = fs.readdir(REPO_DIR_INO)?;
+            let read_dir_fh = fs.opendir(REPO_DIR_INO)?;
+            let read_dir = fs.readdir(REPO_DIR_INO, read_dir_fh)?;
             assert_eq!(read_dir.len(), 2);
 
-            assert_eq!(read_dir[0].name, "live");
+            assert_eq!(read_dir[0].name, "build");
 
             let dir_name1 = OsStr::new("dir_in_live_1");
             let dir1_attr = fs.mkdir(live_attr.ino, dir_name1)?;
@@ -346,12 +355,14 @@ fn test_rename_live_noop_same_name() -> anyhow::Result<()> {
 
             let name = OsStr::new("noop_dir");
             fs.mkdir(live, name)?;
-            let before = fs.readdir(live)?;
+            let live_before_fh = fs.opendir(live)?;
+            let before = fs.readdir(live, live_before_fh)?;
 
             // Same parent + same name
             fs.rename(live, name, live, name)?;
 
-            let after = fs.readdir(live)?;
+            let live_after_fh = fs.opendir(live)?;
+            let after = fs.readdir(live, live_after_fh)?;
             assert_eq!(before.len(), after.len());
             assert!(fs.lookup(live, "noop_dir")?.is_some());
 
@@ -387,7 +398,8 @@ fn test_rename_live_overwrite_empty_dir() -> anyhow::Result<()> {
             assert!(fs.lookup(live, "dst_dir")?.is_some());
             // Ensure dst is empty
             let dst_attr = fs.lookup(live, "dst_dir")?.unwrap();
-            assert!(fs.readdir(dst_attr.ino)?.is_empty());
+            let fh = fs.opendir(dst_attr.ino)?;
+            assert!(fs.readdir(dst_attr.ino, fh)?.is_empty());
 
             // Rename src_dir -> dst_dir (overwrite)
             fs.rename(live, src, live, dst)?;
@@ -425,7 +437,8 @@ fn test_rename_live_overwrite_nonempty_dir_fails() -> anyhow::Result<()> {
             let dst = OsStr::new("dst_dir");
             let dst_attr = fs.mkdir(live, dst)?;
             fs.mkdir(dst_attr.ino, OsStr::new("c"))?;
-            assert!(!fs.readdir(dst_attr.ino)?.is_empty());
+            let fh = fs.opendir(dst_attr.ino)?;
+            assert!(!fs.readdir(dst_attr.ino, fh)?.is_empty());
 
             // Attempt to rename src_dir -> dst_dir
             let err = fs.rename(live, src, live, dst).unwrap_err();
