@@ -9,5 +9,6 @@ pub mod read;
 pub mod readdir;
 pub mod rename;
 pub mod rmdir;
+pub mod truncate;
 pub mod unlink;
 pub mod write;

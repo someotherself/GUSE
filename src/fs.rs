@@ -172,6 +172,13 @@ impl SourceTypes {
         matches!(self, SourceTypes::DirSnapshot { entries: _ })
     }
 
+    pub fn trucate(&self, size: u64) -> anyhow::Result<()> {
+        match self {
+            Self::RealFile(file) => file.set_len(size).context("Failed to truncate the file"),
+            _ => bail!(std::io::Error::from_raw_os_error(libc::EROFS)),
+        }
+    }
+
     pub fn size(&self) -> anyhow::Result<u64> {
         match self {
             Self::RealFile(file) => Ok(file.metadata()?.size()),
@@ -738,6 +745,21 @@ impl GitFs {
             tracing::debug!(len = *bytes_written, "Write ok");
         }
         ret
+    }
+
+    pub fn truncate(&self, ino: u64, size: u64, fh: Option<u64>) -> anyhow::Result<()> {
+        let ino = ino.into();
+        let ctx = FsOperationContext::get_operation(self, ino)?;
+        match ctx {
+            FsOperationContext::Root => bail!("Not allowed"),
+            FsOperationContext::RepoDir { ino: _ } => bail!("Not allowed"),
+            FsOperationContext::InsideLiveDir { ino: _ } => {
+                ops::truncate::truncate_live(self, ino.to_norm(), size, fh)
+            }
+            FsOperationContext::InsideGitDir { ino: _ } => {
+                ops::truncate::truncate_git(self, ino.to_norm(), size, fh)
+            }
+        }
     }
 
     #[instrument(level = "debug", skip(self), ret(level = Level::DEBUG), err(Display))]

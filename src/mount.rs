@@ -730,7 +730,7 @@ impl fuser::Filesystem for GitFsAdapter {
         atime: Option<fuser::TimeOrNow>,
         mtime: Option<fuser::TimeOrNow>,
         ctime: Option<SystemTime>,
-        _fh: Option<u64>,
+        fh: Option<u64>,
         _crtime: Option<SystemTime>,
         _chgtime: Option<SystemTime>,
         _bkuptime: Option<SystemTime>,
@@ -782,6 +782,12 @@ impl fuser::Filesystem for GitFsAdapter {
         };
         if let Some(mtime) = mtime_opt {
             attr.mtime = mtime;
+        };
+        if let Some(size) = size
+            && let Err(e) = fs.truncate(ino, size, fh)
+        {
+            reply.error(errno_from_anyhow(&e));
+            return;
         };
 
         reply.attr(&TTL, &attr.into());

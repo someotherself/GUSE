@@ -6,7 +6,9 @@ use tracing::instrument;
 
 use crate::{
     fs::{
-        builds::BuildOperationCtx, fileattr::{dir_attr, file_attr, FileType, InoFlag, ObjectAttr, StorageNode}, FileAttr, GitFs, META_STORE
+        FileAttr, GitFs, META_STORE,
+        builds::BuildOperationCtx,
+        fileattr::{FileType, InoFlag, ObjectAttr, StorageNode, dir_attr, file_attr},
     },
     inodes::{NormalIno, VirtualIno},
 };
