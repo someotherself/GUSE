@@ -1,11 +1,11 @@
 use anyhow::{anyhow, bail};
 
-use crate::{fs::GitFs, inodes::NormalIno};
+use crate::{fs::{ops, GitFs}, inodes::NormalIno};
 
 pub fn truncate_live(fs: &GitFs, ino: NormalIno, size: u64, fh: Option<u64>) -> anyhow::Result<()> {
     let fh = match fh {
         Some(fh) => fh,
-        None => fs.open(ino.to_norm_u64(), true, true, false)?,
+        None => ops::open::open_live(fs, ino, true, true, false)?,
     };
 
     let guard = fs.handles.read().map_err(|_| anyhow!("Lock poisoned."))?;
@@ -22,10 +22,9 @@ pub fn truncate_live(fs: &GitFs, ino: NormalIno, size: u64, fh: Option<u64>) -> 
 }
 
 pub fn truncate_git(fs: &GitFs, ino: NormalIno, size: u64, fh: Option<u64>) -> anyhow::Result<()> {
-    let fh = if let Some(fh) = fh {
-        fh
-    } else {
-        fs.open(ino.to_norm_u64(), true, true, false)?
+    let fh = match fh {
+        Some(fh) => fh,
+        None => ops::open::open_git(fs, ino, true, true, false)?,
     };
 
     let guard = fs.handles.read().map_err(|_| anyhow!("Lock poisoned."))?;
