@@ -6,9 +6,7 @@ use tracing::instrument;
 
 use crate::{
     fs::{
-        FileAttr, GitFs,
-        builds::BuildOperationCtx,
-        fileattr::{FileType, InoFlag, ObjectAttr, StorageNode, dir_attr, file_attr},
+        builds::BuildOperationCtx, fileattr::{dir_attr, file_attr, FileType, InoFlag, ObjectAttr, StorageNode}, FileAttr, GitFs, META_STORE
     },
     inodes::{NormalIno, VirtualIno},
 };
@@ -174,7 +172,7 @@ pub fn readdir_live_dir(fs: &GitFs, ino: NormalIno) -> anyhow::Result<Vec<Direct
     let ignore_list = [
         OsString::from("build"),
         OsString::from(".git"),
-        OsString::from("fs_meta.db"),
+        OsString::from(META_STORE),
     ];
     let path = fs.get_live_path(ino.into())?;
     let mut entries: Vec<DirectoryEntry> = vec![];

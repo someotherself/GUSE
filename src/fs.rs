@@ -40,7 +40,7 @@ const META_STORE: &str = "fs_meta.db";
 pub const REPO_SHIFT: u8 = 48;
 pub const ROOT_INO: u64 = 1;
 pub const VDIR_BIT: u64 = 1u64 << 47;
-const IGNORE_LIST: &[&str] = &[".git", "fs_meta.db"];
+const IGNORE_LIST: &[&str] = &[".git", META_STORE];
 
 enum FsOperationContext {
     /// Is the root directory
