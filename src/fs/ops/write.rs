@@ -22,7 +22,7 @@ pub fn write_live(fs: &GitFs, ino: u64, offset: u64, buf: &[u8], fh: u64) -> any
     let bytes_written = ctx.source.write_at(buf, offset)?;
 
     if bytes_written > 0 {
-        let new_size = ctx.source.size()?;
+        let new_size = std::cmp::max(old_size, offset + bytes_written as u64);
         if new_size != old_size {
             fs.update_size_in_db(ino.into(), new_size)?;
         }
@@ -60,7 +60,7 @@ pub fn write_git(
     let bytes_written = ctx.source.write_at(buf, offset)?;
 
     if bytes_written > 0 {
-        let new_size = ctx.source.size()?;
+        let new_size = std::cmp::max(old_size, offset + bytes_written as u64);
         if new_size != old_size {
             fs.update_size_in_db(ino, new_size)?;
         }
