@@ -411,12 +411,11 @@ impl fuser::Filesystem for GitFsAdapter {
         offset: i64,
         mut reply: fuser::ReplyDirectory,
     ) {
-        info!("Calling readdir - ino: {ino}, fh: {fh}, offset: {offset}");
         let fs_arc = self.getfs();
         let fs = match fs_arc.lock() {
             Ok(fs) => fs,
             Err(e) => {
-                error!(e = %e);
+                error!(e = %e); 
                 return reply.error(EIO);
             }
         };
