@@ -771,6 +771,30 @@ impl fuser::Filesystem for GitFsAdapter {
         reply.attr(&TTL, &attr.into());
     }
 
+    fn releasedir(
+            &mut self,
+            _req: &fuser::Request<'_>,
+            _ino: u64,
+            fh: u64,
+            _flags: i32,
+            reply: fuser::ReplyEmpty,
+        ) {
+        let fs_arc = self.getfs();
+
+        let res = match fs_arc.lock() {
+            Ok(fs) => fs.release(fh),
+            Err(e) => {
+                error!(e = %e);
+                return reply.error(EIO);
+            }
+        };
+        match res {
+            Ok(true) => reply.ok(),
+            Ok(false) => reply.error(libc::EBADF),
+            Err(e) => reply.error(errno_from_anyhow(&e)),
+        }
+    }
+
     fn release(
         &mut self,
         _req: &fuser::Request<'_>,
