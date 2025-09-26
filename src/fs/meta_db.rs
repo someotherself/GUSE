@@ -898,17 +898,7 @@ impl MetaDb {
         let mtime = pair_to_system_time(mtime_secs, mtime_nsecs as i32);
         let ctime = pair_to_system_time(ctime_secs, ctime_nsecs as i32);
 
-        let perm = match kind {
-            FileType::Directory => 0o775,
-            FileType::RegularFile => {
-                if ino_flag == InoFlag::InsideBuild {
-                    0o775
-                } else {
-                    0o655
-                }
-            }
-            FileType::Symlink => 0o655,
-        };
+        let perm = 0o775;
 
         let attr: FileAttr = FileAttr {
             ino: ino as u64,

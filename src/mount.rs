@@ -486,7 +486,7 @@ impl fuser::Filesystem for GitFsAdapter {
 
         {
             let state = state_arc.lock().unwrap();
-            let gitfs_entries  = state.dir_stream.as_ref().unwrap();
+            let gitfs_entries = state.dir_stream.as_ref().unwrap();
             entries.extend_from_slice(gitfs_entries);
         };
 
@@ -865,28 +865,28 @@ impl fuser::Filesystem for GitFsAdapter {
         }
     }
 
-    // fn link(
-    //     &mut self,
-    //     _req: &fuser::Request<'_>,
-    //     ino: u64,
-    //     newparent: u64,
-    //     newname: &OsStr,
-    //     reply: ReplyEntry,
-    // ) {
-    //     let fs_arc = self.getfs();
-    //     let fs = match fs_arc.lock() {
-    //         Ok(fs) => fs,
-    //         Err(e) => {
-    //             error!(e = %e);
-    //             return reply.error(EIO);
-    //         }
-    //     };
-    //     let res = fs.link(ino, newparent, newname);
-    //     match res {
-    //         Ok(attr) => reply.entry(&TTL, &attr.into(), 0),
-    //         Err(e) => reply.error(errno_from_anyhow(&e)),
-    //     }
-    // }
+    fn link(
+        &mut self,
+        _req: &fuser::Request<'_>,
+        ino: u64,
+        newparent: u64,
+        newname: &OsStr,
+        reply: ReplyEntry,
+    ) {
+        let fs_arc = self.getfs();
+        let fs = match fs_arc.lock() {
+            Ok(fs) => fs,
+            Err(e) => {
+                error!(e = %e);
+                return reply.error(EIO);
+            }
+        };
+        let res = fs.link(ino, newparent, newname);
+        match res {
+            Ok(attr) => reply.entry(&TTL, &attr.into(), 0),
+            Err(e) => reply.error(errno_from_anyhow(&e)),
+        }
+    }
 
     fn create(
         &mut self,

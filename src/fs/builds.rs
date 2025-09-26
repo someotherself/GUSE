@@ -6,7 +6,7 @@ use std::{
 use anyhow::anyhow;
 use git2::Oid;
 use tempfile::TempDir;
-use tracing::{info, instrument};
+use tracing::instrument;
 
 use crate::{
     fs::{
@@ -46,7 +46,6 @@ impl BuildSession {
 
         components.reverse();
         let full_path = temp_dir_path.join(components.iter().collect::<PathBuf>());
-        info!("{}", full_path.display());
 
         Ok(full_path)
     }

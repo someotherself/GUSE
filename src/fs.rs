@@ -1965,8 +1965,8 @@ impl GitFs {
         };
         let mut conn = conn_arc.lock().map_err(|_| anyhow!("Lock poisoned"))?;
         conn.write_dentry(
-            parent_ino.to_norm_u64(),
             target_ino.to_norm_u64(),
+            parent_ino.to_norm_u64(),
             target_name,
         )
     }

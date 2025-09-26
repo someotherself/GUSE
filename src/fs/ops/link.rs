@@ -43,7 +43,7 @@ pub fn link_git(
         drop(repo);
         session.finish_path(fs, ino)?.join(newname)
     };
-    std::fs::hard_link(original, link)?;
+    std::fs::hard_link(&original, &link)?;
     fs.write_dentry(newparent, source_ino, newname)?;
     {
         let _ = fs.notifier.try_send(InvalMsg::Entry {

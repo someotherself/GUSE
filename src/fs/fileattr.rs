@@ -73,7 +73,7 @@ pub const fn file_attr(ino_flag: InoFlag) -> CreateFileAttr {
     CreateFileAttr {
         kind: FileType::RegularFile,
         ino_flag,
-        perm: 0o655,
+        perm: 0o775,
         uid: 0,
         mode: libc::S_IFREG,
         gid: 0,

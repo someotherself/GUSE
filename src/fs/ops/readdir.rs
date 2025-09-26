@@ -251,6 +251,29 @@ fn read_build_dir(fs: &GitFs, ino: NormalIno) -> anyhow::Result<Vec<DirectoryEnt
     Ok(out)
 }
 
+// #[instrument(level = "debug", skip(fs), err(Display))]
+// fn populate_build_entries(
+//     fs: &GitFs,
+//     ino: NormalIno,
+//     build_path: &Path,
+// ) -> anyhow::Result<Vec<DirectoryEntry>> {
+//     let mut out: Vec<DirectoryEntry> = Vec::new();
+
+//     let readdir = match build_path.read_dir() {
+//         Ok(r) => r,
+//         Err(e) => return Ok(Vec::new())
+//     };
+
+//     for ent_res in readdir {
+//         let entry = match ent_res {
+//             Ok(ent) => ent,
+//             Err(_) => continue
+//         };
+
+//     };
+
+// }
+
 #[instrument(level = "debug", skip(fs), err(Display))]
 fn populate_build_entries(
     fs: &GitFs,
@@ -258,7 +281,6 @@ fn populate_build_entries(
     build_path: &Path,
 ) -> anyhow::Result<Vec<DirectoryEntry>> {
     let mut out: Vec<DirectoryEntry> = Vec::new();
-
     for node in build_path.read_dir()? {
         let node = node?;
         let node_name = node.file_name();
@@ -268,9 +290,13 @@ fn populate_build_entries(
         } else {
             (FileType::RegularFile, libc::S_IFREG)
         };
-        let Some(entry_ino) = fs.exists_by_name(ino.into(), &node_name_str)? else {
-            bail!("Not found: {node_name_str} under parent ino {ino}")
+        let entry_ino = match fs.exists_by_name(ino.into(), &node_name_str)? {
+            Some(ino) => ino,
+            None => continue,
         };
+        // let Some(entry_ino) = fs.exists_by_name(ino.into(), &node_name)? else {
+        //     bail!("Not found: {node_name_str} under parent ino {ino}")
+        // };
         let entry = DirectoryEntry::new(entry_ino, Oid::zero(), node_name, kind, filemode);
         out.push(entry);
     }
