@@ -3,16 +3,15 @@ use std::sync::{Arc, Mutex};
 use anyhow::{anyhow, bail};
 
 use crate::{
-    fs::{ops::readdir::DirectoryIter, GitFs, Handle, SourceTypes},
+    fs::{GitFs, Handle, SourceTypes, ops::readdir::DirectoryStreamCookie},
     inodes::NormalIno,
 };
 
 pub fn opendir_root(fs: &GitFs, ino: NormalIno) -> anyhow::Result<u64> {
     let fh = fs.next_file_handle();
-    let iter = DirectoryIter {
-        last_offset: 2,
-        last_name: None,
-        next_offset: 3
+    let iter = DirectoryStreamCookie {
+        next_name: None,
+        last_stream: Vec::new(),
     };
     let dir = SourceTypes::DirSnapshot {
         entries: Arc::new(Mutex::new(iter)),
@@ -31,14 +30,13 @@ pub fn opendir_root(fs: &GitFs, ino: NormalIno) -> anyhow::Result<u64> {
 }
 
 pub fn opendir_repo(fs: &GitFs, ino: NormalIno) -> anyhow::Result<u64> {
-    if let Err(_) = fs.getattr(ino.into()) {
+    if fs.getattr(ino.into()).is_err() {
         bail!(std::io::Error::from_raw_os_error(libc::ENOENT))
     };
     let fh = fs.next_file_handle();
-    let iter = DirectoryIter {
-        last_offset: 2,
-        last_name: None,
-        next_offset: 3
+    let iter = DirectoryStreamCookie {
+        next_name: None,
+        last_stream: Vec::new(),
     };
     let dir = SourceTypes::DirSnapshot {
         entries: Arc::new(Mutex::new(iter)),
@@ -57,14 +55,13 @@ pub fn opendir_repo(fs: &GitFs, ino: NormalIno) -> anyhow::Result<u64> {
 }
 
 pub fn opendir_live(fs: &GitFs, ino: NormalIno) -> anyhow::Result<u64> {
-    if let Err(_) = fs.getattr(ino.into()) {
+    if fs.getattr(ino.into()).is_err() {
         bail!(std::io::Error::from_raw_os_error(libc::ENOENT))
     };
     let fh = fs.next_file_handle();
-    let iter = DirectoryIter {
-        last_offset: 2,
-        last_name: None,
-        next_offset: 3
+    let iter = DirectoryStreamCookie {
+        next_name: None,
+        last_stream: Vec::new(),
     };
     let dir = SourceTypes::DirSnapshot {
         entries: Arc::new(Mutex::new(iter)),
@@ -83,13 +80,12 @@ pub fn opendir_live(fs: &GitFs, ino: NormalIno) -> anyhow::Result<u64> {
 }
 
 pub fn opendir_git(fs: &GitFs, ino: NormalIno) -> anyhow::Result<u64> {
-    if let Err(_) = fs.getattr(ino.into()) {
+    if fs.getattr(ino.into()).is_err() {
         bail!(std::io::Error::from_raw_os_error(libc::ENOENT))
     };
-    let iter = DirectoryIter {
-        last_offset: 2,
-        last_name: None,
-        next_offset: 3
+    let iter = DirectoryStreamCookie {
+        next_name: None,
+        last_stream: Vec::new(),
     };
     let fh = fs.next_file_handle();
     let dir = SourceTypes::DirSnapshot {

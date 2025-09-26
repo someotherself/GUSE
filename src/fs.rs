@@ -21,7 +21,7 @@ use crate::fs::fileattr::{
     StoredAttr, build_attr_dir, dir_attr, file_attr,
 };
 use crate::fs::meta_db::MetaDb;
-use crate::fs::ops::readdir::{DirectoryEntry, DirectoryEntryPlus, DirectoryIter};
+use crate::fs::ops::readdir::{DirectoryEntry, DirectoryEntryPlus, DirectoryStreamCookie};
 use crate::fs::repo::{GitRepo, VirtualNode};
 use crate::inodes::{Inodes, NormalIno, VirtualIno};
 use crate::mount::InvalMsg;
@@ -138,7 +138,7 @@ pub enum SourceTypes {
         data: Arc<Vec<u8>>,
     },
     DirSnapshot {
-        entries: Arc<Mutex<DirectoryIter>>,
+        entries: Arc<Mutex<DirectoryStreamCookie>>,
     },
 }
 
@@ -169,21 +169,14 @@ impl SourceTypes {
     }
 
     pub fn is_dir(&self) -> bool {
-        matches!(
-            self,
-            SourceTypes::DirSnapshot {
-                entries: _
-            }
-        )
+        matches!(self, SourceTypes::DirSnapshot { entries: _ })
     }
 
     pub fn size(&self) -> anyhow::Result<u64> {
         match self {
             Self::RealFile(file) => Ok(file.metadata()?.size()),
             Self::RoBlob { oid: _, data } => Ok(data.len() as u64),
-            Self::DirSnapshot {
-                entries: _,
-            } => {
+            Self::DirSnapshot { entries: _ } => {
                 bail!(std::io::Error::from_raw_os_error(libc::EROFS))
             }
         }
@@ -204,9 +197,7 @@ impl FileExt for SourceTypes {
                 buf[..src.len()].copy_from_slice(src);
                 Ok(src.len())
             }
-            Self::DirSnapshot {
-                entries: _,
-            } => Err(std::io::Error::from_raw_os_error(libc::EROFS)),
+            Self::DirSnapshot { entries: _ } => Err(std::io::Error::from_raw_os_error(libc::EROFS)),
         }
     }
 
@@ -214,9 +205,7 @@ impl FileExt for SourceTypes {
         match self {
             Self::RealFile(file) => file.write_at(buf, offset),
             Self::RoBlob { oid: _, data: _ } => Err(std::io::Error::from_raw_os_error(libc::EROFS)),
-            Self::DirSnapshot {
-                entries: _,
-            } => Err(std::io::Error::from_raw_os_error(libc::EROFS)),
+            Self::DirSnapshot { entries: _ } => Err(std::io::Error::from_raw_os_error(libc::EROFS)),
         }
     }
 }
@@ -691,12 +680,10 @@ impl GitFs {
 
         let ctx = FsOperationContext::get_operation(self, ino);
         match ctx? {
-            FsOperationContext::Root => 
-                ops::opendir::opendir_root(self, ino.to_norm())
-            ,
-            FsOperationContext::RepoDir { ino: _ } => 
+            FsOperationContext::Root => ops::opendir::opendir_root(self, ino.to_norm()),
+            FsOperationContext::RepoDir { ino: _ } => {
                 ops::opendir::opendir_repo(self, ino.to_norm())
-            ,
+            }
             FsOperationContext::InsideLiveDir { ino: _ } => {
                 ops::opendir::opendir_live(self, ino.to_norm())
             }
@@ -1809,6 +1796,7 @@ impl GitFs {
         repo_ino + 1
     }
 
+    #[allow(dead_code)]
     fn get_build_ino(&self, ino: NormalIno) -> anyhow::Result<u64> {
         let repo_ino = self.get_repo_ino(ino.to_norm_u64())?;
         self.get_ino_from_db(repo_ino, "build")
@@ -1893,6 +1881,7 @@ impl GitFs {
     }
 
     /// Needs to be passed the actual u64 inode
+    #[allow(dead_code)]
     fn is_file(&self, ino: NormalIno) -> anyhow::Result<bool> {
         if ino.to_norm_u64() == ROOT_INO {
             return Ok(false);
@@ -1902,6 +1891,7 @@ impl GitFs {
     }
 
     /// Needs to be passed the actual u64 inode
+    #[allow(dead_code)]
     fn is_link(&self, ino: NormalIno) -> anyhow::Result<bool> {
         let ino = ino.to_norm_u64();
         if ino == ROOT_INO {

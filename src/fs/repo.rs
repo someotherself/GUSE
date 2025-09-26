@@ -685,6 +685,7 @@ impl GitRepo {
         Ok(repo.head()?.peel_to_commit()?)
     }
 
+    #[allow(dead_code)]
     fn head_tree(&self) -> anyhow::Result<Tree<'_>> {
         Ok(self.head_commit()?.tree()?)
     }

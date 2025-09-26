@@ -13,11 +13,9 @@ use crate::{
     inodes::{NormalIno, VirtualIno},
 };
 
-#[derive(Default)]
-pub struct DirectoryIter {
-    pub last_offset: i64,
-    pub last_name: Option<OsString>,
-    pub next_offset: i64,
+pub struct DirectoryStreamCookie {
+    pub next_name: Option<OsString>,
+    pub last_stream: Vec<OsString>,
 }
 
 #[derive(Debug)]
@@ -201,13 +199,12 @@ pub fn readdir_live_dir(fs: &GitFs, ino: NormalIno) -> anyhow::Result<Vec<Direct
                 attr.ino = new_ino;
                 nodes.push(StorageNode {
                     parent_ino: ino,
-                    name: node_name_str.clone().into(),
+                    name: node_name_str.clone(),
                     attr: attr.into(),
                 });
             }
         };
-        let entry =
-            DirectoryEntry::new(attr.ino, Oid::zero(), node_name, kind, filemode);
+        let entry = DirectoryEntry::new(attr.ino, Oid::zero(), node_name, kind, filemode);
         entries.push(entry);
     }
     fs.write_inodes_to_db(nodes)?;
@@ -273,8 +270,7 @@ fn populate_build_entries(
         let Some(entry_ino) = fs.exists_by_name(ino.into(), &node_name_str)? else {
             bail!("Not found: {node_name_str} under parent ino {ino}")
         };
-        let entry =
-            DirectoryEntry::new(entry_ino, Oid::zero(), node_name, kind, filemode);
+        let entry = DirectoryEntry::new(entry_ino, Oid::zero(), node_name, kind, filemode);
         out.push(entry);
     }
     Ok(out)

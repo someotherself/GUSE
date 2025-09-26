@@ -25,7 +25,7 @@ use std::{num::NonZeroU32, path::PathBuf};
 
 use crate::fs::fileattr::{CreateFileAttr, FileAttr, FileType, InoFlag, SetStoredAttr, dir_attr};
 use crate::fs::ops::readdir::{DirectoryEntry, DirectoryEntryPlus};
-use crate::fs::{repo, GitFs, SourceTypes, REPO_SHIFT, ROOT_INO};
+use crate::fs::{GitFs, REPO_SHIFT, ROOT_INO, SourceTypes, repo};
 use crate::internals::sock::{socket_path, start_control_server};
 
 const TTL: Duration = Duration::from_secs(1);
@@ -411,6 +411,7 @@ impl fuser::Filesystem for GitFsAdapter {
         offset: i64,
         mut reply: fuser::ReplyDirectory,
     ) {
+        info!("Calling readdir - ino: {ino}, fh: {fh}, offset: {offset}");
         let fs_arc = self.getfs();
         let fs = match fs_arc.lock() {
             Ok(fs) => fs,
@@ -434,14 +435,13 @@ impl fuser::Filesystem for GitFsAdapter {
                     return;
                 }
             };
-            let state_arc = match &h.source {
+            match &h.source {
                 SourceTypes::DirSnapshot { entries } => Arc::clone(entries),
                 _ => {
                     reply.error(libc::ENOTDIR);
                     return;
                 }
-            };
-            state_arc
+            }
         };
 
         let root_entry: DirectoryEntry = DirectoryEntry {
@@ -466,23 +466,6 @@ impl fuser::Filesystem for GitFsAdapter {
             entries.push(parent_entry);
         }
 
-        let (mut next_offset, start_idx) = {
-            let state = state_arc.lock().unwrap();
-
-            let resumt_idx = if offset >= 3 {
-                if let Some(last) = &state.last_name {
-                    upper_bound_by_name(&entries, last.as_encoded_bytes())
-                } else {
-                    0
-                }
-            } else {
-                0
-            };
-            (state.next_offset, resumt_idx)
-        };
-
-        let mut last_name: Option<OsString> = None;
-
         let res_entries = fs.readdir(ino);
         let mut gitfs_entries = match res_entries {
             Ok(ent) => ent,
@@ -496,32 +479,62 @@ impl fuser::Filesystem for GitFsAdapter {
         entries.append(&mut gitfs_entries);
         entries.sort_unstable_by(|a, b| a.name.as_encoded_bytes().cmp(b.name.as_encoded_bytes()));
 
-        for i in start_idx..entries.len() {
-            let entry = &entries[i];
+        let cookie: usize = if offset <= 2 {
+            // Skip the . and ..
+            offset as usize
+        } else {
+            // This is a subsequent call, get the last cookie
+            let next_name = {
+                let state = state_arc.lock().unwrap();
+                state.next_name.clone()
+            };
 
-            let offset = next_offset;
-            next_offset += 1;
-
-            last_name = Some(entry.name.clone());
-
-            if reply.add(entry.ino, offset, entry.kind.into(), &entry.name) {
-                if let Ok(mut st) = state_arc.lock() {
-                    st.last_offset = offset;
-                    st.last_name = last_name;
-                    st.next_offset = next_offset;
-                }
+            if next_name.is_some() {
+                #[allow(clippy::unnecessary_unwrap)]
+                let next_name = next_name.unwrap();
+                let Some((cookie, _)) = entries
+                    .iter()
+                    .enumerate()
+                    .find(|(idx, e)| e.name == next_name)
+                else {
+                    tracing::error!("error 2");
+                    reply.error(libc::EBADF);
+                    return;
+                };
+                cookie
+            } else {
+                offset as usize
             }
-            reply.ok();
-            return;
+        };
+
+        let mut next_name: Option<OsString> = None;
+        let last_entries = entries
+            .iter()
+            .enumerate()
+            .skip(cookie)
+            .map(|(idx, e)| e.name.clone())
+            .collect::<Vec<OsString>>();
+
+        for (i, entry) in entries.iter().enumerate().skip(cookie) {
+            let full = reply.add(entry.ino, i as i64 + 1, entry.kind.into(), &entry.name);
+            next_name = None;
+
+            if full {
+                next_name = Some(entry.name.clone());
+                if let Ok(mut state) = state_arc.lock() {
+                    state.next_name = next_name;
+                    state.last_stream = last_entries;
+                }
+                reply.ok();
+                return;
+            }
         }
-    if let Ok(mut st) = state_arc.lock() {
-        if let Some(name) = last_name {
-            st.last_offset = next_offset - 1;
-            st.last_name = Some(name);
+        if let Ok(mut state) = state_arc.lock() {
+            state.next_name = next_name;
+            state.last_stream = last_entries;
         }
-        st.next_offset= next_offset;
-    }
-    reply.ok();
+
+        reply.ok();
     }
 
     fn readdirplus(
@@ -809,7 +822,7 @@ impl fuser::Filesystem for GitFsAdapter {
         let res = fs.opendir(ino);
         match res {
             Ok(fh) => reply.opened(fh, 0),
-            Err(e) => reply.error(errno_from_anyhow(&e))
+            Err(e) => reply.error(errno_from_anyhow(&e)),
         }
     }
 
@@ -870,15 +883,6 @@ impl fuser::Filesystem for GitFsAdapter {
 
         reply.created(&TTL, &attr.into(), 0, fh, flags as u32);
     }
-}
-
-fn upper_bound_by_name(entries: &[DirectoryEntry], last: &[u8]) -> usize {
-    let (mut lo, mut hi) = (0usize, entries.len());
-    while lo < hi {
-        let mid = (lo + hi) / 2;
-        if entries[mid].name.as_encoded_bytes() <= last { lo = mid + 1; } else { hi = mid; }
-    }
-    lo
 }
 
 impl From<FileAttr> for fuser::FileAttr {

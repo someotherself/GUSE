@@ -221,13 +221,6 @@ pub struct SetStoredAttr {
     pub flags: Option<u32>,
 }
 
-/// Used for dentries table in meta_db
-struct DirEntries {
-    pub target_ino: u64, // ino from StoredAttr
-    pub parent_ino: u64,
-    pub name: String,
-}
-
 /// Used for passing to Gitfs::write_inodes_to_db()
 pub struct StorageNode {
     pub parent_ino: u64,
