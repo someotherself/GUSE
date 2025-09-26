@@ -12,6 +12,7 @@ pub fn opendir_root(fs: &GitFs, ino: NormalIno) -> anyhow::Result<u64> {
     let iter = DirectoryStreamCookie {
         next_name: None,
         last_stream: Vec::new(),
+        dir_stream: None,
     };
     let dir = SourceTypes::DirSnapshot {
         entries: Arc::new(Mutex::new(iter)),
@@ -37,6 +38,7 @@ pub fn opendir_repo(fs: &GitFs, ino: NormalIno) -> anyhow::Result<u64> {
     let iter = DirectoryStreamCookie {
         next_name: None,
         last_stream: Vec::new(),
+        dir_stream: None,
     };
     let dir = SourceTypes::DirSnapshot {
         entries: Arc::new(Mutex::new(iter)),
@@ -62,6 +64,7 @@ pub fn opendir_live(fs: &GitFs, ino: NormalIno) -> anyhow::Result<u64> {
     let iter = DirectoryStreamCookie {
         next_name: None,
         last_stream: Vec::new(),
+        dir_stream: None,
     };
     let dir = SourceTypes::DirSnapshot {
         entries: Arc::new(Mutex::new(iter)),
@@ -86,6 +89,7 @@ pub fn opendir_git(fs: &GitFs, ino: NormalIno) -> anyhow::Result<u64> {
     let iter = DirectoryStreamCookie {
         next_name: None,
         last_stream: Vec::new(),
+        dir_stream: None,
     };
     let fh = fs.next_file_handle();
     let dir = SourceTypes::DirSnapshot {

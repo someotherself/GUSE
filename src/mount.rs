@@ -415,7 +415,7 @@ impl fuser::Filesystem for GitFsAdapter {
         let fs = match fs_arc.lock() {
             Ok(fs) => fs,
             Err(e) => {
-                error!(e = %e); 
+                error!(e = %e);
                 return reply.error(EIO);
             }
         };
@@ -465,19 +465,34 @@ impl fuser::Filesystem for GitFsAdapter {
             entries.push(parent_entry);
         }
 
-        let res_entries = fs.readdir(ino);
-        let mut gitfs_entries = match res_entries {
-            Ok(ent) => ent,
-            Err(e) => {
-                error!(e = %e, "Fetching dir entries");
-                reply.error(ENOENT);
-                return;
-            }
+        // Only create the entries when starting from offset 0 or after buffer was filled
+        if {
+            let state = state_arc.lock().unwrap();
+            state.dir_stream.is_none()
+        } {
+            let res_entries = fs.readdir(ino);
+            let gitfs_entries = match res_entries {
+                Ok(ent) => ent,
+                Err(e) => {
+                    error!(e = %e, "Fetching dir entries");
+                    reply.error(ENOENT);
+                    return;
+                }
+            };
+            let mut state = state_arc.lock().unwrap();
+            let entries: Arc<[DirectoryEntry]> = Arc::from(gitfs_entries.into_boxed_slice());
+            state.dir_stream = Some(entries);
         };
 
-        entries.append(&mut gitfs_entries);
+        {
+            let state = state_arc.lock().unwrap();
+            let gitfs_entries  = state.dir_stream.as_ref().unwrap();
+            entries.extend_from_slice(gitfs_entries);
+        };
+
         entries.sort_unstable_by(|a, b| a.name.as_encoded_bytes().cmp(b.name.as_encoded_bytes()));
 
+        // TODO: Use a monotonic, btree cookie
         let cookie: usize = if offset <= 2 {
             // Skip the . and ..
             offset as usize
@@ -496,7 +511,6 @@ impl fuser::Filesystem for GitFsAdapter {
                     .enumerate()
                     .find(|(idx, e)| e.name == next_name)
                 else {
-                    tracing::error!("error 2");
                     reply.error(libc::EBADF);
                     return;
                 };
@@ -523,6 +537,7 @@ impl fuser::Filesystem for GitFsAdapter {
                 if let Ok(mut state) = state_arc.lock() {
                     state.next_name = next_name;
                     state.last_stream = last_entries;
+                    state.dir_stream = None;
                 }
                 reply.ok();
                 return;
@@ -531,6 +546,7 @@ impl fuser::Filesystem for GitFsAdapter {
         if let Ok(mut state) = state_arc.lock() {
             state.next_name = next_name;
             state.last_stream = last_entries;
+            state.dir_stream = None;
         }
 
         reply.ok();
@@ -772,13 +788,13 @@ impl fuser::Filesystem for GitFsAdapter {
     }
 
     fn releasedir(
-            &mut self,
-            _req: &fuser::Request<'_>,
-            _ino: u64,
-            fh: u64,
-            _flags: i32,
-            reply: fuser::ReplyEmpty,
-        ) {
+        &mut self,
+        _req: &fuser::Request<'_>,
+        _ino: u64,
+        fh: u64,
+        _flags: i32,
+        reply: fuser::ReplyEmpty,
+    ) {
         let fs_arc = self.getfs();
 
         let res = match fs_arc.lock() {

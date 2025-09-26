@@ -1,4 +1,4 @@
-use std::{collections::btree_map::Entry, ffi::OsString, path::Path};
+use std::{collections::btree_map::Entry, ffi::OsString, path::Path, sync::Arc};
 
 use anyhow::{anyhow, bail};
 use git2::{FileMode, ObjectType, Oid};
@@ -16,9 +16,10 @@ use crate::{
 pub struct DirectoryStreamCookie {
     pub next_name: Option<OsString>,
     pub last_stream: Vec<OsString>,
+    pub dir_stream: Option<Arc<[DirectoryEntry]>>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct DirectoryEntry {
     pub ino: u64,
     pub oid: Oid,
