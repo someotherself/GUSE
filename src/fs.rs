@@ -747,7 +747,7 @@ impl GitFs {
         ret
     }
 
-    pub fn truncate(&self, ino: u64, size: u64, fh: Option<u64>) -> anyhow::Result<()> {
+    pub fn truncate(&self, ino: u64, size: u64, fh: u64) -> anyhow::Result<()> {
         let ino = ino.into();
         let ctx = FsOperationContext::get_operation(self, ino)?;
         match ctx {

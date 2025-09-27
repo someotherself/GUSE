@@ -783,12 +783,17 @@ impl fuser::Filesystem for GitFsAdapter {
         if let Some(mtime) = mtime_opt {
             attr.mtime = mtime;
         };
+
         if let Some(size) = size
-            && let Err(e) = fs.truncate(ino, size, fh)
+            && let Some(fh) = fh
         {
-            reply.error(errno_from_anyhow(&e));
-            return;
-        };
+            if let Err(e) = fs.truncate(ino, size, fh) {
+                reply.error(errno_from_anyhow(&e));
+                return;
+            } else {
+                attr.size = size;
+            }
+        }
 
         reply.attr(&TTL, &attr.into());
     }

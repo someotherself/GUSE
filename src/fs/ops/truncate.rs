@@ -1,13 +1,8 @@
 use anyhow::{anyhow, bail};
 
-use crate::{fs::{ops, GitFs}, inodes::NormalIno};
+use crate::{fs::GitFs, inodes::NormalIno, mount::InvalMsg};
 
-pub fn truncate_live(fs: &GitFs, ino: NormalIno, size: u64, fh: Option<u64>) -> anyhow::Result<()> {
-    let fh = match fh {
-        Some(fh) => fh,
-        None => ops::open::open_live(fs, ino, true, true, false)?,
-    };
-
+pub fn truncate_live(fs: &GitFs, ino: NormalIno, size: u64, fh: u64) -> anyhow::Result<()> {
     let guard = fs.handles.read().map_err(|_| anyhow!("Lock poisoned."))?;
     let ctx = guard
         .get(&fh)
@@ -18,15 +13,18 @@ pub fn truncate_live(fs: &GitFs, ino: NormalIno, size: u64, fh: Option<u64>) -> 
     if !ctx.source.is_file() {
         bail!("Invalid handle.")
     }
-    ctx.source.trucate(size)
+    ctx.source.trucate(size)?;
+    fs.update_size_in_db(ino, size)?;
+    let _ = fs.notifier.try_send(InvalMsg::Inode {
+        ino: ino.to_norm_u64(),
+        off: 0,
+        len: 0,
+    });
+
+    Ok(())
 }
 
-pub fn truncate_git(fs: &GitFs, ino: NormalIno, size: u64, fh: Option<u64>) -> anyhow::Result<()> {
-    let fh = match fh {
-        Some(fh) => fh,
-        None => ops::open::open_git(fs, ino, true, true, false)?,
-    };
-
+pub fn truncate_git(fs: &GitFs, ino: NormalIno, size: u64, fh: u64) -> anyhow::Result<()> {
     let guard = fs.handles.read().map_err(|_| anyhow!("Lock poisoned."))?;
     let ctx = guard
         .get(&fh)
@@ -37,5 +35,13 @@ pub fn truncate_git(fs: &GitFs, ino: NormalIno, size: u64, fh: Option<u64>) -> a
     if !ctx.source.is_file() {
         bail!("Invalid handle.")
     }
-    ctx.source.trucate(size)
+    ctx.source.trucate(size)?;
+    fs.update_size_in_db(ino, size)?;
+    let _ = fs.notifier.try_send(InvalMsg::Inode {
+        ino: ino.to_norm_u64(),
+        off: 0,
+        len: 0,
+    });
+
+    Ok(())
 }

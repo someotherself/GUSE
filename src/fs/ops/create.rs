@@ -1,6 +1,6 @@
-use std::{ffi::OsString, fs::File, os::unix::fs::PermissionsExt};
+use std::{ffi::OsString, os::unix::fs::PermissionsExt};
 
-use anyhow::{anyhow, bail};
+use anyhow::bail;
 use libc::EPERM;
 
 use crate::{
@@ -26,8 +26,7 @@ pub fn create_live(
 
     let file = std::fs::File::create_new(&file_path)?;
     std::fs::set_permissions(&file_path, std::fs::Permissions::from_mode(0o775))?;
-    file.sync_all()?;
-    File::open(file_path.parent().ok_or_else(|| anyhow!("No parent"))?)?.sync_all()?;
+    drop(file);
 
     let nodes = vec![StorageNode {
         parent_ino: parent,
@@ -67,8 +66,7 @@ pub fn create_git(
 
     let file = std::fs::File::create_new(&file_path)?;
     std::fs::set_permissions(&file_path, std::fs::Permissions::from_mode(0o775))?;
-    file.sync_all()?;
-    File::open(file_path.parent().ok_or_else(|| anyhow!("No parent"))?)?.sync_all()?;
+    drop(file);
 
     let nodes = vec![StorageNode {
         parent_ino: parent.to_norm_u64(),

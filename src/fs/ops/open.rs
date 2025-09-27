@@ -56,6 +56,7 @@ pub fn open_git(
     truncate: bool,
 ) -> anyhow::Result<u64> {
     let oid = fs.get_oid_from_db(ino.to_norm_u64())?;
+    let flag = fs.get_ino_flag_from_db(ino)?;
     if oid == Oid::zero() {
         let parent_oid = fs.parent_commit_build_session(ino)?;
         let build_root = fs.get_path_to_build_folder(ino)?;
@@ -66,11 +67,16 @@ pub fn open_git(
             repo.get_or_init_build_session(parent_oid, &build_root)?
         };
         let path = build_session.finish_path(fs, ino)?;
+        let file_exists = path.exists();
+        let name = fs.get_name_from_db(ino.into())?;
+        tracing::info!("Opening {ino} {oid} {flag} exists:{file_exists} name: {name}");
+
         let file = OpenOptions::new()
             .read(true)
             .write(write)
-            .truncate(truncate)
+            .truncate(write && truncate)
             .open(path)?;
+        tracing::info!("File opened for {ino}");
         let fh = fs.next_file_handle();
         let handle = Handle {
             ino: ino.to_norm_u64(),
@@ -78,10 +84,12 @@ pub fn open_git(
             read: true,
             write,
         };
+        tracing::info!("Handle {fh} opened for {ino}");
         {
             let mut guard = fs.handles.write().map_err(|_| anyhow!("Lock poisoned"))?;
             guard.insert(fh, handle);
         }
+        tracing::info!("Returning {fh} for {ino}");
         return Ok(fh);
     }
     open_blob(fs, oid, ino.to_norm_u64(), read)

@@ -142,7 +142,7 @@ pub fn rename_git_build(
         session.finish_path(fs, ino)?.join(new_name)
     };
 
-    std::fs::rename(src, &dest)?;
+    std::fs::rename(&src, &dest)?;
 
     if dest_exists {
         fs.remove_db_record(new_parent, new_name)?;
@@ -154,7 +154,7 @@ pub fn rename_git_build(
         bail!("Invalid location")
     };
 
-    let mut new_attr = fs.attr_from_path(ino_flag, dest)?;
+    let mut new_attr = fs.attr_from_path(ino_flag, dest.clone())?;
     new_attr.ino = src_attr.ino;
 
     let node = StorageNode {
@@ -188,5 +188,6 @@ pub fn rename_git_build(
         }
     }
 
+    tracing::info!("Renamed {} to {}", src.display(), dest.display());
     Ok(())
 }
