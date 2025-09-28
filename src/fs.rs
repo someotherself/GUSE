@@ -1976,9 +1976,6 @@ impl GitFs {
     }
 
     fn update_db_record(&self, old_parent: NormalIno, old_name: &str, node: StorageNode) -> anyhow::Result<()> {
-        let parent_name = self.get_single_parent(node.parent_ino)?;
-        tracing::info!("Updating: {} w/ new parent {}", node.attr.ino, parent_name);
-
         let conn_arc = {
             let repo = &self.get_repo(node.attr.ino)?;
             let repo = repo.lock().map_err(|_| anyhow!("Lock poisoned"))?;
@@ -2008,8 +2005,8 @@ impl GitFs {
         };
         let mut conn = conn_arc.lock().map_err(|_| anyhow!("Lock poisoned"))?;
         conn.write_dentry(
-            target_ino.to_norm_u64(),
             parent_ino.to_norm_u64(),
+            target_ino.to_norm_u64(),
             target_name,
         )
     }

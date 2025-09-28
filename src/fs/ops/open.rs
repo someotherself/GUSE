@@ -81,8 +81,7 @@ pub fn open_git(
                     let mut repo = repo.lock().map_err(|_| anyhow!("Lock poisoned"))?;
                     repo.get_or_init_build_session(parent_oid, &build_root)?
                 };
-                let parent_path = session.finish_path(fs, ino)?
-                .join(&name);
+                let parent_path = session.finish_path(fs, parent_ino.into())?.join(&name);
                 if parent_path.exists() {
                     found = Some(parent_path);
                     break;
@@ -96,7 +95,6 @@ pub fn open_git(
             .write(write)
             .truncate(write && truncate)
             .open(path)?;
-        tracing::info!("File opened for {ino}");
         let fh = fs.next_file_handle();
         let handle = Handle {
             ino: ino.to_norm_u64(),
@@ -104,12 +102,10 @@ pub fn open_git(
             read: true,
             write,
         };
-        tracing::info!("Handle {fh} opened for {ino}");
         {
             let mut guard = fs.handles.write().map_err(|_| anyhow!("Lock poisoned"))?;
             guard.insert(fh, handle);
         }
-        tracing::info!("Returning {fh} for {ino}");
         return Ok(fh);
     }
     open_blob(fs, oid, ino.to_norm_u64(), read)

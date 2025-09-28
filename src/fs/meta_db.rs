@@ -569,8 +569,8 @@ impl MetaDb {
 
     pub fn write_dentry(
         &mut self,
-        source_ino: u64,
         parent_ino: u64,
+        source_ino: u64,
         target_name: &str,
     ) -> anyhow::Result<()> {
         let parent_i64 = i64::try_from(parent_ino)?;

@@ -743,9 +743,6 @@ impl fuser::Filesystem for GitFsAdapter {
         let handle = fh.unwrap_or(42059);
         let mode = mode.unwrap_or(42059);
         let flgs = flags.unwrap_or(42059);
-        tracing::info!(
-            "Setattr - {ino} size: {sz} fh: {handle} mode: {mode}, flags: {flgs}, uid: {ud}, gid: {gd}"
-        );
         let fs_arc = self.getfs();
         let fs = match fs_arc.lock() {
             Ok(fs) => fs,

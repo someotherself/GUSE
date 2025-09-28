@@ -50,7 +50,5 @@ pub fn unlink_build_dir(fs: &GitFs, parent: NormalIno, name: &str) -> anyhow::Re
         len: 0,
     });
 
-    tracing::info!("Unlinked {name}");
-
     Ok(())
 }
