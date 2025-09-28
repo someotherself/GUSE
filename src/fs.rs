@@ -2016,36 +2016,23 @@ impl GitFs {
 
     #[instrument(level = "debug", skip(self), err(Display))]
     pub fn parent_commit_build_session(&self, ino: NormalIno) -> anyhow::Result<Oid> {
-        // let oid = self.get_oid_from_db(ino.to_norm_u64())?;
-        let mut cur_flag = self.get_ino_flag_from_db(ino)?;
-        if cur_flag != InoFlag::InsideBuild && cur_flag != InoFlag::SnapFolder {
-            bail!("Called from wrong location - {cur_flag}")
-        }
+        let oid = self.get_oid_from_db(ino.to_norm_u64())?;
 
-        // let mut cur_oid = oid;
+        let mut cur_oid = oid;
         let mut cur_ino = ino.to_norm_u64();
-        // Check that the parent is inside build by ino_flag
-        // Go up the tree until reach ino_flag == SnapFolder
 
         let max_loops = 1000;
         for _ in 0..max_loops {
-            // if cur_oid != Oid::zero() {
-            //     break;
-            // }
-            if cur_flag == InoFlag::SnapFolder {
+            if cur_oid != Oid::zero() {
                 break;
             }
+
             cur_ino = self.get_single_parent(cur_ino)?;
-            cur_flag = self.get_ino_flag_from_db(cur_ino.into())?;
-
-            // cur_ino = self.get_single_parent(cur_ino)?;
-            // cur_oid = self.get_oid_from_db(cur_ino)?;
+            cur_oid = self.get_oid_from_db(cur_ino)?;
         }
-        let oid = self.get_oid_from_db(cur_ino)?;
 
-        Ok(oid)
+        Ok(cur_oid)
     }
-
     // TODO: FIX NEW SQL
     fn get_path_from_db(&self, ino: NormalIno) -> anyhow::Result<PathBuf> {
         let conn_arc = {
