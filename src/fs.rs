@@ -747,7 +747,7 @@ impl GitFs {
         ret
     }
 
-    pub fn truncate(&self, ino: u64, size: u64, fh: u64) -> anyhow::Result<()> {
+    pub fn truncate(&self, ino: u64, size: u64, fh: Option<u64>) -> anyhow::Result<()> {
         let ino = ino.into();
         let ctx = FsOperationContext::get_operation(self, ino)?;
         match ctx {
@@ -1752,6 +1752,17 @@ impl GitFs {
         conn.read_children(parent_ino.to_norm_u64())
     }
 
+    pub fn list_dentries_for_inode(&self, ino: NormalIno) -> anyhow::Result<Vec<(u64, String)>> {
+        let conn_arc = {
+            let repo = &self.get_repo(ino.to_norm_u64())?;
+            let repo = repo.lock().map_err(|_| anyhow!("Lock poisoned"))?;
+            std::sync::Arc::clone(&repo.connection)
+        };
+
+        let conn = conn_arc.lock().map_err(|_| anyhow!("Lock poisoned"))?;
+        conn.list_dentries_for_inode(ino.to_norm_u64())
+    }
+
     pub fn get_all_parents(&self, ino: u64) -> anyhow::Result<Vec<u64>> {
         let conn_arc = {
             let repo = &self.get_repo(ino)?;
@@ -1964,14 +1975,17 @@ impl GitFs {
         conn.remove_db_record(parent_ino.to_norm_u64(), target_name)
     }
 
-    fn update_db_record(&self, node: StorageNode) -> anyhow::Result<()> {
+    fn update_db_record(&self, old_parent: NormalIno, old_name: &str, node: StorageNode) -> anyhow::Result<()> {
+        let parent_name = self.get_single_parent(node.parent_ino)?;
+        tracing::info!("Updating: {} w/ new parent {}", node.attr.ino, parent_name);
+
         let conn_arc = {
             let repo = &self.get_repo(node.attr.ino)?;
             let repo = repo.lock().map_err(|_| anyhow!("Lock poisoned"))?;
             std::sync::Arc::clone(&repo.connection)
         };
         let mut conn = conn_arc.lock().map_err(|_| anyhow!("Lock poisoned"))?;
-        conn.update_db_record(node)
+        conn.update_db_record(old_parent.into(), old_name, node)
     }
 
     pub fn write_dentry(
@@ -1980,6 +1994,13 @@ impl GitFs {
         target_ino: NormalIno,
         target_name: &str,
     ) -> anyhow::Result<()> {
+        let parent_name = self.get_single_parent(parent_ino.to_norm_u64())?;
+        tracing::info!(
+            "Writing entry: {} w/ new parent {}",
+            target_ino,
+            parent_name
+        );
+
         let conn_arc = {
             let repo = &self.get_repo(parent_ino.to_norm_u64())?;
             let repo = repo.lock().map_err(|_| anyhow!("Lock poisoned"))?;

@@ -97,8 +97,8 @@ pub fn rename_live(
 
 pub fn rename_git_build(
     fs: &GitFs,
-    parent: NormalIno,
-    name: &str,
+    old_parent: NormalIno,
+    old_name: &str,
     new_parent: NormalIno,
     new_name: &str,
 ) -> anyhow::Result<()> {
@@ -108,7 +108,7 @@ pub fn rename_git_build(
     if !dest_in_build && !is_commit_folder {
         bail!(format!("New parent {} not allowed", new_parent));
     }
-    let src_attr = fs.get_metadata_by_name(parent, name)?;
+    let src_attr = fs.get_metadata_by_name(old_parent, old_name)?;
 
     let mut dest_exists = false;
 
@@ -121,14 +121,14 @@ pub fn rename_git_build(
     }
 
     let src = {
-        let ino = parent;
+        let ino = old_parent;
         let parent_oid = fs.parent_commit_build_session(ino)?;
         let build_root = fs.get_path_to_build_folder(ino)?;
         let repo = fs.get_repo(ino.to_norm_u64())?;
         let mut repo = repo.lock().map_err(|_| anyhow!("Lock poisoned"))?;
         let session = repo.get_or_init_build_session(parent_oid, &build_root)?;
         drop(repo);
-        session.finish_path(fs, ino)?.join(name)
+        session.finish_path(fs, ino)?.join(old_name)
     };
 
     let dest = {
@@ -162,12 +162,12 @@ pub fn rename_git_build(
         name: new_name.into(),
         attr: new_attr.into(),
     };
-    fs.update_db_record(node)?;
+    fs.update_db_record(old_parent, old_name, node)?;
 
     {
         let _ = fs.notifier.try_send(InvalMsg::Entry {
-            parent: parent.to_norm_u64(),
-            name: OsString::from(name),
+            parent: old_parent.to_norm_u64(),
+            name: OsString::from(old_name),
         });
         let _ = fs.notifier.try_send(InvalMsg::Entry {
             parent: new_parent.to_norm_u64(),
@@ -175,11 +175,11 @@ pub fn rename_git_build(
         });
 
         let _ = fs.notifier.try_send(InvalMsg::Inode {
-            ino: parent.to_norm_u64(),
+            ino: old_parent.to_norm_u64(),
             off: 0,
             len: 0,
         });
-        if new_parent.to_norm_u64() != parent.to_norm_u64() {
+        if new_parent.to_norm_u64() != old_parent.to_norm_u64() {
             let _ = fs.notifier.try_send(InvalMsg::Inode {
                 ino: new_parent.to_norm_u64(),
                 off: 0,
@@ -188,6 +188,5 @@ pub fn rename_git_build(
         }
     }
 
-    tracing::info!("Renamed {} to {}", src.display(), dest.display());
     Ok(())
 }

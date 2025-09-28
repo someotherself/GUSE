@@ -28,7 +28,12 @@ impl MetaDb {
             let mut upsert_inode = tx.prepare(
                 r#"
             INSERT INTO inode_map
-                (inode, oid, git_mode, size, inode_flag, uid, gid, atime_secs, atime_nsecs, nlink, mtime_secs, mtime_nsecs, ctime_secs, ctime_nsecs, rdev, flags)
+                (inode, oid, git_mode, size, inode_flag,
+                uid, gid, nlink,
+                atime_secs, atime_nsecs,
+                mtime_secs, mtime_nsecs,
+                ctime_secs, ctime_nsecs,
+                rdev, flags)
             VALUES
                 (?1, ?2, ?3, ?4, ?5, ?6, ?7, 0, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)
             ON CONFLICT(inode) DO UPDATE SET
@@ -51,8 +56,10 @@ impl MetaDb {
 
             let mut insert_dentry = tx.prepare(
                 r#"
-            INSERT OR REPLACE INTO dentries (parent_inode, name, target_inode)
-            VALUES (?1, ?2, ?3);
+            INSERT INTO dentries (parent_inode, name, target_inode)
+            VALUES (?1, ?2, ?3)
+            ON CONFLICT(parent_inode, name) DO UPDATE
+            SET target_inode = excluded.target_inode;
             "#,
             )?;
 
@@ -298,6 +305,32 @@ impl MetaDb {
 
         let count: usize = stmt.query_row([ino], |row| row.get(0))?;
         Ok(count)
+    }
+
+    pub fn list_dentries_for_inode(&self, ino: u64) -> anyhow::Result<Vec<(u64, String)>> {
+        let ino_i64 = i64::try_from(ino).context("inode u64→i64 overflow")?;
+
+        let mut stmt = self.conn.prepare(
+            r#"
+            SELECT parent_inode, name
+            FROM dentries
+            WHERE target_inode = ?1
+            ORDER BY parent_inode, name
+            "#,
+        )?;
+
+        let rows = stmt
+            .query_map(params![ino_i64], |row| {
+                let parent_i64: i64 = row.get(0)?;
+                let name: String = row.get(1)?;
+                let parent_u64 = u64::try_from(parent_i64)
+                    .map_err(|_| rusqlite::Error::IntegralValueOutOfRange(parent_i64 as usize, parent_i64))?;
+                Ok((parent_u64, name))
+            })?
+            .collect::<std::result::Result<Vec<_>, _>>()
+            .context("collect dentries for inode")?;
+
+        Ok(rows)
     }
 
     pub fn read_children(&self, parent_ino: u64) -> anyhow::Result<Vec<DirectoryEntry>> {
@@ -597,7 +630,12 @@ impl MetaDb {
         Ok(())
     }
 
-    pub fn update_db_record(&mut self, node: StorageNode) -> anyhow::Result<()> {
+    pub fn update_db_record(
+        &mut self,
+        old_parent: u64,
+        old_name: &str,
+        node: StorageNode,
+    ) -> anyhow::Result<()> {
         let tx = self.conn.transaction()?;
 
         {
@@ -644,30 +682,31 @@ impl MetaDb {
             )?;
         }
 
-        {
-            let a = &node.attr;
-            tx.execute(
-                r#"DELETE FROM dentries WHERE target_inode = ?1"#,
-                params![a.ino as i64],
-            )?;
-
-            tx.execute(
-                r#"
-                INSERT OR REPLACE INTO dentries (parent_inode, name, target_inode)
-                VALUES (?1, ?2, ?3);
-                "#,
-                params![node.parent_ino as i64, node.name, a.ino as i64],
-            )?;
-        }
-
-        tx.execute_batch(
+        let _ = tx.execute(
             r#"
-            UPDATE inode_map
-            SET nlink = COALESCE(
-                (SELECT COUNT(*) FROM dentries d WHERE d.target_inode = inode_map.inode),
-                0
-            );
-            "#,
+        DELETE FROM dentries
+        WHERE parent_inode = ?1 AND name = ?2 AND target_inode = ?3
+        "#,
+            rusqlite::params![old_parent as i64, old_name, node.attr.ino as i64],
+        )?;
+
+        tx.execute(
+            r#"
+        INSERT INTO dentries (parent_inode, name, target_inode)
+        VALUES (?1, ?2, ?3)
+        ON CONFLICT(parent_inode, name) DO UPDATE
+        SET target_inode = excluded.target_inode
+        "#,
+            rusqlite::params![node.parent_ino as i64, node.name, node.attr.ino as i64],
+        )?;
+
+        tx.execute(
+            r#"
+        UPDATE inode_map
+        SET nlink = (SELECT COUNT(*) FROM dentries WHERE target_inode = ?1)
+        WHERE inode = ?1
+        "#,
+            rusqlite::params![node.attr.ino as i64],
         )?;
 
         tx.commit()?;

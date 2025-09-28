@@ -61,15 +61,35 @@ pub fn open_git(
         let parent_oid = fs.parent_commit_build_session(ino)?;
         let build_root = fs.get_path_to_build_folder(ino)?;
 
-        let build_session = {
+        let session = {
             let repo = fs.get_repo(ino.to_norm_u64())?;
             let mut repo = repo.lock().map_err(|_| anyhow!("Lock poisoned"))?;
             repo.get_or_init_build_session(parent_oid, &build_root)?
         };
-        let path = build_session.finish_path(fs, ino)?;
-        let file_exists = path.exists();
-        let name = fs.get_name_from_db(ino.into())?;
-        tracing::info!("Opening {ino} {oid} {flag} exists:{file_exists} name: {name}");
+        let file_path = session.finish_path(fs, ino)?;
+
+        let path = if file_path.exists() {
+            file_path
+        } else {
+            let mut found = None;
+            let dentries = fs.list_dentries_for_inode(ino)?;
+            for (parent_ino, name) in dentries {
+                let session = {
+                    let parent_oid = fs.parent_commit_build_session(parent_ino.into())?;
+                    let build_root = fs.get_path_to_build_folder(ino)?;
+                    let repo = fs.get_repo(ino.to_norm_u64())?;
+                    let mut repo = repo.lock().map_err(|_| anyhow!("Lock poisoned"))?;
+                    repo.get_or_init_build_session(parent_oid, &build_root)?
+                };
+                let parent_path = session.finish_path(fs, ino)?
+                .join(&name);
+                if parent_path.exists() {
+                    found = Some(parent_path);
+                    break;
+                }
+            }
+            found.ok_or_else(|| anyhow!("No existing path for inode {}", ino))?
+        };
 
         let file = OpenOptions::new()
             .read(true)
@@ -308,3 +328,11 @@ fn build_commits_text(
 
     Ok(Arc::new(contents))
 }
+
+// Succesful opening
+// Opening 1125899906852608 0000000000000000000000000000000000000000 InsideBuild exists:false name: libguse-a2f4ebba33ed46d8.rlib at
+// path /home/cristian/Rust/projects/guse/data_dir/GUSE/build/build_048a1838MN8oMf/target/debug/libguse-a2f4ebba33ed46d8.rlib
+
+// Failed opening
+// Opening 1125899906852608 0000000000000000000000000000000000000000 InsideBuild exists:true name: libguse-a2f4ebba33ed46d8.rlib at
+// path /home/cristian/Rust/projects/guse/data_dir/GUSE/build/build_048a1838MN8oMf/target/debug/deps/libguse-a2f4ebba33ed46d8.rlib

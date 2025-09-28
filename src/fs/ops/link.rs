@@ -44,6 +44,12 @@ pub fn link_git(
         session.finish_path(fs, ino)?.join(newname)
     };
     std::fs::hard_link(&original, &link)?;
+    let parent_name = fs.get_name_from_db(newparent.into())?;
+    tracing::info!(
+        "Entry {source_ino}, exists: {} in parent {parent_name} path: {}",
+        link.exists(),
+        link.display()
+    );
     fs.write_dentry(newparent, source_ino, newname)?;
     {
         let _ = fs.notifier.try_send(InvalMsg::Entry {

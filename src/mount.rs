@@ -399,7 +399,7 @@ impl fuser::Filesystem for GitFsAdapter {
 
         match fs.open(ino, read, write, truncate) {
             Ok(fh) => reply.opened(fh, 0),
-            Err(e) => reply.error(libc::EIO),
+            Err(e) => reply.error(libc::ENOENT),
         }
     }
 
@@ -737,6 +737,15 @@ impl fuser::Filesystem for GitFsAdapter {
         flags: Option<u32>,
         reply: ReplyAttr,
     ) {
+        let ud = uid.unwrap_or(42059);
+        let gd = gid.unwrap_or(42059);
+        let sz = size.unwrap_or(42059);
+        let handle = fh.unwrap_or(42059);
+        let mode = mode.unwrap_or(42059);
+        let flgs = flags.unwrap_or(42059);
+        tracing::info!(
+            "Setattr - {ino} size: {sz} fh: {handle} mode: {mode}, flags: {flgs}, uid: {ud}, gid: {gd}"
+        );
         let fs_arc = self.getfs();
         let fs = match fs_arc.lock() {
             Ok(fs) => fs,
@@ -785,14 +794,10 @@ impl fuser::Filesystem for GitFsAdapter {
         };
 
         if let Some(size) = size
-            && let Some(fh) = fh
+            && let Err(e) = fs.truncate(ino, size, fh)
         {
-            if let Err(e) = fs.truncate(ino, size, fh) {
-                reply.error(errno_from_anyhow(&e));
-                return;
-            } else {
-                attr.size = size;
-            }
+            reply.error(errno_from_anyhow(&e));
+            return;
         }
 
         reply.attr(&TTL, &attr.into());
