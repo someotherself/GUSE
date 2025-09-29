@@ -61,23 +61,14 @@ pub fn open_git(
         let parent_oid = fs.parent_commit_build_session(ino)?;
         let build_root = fs.get_path_to_build_folder(ino)?;
 
-        let session = {
-            let repo = fs.get_repo(ino.to_norm_u64())?;
-            let mut repo = repo.lock().map_err(|_| anyhow!("Lock poisoned"))?;
-            repo.get_or_init_build_session(parent_oid, &build_root)?
-        };
-        let file_path = session.finish_path(fs, ino)?;
-
-        let path = if file_path.exists() {
-            file_path
-        } else {
+        let path = {
             let mut found = None;
             let dentries = fs.list_dentries_for_inode(ino)?;
             for (parent_ino, name) in dentries {
+                let repo = fs.get_repo(ino.to_norm_u64())?;
                 let session = {
                     let parent_oid = fs.parent_commit_build_session(parent_ino.into())?;
                     let build_root = fs.get_path_to_build_folder(ino)?;
-                    let repo = fs.get_repo(ino.to_norm_u64())?;
                     let mut repo = repo.lock().map_err(|_| anyhow!("Lock poisoned"))?;
                     repo.get_or_init_build_session(parent_oid, &build_root)?
                 };

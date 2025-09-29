@@ -323,8 +323,9 @@ impl MetaDb {
             .query_map(params![ino_i64], |row| {
                 let parent_i64: i64 = row.get(0)?;
                 let name: String = row.get(1)?;
-                let parent_u64 = u64::try_from(parent_i64)
-                    .map_err(|_| rusqlite::Error::IntegralValueOutOfRange(parent_i64 as usize, parent_i64))?;
+                let parent_u64 = u64::try_from(parent_i64).map_err(|_| {
+                    rusqlite::Error::IntegralValueOutOfRange(parent_i64 as usize, parent_i64)
+                })?;
                 Ok((parent_u64, name))
             })?
             .collect::<std::result::Result<Vec<_>, _>>()

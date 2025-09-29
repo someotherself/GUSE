@@ -466,10 +466,11 @@ impl fuser::Filesystem for GitFsAdapter {
         }
 
         // Only create the entries when starting from offset 0 or after buffer was filled
-        if {
+        let res = {
             let state = state_arc.lock().unwrap();
             state.dir_stream.is_none()
-        } {
+        };
+        if res {
             let res_entries = fs.readdir(ino);
             let gitfs_entries = match res_entries {
                 Ok(ent) => ent,

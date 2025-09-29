@@ -1975,7 +1975,12 @@ impl GitFs {
         conn.remove_db_record(parent_ino.to_norm_u64(), target_name)
     }
 
-    fn update_db_record(&self, old_parent: NormalIno, old_name: &str, node: StorageNode) -> anyhow::Result<()> {
+    fn update_db_record(
+        &self,
+        old_parent: NormalIno,
+        old_name: &str,
+        node: StorageNode,
+    ) -> anyhow::Result<()> {
         let conn_arc = {
             let repo = &self.get_repo(node.attr.ino)?;
             let repo = repo.lock().map_err(|_| anyhow!("Lock poisoned"))?;
