@@ -5,6 +5,7 @@ use crate::{
     fs::{
         FileAttr, GitFs, REPO_SHIFT, build_attr_dir,
         fileattr::{InoFlag, dir_attr},
+        meta_db::MetaDb,
     },
     inodes::{NormalIno, VirtualIno},
 };
@@ -47,11 +48,13 @@ pub fn lookup_repo(fs: &GitFs, parent: NormalIno, name: &str) -> anyhow::Result<
         // It will always be a yyyy-mm folder
         // Build blank attr for it
         let res = {
-            let repo = repo.lock().map_err(|_| anyhow!("Lock poisoned"))?;
-            repo.connection
-                .lock()
-                .map_err(|_| anyhow!("Lock poisoned"))?
-                .get_ino_from_db(parent.into(), name)
+            let repo_id = GitFs::ino_to_repo_id(parent.into());
+            let repo_db = fs
+                .conn_list
+                .get(&repo_id)
+                .ok_or_else(|| anyhow::anyhow!("no db"))?;
+            let conn = repo_db.ro_pool.get()?;
+            MetaDb::get_ino_from_db(&conn, parent.into(), name)
         };
         let child_ino = match res {
             Ok(i) => i,

@@ -9,20 +9,19 @@ use std::{
     collections::{BTreeMap, HashMap, HashSet, hash_map::Entry},
     path::Path,
     sync::{
-        Arc, Mutex,
+        Arc,
         atomic::{AtomicBool, AtomicUsize},
     },
 };
 
 use crate::{
-    fs::{ObjectAttr, builds::BuildSession, meta_db::MetaDb},
+    fs::{ObjectAttr, builds::BuildSession},
     inodes::VirtualIno,
 };
 
 pub struct GitRepo {
     // Caching the database connection for reads.
     // Must be refreshed after every write.
-    pub connection: Arc<Mutex<MetaDb>>,
     pub repo_dir: String,
     pub repo_id: u16,
     pub inner: Repository,

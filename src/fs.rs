@@ -12,6 +12,7 @@ use std::{
 };
 
 use anyhow::{Context, anyhow, bail};
+use dashmap::DashMap;
 use git2::{FileMode, ObjectType, Oid};
 use rusqlite::Connection;
 use tracing::{Level, field, info, instrument};
@@ -20,7 +21,7 @@ use crate::fs::fileattr::{
     CreateFileAttr, FileAttr, FileType, InoFlag, ObjectAttr, SetStoredAttr, StorageNode,
     StoredAttr, build_attr_dir, dir_attr, file_attr,
 };
-use crate::fs::meta_db::MetaDb;
+use crate::fs::meta_db::{DbWriteMsg, MetaDb, oneshot};
 use crate::fs::ops::readdir::{DirectoryEntry, DirectoryEntryPlus, DirectoryStreamCookie};
 use crate::fs::repo::{GitRepo, VirtualNode};
 use crate::inodes::{Inodes, NormalIno, VirtualIno};
@@ -114,9 +115,10 @@ pub struct GitFs {
     pub repos_dir: PathBuf,
     /// Use helpers `self.insert_repo` and `self.delete_repo`
     repos_list: BTreeMap<u16, Arc<Mutex<GitRepo>>>, // <repo_id, repo>
+    conn_list: DashMap<u16, Arc<MetaDb>>, // <repo_id, connections>
     /// Use helpers `self.insert_repo` and `self.delete_repo`
     repos_map: HashMap<String, u16>, // <repo_name, repo_id>
-    next_inode: HashMap<u16, AtomicU64>, // Each Repo has a set of inodes
+    next_inode: HashMap<u16, AtomicU64>,  // Each Repo has a set of inodes
     current_handle: AtomicU64,
     pub handles: RwLock<HashMap<u64, Handle>>, // (fh, Handle)
     read_only: bool,
@@ -229,6 +231,7 @@ impl GitFs {
         let mut fs = Self {
             repos_dir,
             repos_list: BTreeMap::new(),
+            conn_list: DashMap::new(),
             repos_map: HashMap::new(),
             read_only,
             handles: RwLock::new(HashMap::new()),
@@ -287,21 +290,63 @@ impl GitFs {
         Ok(Arc::from(Mutex::new(fs)))
     }
 
-    pub fn load_repo(&mut self, repo_name: &str) -> anyhow::Result<()> {
+    /// Loads the repo with empty database.
+    fn load_repo_connection(&mut self, repo_name: &str) -> anyhow::Result<u16> {
         let repo_path = self.repos_dir.join(repo_name);
 
-        let mut connection = self.init_meta_db(repo_name)?;
-        connection.ensure_root()?;
-
-        let repo = git2::Repository::init(&repo_path)?;
-        let mut res_inodes = HashSet::new();
-
+        // Assign repo id
         let repo_id = self.next_repo_id();
         let repo_ino = (repo_id as u64) << REPO_SHIFT;
         self.next_inode
             .insert(repo_id, AtomicU64::from(repo_ino + 1));
 
-        // Write repo root to db
+        let db_path = repo_path.join(META_STORE);
+        // Initialize the database (create file and schema)
+        self.init_meta_db(&db_path)?;
+        // Initialize the ro_pool and writer_tx
+        let db_conn = meta_db::new_repo_db(&db_path)?;
+        self.conn_list.insert(repo_id, db_conn);
+
+        let repo = git2::Repository::init(&repo_path)?;
+
+        let mut git_repo = GitRepo {
+            repo_dir: repo_name.to_owned(),
+            repo_id,
+            inner: repo,
+            head: None,
+            snapshots: BTreeMap::new(),
+            res_inodes: HashSet::new(),
+            vdir_cache: BTreeMap::new(),
+            build_sessions: HashMap::new(),
+        };
+
+        // Find HEAD in the git repo
+        {
+            let head_res = git_repo.inner.revparse_single("HEAD");
+            if head_res.is_ok() {
+                git_repo.head = Some(head_res?.id());
+            };
+        }
+        if git_repo.head.is_some() {
+            git_repo.refresh_snapshots()?;
+        }
+
+        let repo_rc = Arc::from(Mutex::from(git_repo));
+        self.insert_repo(repo_rc, repo_name, repo_id)?;
+        Ok(repo_id)
+    }
+
+    /// Create folders and write entries in DB. Also clears the build folder
+    ///
+    /// It write ROOT_INO, Repo Root, Live and Build folder in db
+    fn populate_repo_database(&self, repo_id: u16, repo_name: &str) -> anyhow::Result<()> {
+        let repo_ino = GitFs::repo_id_to_ino(repo_id);
+        let repo_path = self.repos_dir.join(repo_name);
+
+        // Write the ROOT_INO in db
+        self.db_ensure_root(repo_ino)?;
+
+        // Write the Repo Root in db
         let mut repo_attr: FileAttr = dir_attr(InoFlag::RepoRoot).into();
         repo_attr.ino = repo_ino;
         let nodes: Vec<StorageNode> = vec![StorageNode {
@@ -309,7 +354,7 @@ impl GitFs {
             name: repo_name.into(),
             attr: repo_attr.into(),
         }];
-        connection.write_inodes_to_db(nodes)?;
+        self.write_inodes_to_db(nodes)?;
 
         // Clean the build folder
         let build_name = "build".to_string();
@@ -329,8 +374,13 @@ impl GitFs {
         let live_attr = build_attr_dir(live_ino, InoFlag::LiveRoot, st_mode);
         let build_attr = build_attr_dir(build_ino, InoFlag::BuildRoot, st_mode);
 
-        res_inodes.insert(live_ino);
-        res_inodes.insert(build_ino);
+        {
+            let repo = self.get_repo(repo_ino)?;
+            let mut guard = repo.lock().map_err(|_| anyhow!("Lock poisoned"))?;
+            guard.res_inodes.insert(live_ino);
+            guard.res_inodes.insert(build_ino);
+        }
+
         let nodes: Vec<StorageNode> = vec![
             StorageNode {
                 parent_ino: repo_ino,
@@ -344,36 +394,19 @@ impl GitFs {
             },
         ];
 
-        connection.write_inodes_to_db(nodes)?;
+        self.write_inodes_to_db(nodes)?;
 
         // Create build folder again
         std::fs::create_dir(&build_path)?;
         std::fs::set_permissions(&build_path, std::fs::Permissions::from_mode(0o775))?;
 
-        let mut git_repo = GitRepo {
-            connection: Arc::new(Mutex::new(connection)),
-            repo_dir: repo_name.to_owned(),
-            repo_id,
-            inner: repo,
-            head: None,
-            snapshots: BTreeMap::new(),
-            res_inodes,
-            vdir_cache: BTreeMap::new(),
-            build_sessions: HashMap::new(),
-        };
+        Ok(())
+    }
 
-        {
-            let head_res = git_repo.inner.revparse_single("HEAD");
-            if head_res.is_ok() {
-                git_repo.head = Some(head_res?.id());
-            };
-        }
-        if git_repo.head.is_some() {
-            git_repo.refresh_snapshots()?;
-        }
+    pub fn load_repo(&mut self, repo_name: &str) -> anyhow::Result<()> {
+        let repo_id = self.load_repo_connection(repo_name)?;
 
-        let repo_rc = Arc::from(Mutex::from(git_repo));
-        self.insert_repo(repo_rc, repo_name, repo_id)?;
+        self.populate_repo_database(repo_id, repo_name)?;
         Ok(())
     }
 
@@ -416,17 +449,24 @@ impl GitFs {
     pub fn new_repo(&mut self, repo_name: &str) -> anyhow::Result<Arc<Mutex<GitRepo>>> {
         let repo_path = self.repos_dir.join(repo_name);
         if repo_path.exists() {
-            bail!("Repo already exists");
+            bail!("Re1po already exists");
         }
         std::fs::create_dir(&repo_path)?;
         std::fs::set_permissions(&repo_path, std::fs::Permissions::from_mode(0o775))?;
-        let mut connection = self.init_meta_db(repo_name)?;
-        connection.ensure_root()?;
 
         let repo_id = self.next_repo_id();
         let repo_ino = GitFs::repo_id_to_ino(repo_id);
         self.next_inode
             .insert(repo_id, AtomicU64::from(repo_ino + 1));
+
+        // Initialite database
+        // TODO: Take path and don't return anything
+        let db_path = repo_path.join(META_STORE);
+        self.db_ensure_root(repo_ino)?;
+
+        let dn_conn = meta_db::new_repo_db(db_path)?;
+        self.conn_list.insert(repo_id, dn_conn);
+        tracing::info!("db connections: {}", self.conn_list.len());
 
         let mut repo_attr: FileAttr = dir_attr(InoFlag::RepoRoot).into();
         repo_attr.ino = repo_ino;
@@ -465,12 +505,8 @@ impl GitFs {
             name: build_name,
             attr: build_attr.into(),
         });
-        connection.write_inodes_to_db(nodes)?;
-
-        let connection = Arc::from(Mutex::from(connection));
 
         let git_repo = GitRepo {
-            connection,
             repo_dir: repo_name.to_owned(),
             repo_id,
             inner: repo,
@@ -486,58 +522,14 @@ impl GitFs {
         Ok(repo_rc)
     }
 
-    // pub fn open_repo(&self, repo_name: &str) -> anyhow::Result<GitRepo> {
-    //     let repo_path = PathBuf::from(&self.repos_dir).join(repo_name).join("git");
-    //     let repo = Repository::open(&repo_path)?;
-    //     let head = repo.revparse_single("HEAD")?.id();
-    //     let db = self.open_meta_db(repo_name)?;
-    //     db.execute_batch("PRAGMA foreign_keys = ON;")?;
-    //
-    //     let mut stmt = db.conn.prepare(
-    //         "SELECT inode
-    //            FROM inode_map
-    //           LIMIT 1",
-    //     )?;
-
-    //     let opt: Option<i64> = stmt.query_row(params![], |row| row.get(0)).optional()?;
-
-    //     let ino = opt.ok_or_else(|| anyhow!("no inodes in inode_map"))?;
-    //     let repo_id = (ino >> REPO_SHIFT) as u16;
-    //     drop(stmt);
-
-    //     Ok(GitRepo {
-    //         connection: Arc::from(Mutex::from(db)),
-    //         repo_dir: repo_name.to_string(),
-    //         repo_id,
-    //         inner: repo,
-    //         head: Some(head),
-    //         snapshots: BTreeMap::new(),
-    //         res_inodes: HashSet::new(),
-    //         vdir_cache: BTreeMap::new(),
-    //         build_sessions: HashMap::new(),
-    //     })
-    // }
-
-    // pub fn open_meta_db<P: AsRef<Path>>(&self, repo_name: P) -> anyhow::Result<MetaDb> {
-    //     let db_path = PathBuf::from(&self.repos_dir)
-    //         .join(repo_name)
-    //         .join(META_STORE);
-    //     let conn = Connection::open(&db_path)?;
-    //     conn.execute_batch("PRAGMA foreign_keys = ON;")?;
-    //     Ok(MetaDb { conn })
-    // }
-
     /// Must take in the name of the folder of the REPO --
     /// data_dir/repo_name1
     ///
     ///------------------├── fs_meta.db
     ///
     ///------------------└── .git/
-    pub fn init_meta_db<P: AsRef<Path>>(&self, repo_name: P) -> anyhow::Result<MetaDb> {
-        let db_path = PathBuf::from(&self.repos_dir)
-            .join(repo_name)
-            .join(META_STORE);
-        if db_path.exists() {
+    pub fn init_meta_db<P: AsRef<Path>>(&self, db_path: P) -> anyhow::Result<()> {
+        if db_path.as_ref().exists() {
             std::fs::remove_file(&db_path)?;
         }
         let conn = Connection::open(&db_path)?;
@@ -607,7 +599,7 @@ impl GitFs {
             CREATE INDEX dentries_by_target ON dentries(target_inode);
             "#,
         )?;
-        Ok(MetaDb { conn })
+        Ok(())
     }
 
     #[instrument(level = "debug", skip(self), fields(ino = %ino), ret(level = Level::DEBUG), err(Display))]
@@ -1386,15 +1378,15 @@ impl GitFs {
             return Ok(path_to_repo);
         }
 
-        let conn_arc = {
-            let repo = &self.get_repo(parent.into())?;
-            let repo = repo.lock().map_err(|_| anyhow!("Lock poisoned"))?;
-            std::sync::Arc::clone(&repo.connection)
-        };
+        let repo_id = GitFs::ino_to_repo_id(parent.into());
+        let repo_db = self
+            .conn_list
+            .get(&repo_id)
+            .ok_or_else(|| anyhow::anyhow!("no db"))?;
 
         let parent_name = {
-            let conn = conn_arc.lock().map_err(|_| anyhow!("Lock poisoned"))?;
-            conn.get_parent_name_from_ino(parent.into())?
+            let conn = repo_db.ro_pool.get()?;
+            MetaDb::get_parent_name_from_ino(&conn, parent.into())?
         };
 
         let mut out: Vec<String> = vec![];
@@ -1407,8 +1399,9 @@ impl GitFs {
         let max_loops = 1000;
         for _ in 0..max_loops {
             (cur_par_ino, cur_par_name) = {
-                let conn = conn_arc.lock().map_err(|_| anyhow!("Lock poisoned"))?;
-                conn.get_parent_name_from_child(cur_par_ino, &cur_par_name)?
+                // TODO: Can re-use the previous one?
+                let conn = repo_db.ro_pool.get()?;
+                MetaDb::get_parent_name_from_child(&conn, cur_par_ino, &cur_par_name)?
             };
 
             // live folder must be skipped. It doesn't exist on disk
@@ -1561,15 +1554,33 @@ impl GitFs {
     }
 
     pub fn update_db_metadata(&self, stored_attr: SetStoredAttr) -> anyhow::Result<FileAttr> {
-        let ino = stored_attr.ino;
-        let conn_arc = {
-            let repo = &self.get_repo(ino)?;
-            let repo = repo.lock().map_err(|_| anyhow!("Lock poisoned"))?;
-            std::sync::Arc::clone(&repo.connection)
+        let target_ino = stored_attr.ino;
+
+        // Update the DB
+        let repo_id = GitFs::ino_to_repo_id(target_ino);
+        let writer_tx = {
+            let guard = self
+                .conn_list
+                .get(&repo_id)
+                .ok_or_else(|| anyhow::anyhow!("No db for repo id {repo_id}"))?;
+            guard.writer_tx.clone()
         };
-        let mut conn = conn_arc.lock().map_err(|_| anyhow!("Lock poisoned"))?;
-        conn.update_inodes_table(stored_attr)?;
-        let stored_attr = conn.get_metadata(ino)?;
+
+        let (tx, rx) = oneshot::<()>();
+
+        let msg = DbWriteMsg::UpdateMetadata {
+            attr: stored_attr,
+            resp: tx,
+        };
+        writer_tx
+            .send(msg)
+            .context("writer_tx error on update_db_metadata")?;
+
+        rx.recv()
+            .context("writer_rx disc on update_db_metadata")??;
+
+        // Fetch the new metadata
+        let stored_attr = self.get_metadata(target_ino)?;
         Ok(stored_attr)
     }
 
@@ -1721,73 +1732,63 @@ impl GitFs {
             return Ok(ROOT_INO);
         }
 
-        let conn_arc = {
-            let repo = &self.get_repo(ino)?;
-            let repo = repo.lock().map_err(|_| anyhow!("Lock poisoned"))?;
-            std::sync::Arc::clone(&repo.connection)
-        };
-        let conn = conn_arc.lock().map_err(|_| anyhow!("Lock poisoned"))?;
-        conn.get_dir_parent(ino.into())
+        let repo_id = GitFs::ino_to_repo_id(ino);
+        let repo_db = self
+            .conn_list
+            .get(&repo_id)
+            .ok_or_else(|| anyhow::anyhow!("no db"))?;
+        let conn = repo_db.ro_pool.get()?;
+        MetaDb::get_dir_parent(&conn, ino.into())
     }
 
     pub fn count_children(&self, ino: NormalIno) -> anyhow::Result<usize> {
-        let conn_arc = {
-            let repo = &self.get_repo(ino.to_norm_u64())?;
-            let repo = repo.lock().map_err(|_| anyhow!("Lock poisoned"))?;
-            std::sync::Arc::clone(&repo.connection)
-        };
-
-        let conn = conn_arc.lock().map_err(|_| anyhow!("Lock poisoned"))?;
-        conn.count_children(ino.to_norm_u64())
+        let repo_id = GitFs::ino_to_repo_id(ino.into());
+        let repo_db = self
+            .conn_list
+            .get(&repo_id)
+            .ok_or_else(|| anyhow::anyhow!("no db"))?;
+        let conn = repo_db.ro_pool.get()?;
+        MetaDb::count_children(&conn, ino.to_norm_u64())
     }
 
     pub fn read_children(&self, parent_ino: NormalIno) -> anyhow::Result<Vec<DirectoryEntry>> {
-        let conn_arc = {
-            let repo = &self.get_repo(parent_ino.to_norm_u64())?;
-            let repo = repo.lock().map_err(|_| anyhow!("Lock poisoned"))?;
-            std::sync::Arc::clone(&repo.connection)
-        };
-
-        let conn = conn_arc.lock().map_err(|_| anyhow!("Lock poisoned"))?;
-        conn.read_children(parent_ino.to_norm_u64())
+        let repo_id = GitFs::ino_to_repo_id(parent_ino.into());
+        let repo_db = self
+            .conn_list
+            .get(&repo_id)
+            .ok_or_else(|| anyhow::anyhow!("no db"))?;
+        let conn = repo_db.ro_pool.get()?;
+        MetaDb::read_children(&conn, parent_ino.to_norm_u64())
     }
 
     pub fn list_dentries_for_inode(&self, ino: NormalIno) -> anyhow::Result<Vec<(u64, String)>> {
-        let conn_arc = {
-            let repo = &self.get_repo(ino.to_norm_u64())?;
-            let repo = repo.lock().map_err(|_| anyhow!("Lock poisoned"))?;
-            std::sync::Arc::clone(&repo.connection)
-        };
-
-        let conn = conn_arc.lock().map_err(|_| anyhow!("Lock poisoned"))?;
-        conn.list_dentries_for_inode(ino.to_norm_u64())
+        let repo_id = GitFs::ino_to_repo_id(ino.into());
+        let repo_db = self
+            .conn_list
+            .get(&repo_id)
+            .ok_or_else(|| anyhow::anyhow!("no db"))?;
+        let conn = repo_db.ro_pool.get()?;
+        MetaDb::list_dentries_for_inode(&conn, ino.to_norm_u64())
     }
 
     pub fn get_all_parents(&self, ino: u64) -> anyhow::Result<Vec<u64>> {
-        let conn_arc = {
-            let repo = &self.get_repo(ino)?;
-            let repo = repo.lock().map_err(|_| anyhow!("Lock poisoned"))?;
-            std::sync::Arc::clone(&repo.connection)
-        };
-
-        let conn = conn_arc.lock().map_err(|_| anyhow!("Lock poisoned"))?;
-        conn.get_all_parents(ino)
+        let repo_id = GitFs::ino_to_repo_id(ino);
+        let repo_db = self
+            .conn_list
+            .get(&repo_id)
+            .ok_or_else(|| anyhow::anyhow!("no db"))?;
+        let conn = repo_db.ro_pool.get()?;
+        MetaDb::get_all_parents(&conn, ino)
     }
 
-    /// Only used in 2 situatsions:
-    ///
-    /// On files when it will 100% only have one parent (git objects)
-    ///
-    /// Or when ommiting other parents doesn't matter (writing to a hard link)
     pub fn get_single_parent(&self, ino: u64) -> anyhow::Result<u64> {
-        let conn_arc = {
-            let repo = &self.get_repo(ino)?;
-            let repo = repo.lock().map_err(|_| anyhow!("Lock poisoned"))?;
-            std::sync::Arc::clone(&repo.connection)
-        };
-
-        let conn = conn_arc.lock().map_err(|_| anyhow!("Lock poisoned"))?;
-        conn.get_single_parent(ino)
+        let repo_id = GitFs::ino_to_repo_id(ino);
+        let repo_db = self
+            .conn_list
+            .get(&repo_id)
+            .ok_or_else(|| anyhow::anyhow!("no db"))?;
+        let conn = repo_db.ro_pool.get()?;
+        MetaDb::get_single_parent(&conn, ino)
     }
 
     fn repo_id_to_ino(repo_id: u16) -> u64 {
@@ -1836,13 +1837,13 @@ impl GitFs {
     }
 
     fn exists_by_name(&self, parent: u64, name: &str) -> anyhow::Result<Option<u64>> {
-        let conn_arc = {
-            let repo = &self.get_repo(parent)?;
-            let repo = repo.lock().map_err(|_| anyhow!("Lock poisoned"))?;
-            std::sync::Arc::clone(&repo.connection)
-        };
-        let conn = conn_arc.lock().map_err(|_| anyhow!("Lock poisoned"))?;
-        conn.exists_by_name(parent.into(), name)
+        let repo_id = GitFs::ino_to_repo_id(parent);
+        let repo_db = self
+            .conn_list
+            .get(&repo_id)
+            .ok_or_else(|| anyhow::anyhow!("no db"))?;
+        let conn = repo_db.ro_pool.get()?;
+        MetaDb::exists_by_name(&conn, parent.into(), name)
     }
 
     pub fn get_metadata_by_name(
@@ -1850,33 +1851,33 @@ impl GitFs {
         parent_ino: NormalIno,
         child_name: &str,
     ) -> anyhow::Result<FileAttr> {
-        let conn_arc = {
-            let repo = &self.get_repo(parent_ino.to_norm_u64())?;
-            let repo = repo.lock().map_err(|_| anyhow!("Lock poisoned"))?;
-            std::sync::Arc::clone(&repo.connection)
-        };
-        let conn = conn_arc.lock().map_err(|_| anyhow!("Lock poisoned"))?;
-        conn.get_metadata_by_name(parent_ino.to_norm_u64(), child_name)
+        let repo_id = GitFs::ino_to_repo_id(parent_ino.into());
+        let repo_db = self
+            .conn_list
+            .get(&repo_id)
+            .ok_or_else(|| anyhow::anyhow!("no db"))?;
+        let conn = repo_db.ro_pool.get()?;
+        MetaDb::get_metadata_by_name(&conn, parent_ino.to_norm_u64(), child_name)
     }
 
     pub fn get_metadata(&self, target_ino: u64) -> anyhow::Result<FileAttr> {
-        let conn_arc = {
-            let repo = &self.get_repo(target_ino)?;
-            let repo = repo.lock().map_err(|_| anyhow!("Lock poisoned"))?;
-            std::sync::Arc::clone(&repo.connection)
-        };
-        let conn = conn_arc.lock().map_err(|_| anyhow!("Lock poisoned"))?;
-        conn.get_metadata(target_ino)
+        let repo_id = GitFs::ino_to_repo_id(target_ino);
+        let repo_db = self
+            .conn_list
+            .get(&repo_id)
+            .ok_or_else(|| anyhow::anyhow!("no db"))?;
+        let conn = repo_db.ro_pool.get()?;
+        MetaDb::get_metadata(&conn, target_ino)
     }
 
     pub fn get_stored_attr_by_name(&self, target_ino: u64) -> anyhow::Result<StoredAttr> {
-        let conn_arc = {
-            let repo = &self.get_repo(target_ino)?;
-            let repo = repo.lock().map_err(|_| anyhow!("Lock poisoned"))?;
-            std::sync::Arc::clone(&repo.connection)
-        };
-        let conn = conn_arc.lock().map_err(|_| anyhow!("Lock poisoned"))?;
-        conn.get_storage_node_from_db(target_ino)
+        let repo_id = GitFs::ino_to_repo_id(target_ino);
+        let repo_db = self
+            .conn_list
+            .get(&repo_id)
+            .ok_or_else(|| anyhow::anyhow!("no db"))?;
+        let conn = repo_db.ro_pool.get()?;
+        MetaDb::get_storage_node_from_db(&conn, target_ino)
     }
 
     /// Takes Inodes as virtual inodes do not "exist"
@@ -1939,26 +1940,42 @@ impl GitFs {
     }
 
     fn get_ino_from_db(&self, parent: u64, name: &str) -> anyhow::Result<u64> {
-        let parent: Inodes = parent.into();
-        let conn_arc = {
-            let repo = &self.get_repo(parent.into())?;
-            let repo = repo.lock().map_err(|_| anyhow!("Lock poisoned"))?;
-            std::sync::Arc::clone(&repo.connection)
-        };
-        let conn = conn_arc.lock().map_err(|_| anyhow!("Lock poisoned"))?;
-        conn.get_ino_from_db(parent.into(), name)
+        let repo_id = GitFs::ino_to_repo_id(parent);
+        let repo_db = self
+            .conn_list
+            .get(&repo_id)
+            .ok_or_else(|| anyhow::anyhow!("no db"))?;
+        let conn = repo_db.ro_pool.get()?;
+        MetaDb::get_ino_from_db(&conn, parent, name)
     }
 
     pub fn update_size_in_db(&self, ino: NormalIno, size: u64) -> anyhow::Result<()> {
-        let conn_arc = {
-            let repo = &self.get_repo(ino.into())?;
-            let repo = repo.lock().map_err(|_| anyhow!("Lock poisoned"))?;
-            std::sync::Arc::clone(&repo.connection)
+        let repo_id = GitFs::ino_to_repo_id(ino.into());
+        let writer_tx = {
+            let guard = self
+                .conn_list
+                .get(&repo_id)
+                .ok_or_else(|| anyhow::anyhow!("No db for repo id {repo_id}"))?;
+            guard.writer_tx.clone()
         };
-        let conn = conn_arc.lock().map_err(|_| anyhow!("Lock poisoned"))?;
-        conn.update_size_in_db(ino.into(), size)
+
+        let (tx, rx) = oneshot::<()>();
+
+        let msg = DbWriteMsg::UpdateSize {
+            ino,
+            size,
+            resp: tx,
+        };
+        writer_tx
+            .send(msg)
+            .context("writer_tx error on update_size_in_db")?;
+
+        rx.recv().context("writer_rx disc on update_size_in_db")??;
+
+        Ok(())
     }
 
+    // TODO: DB WRITER - RemoveRecord { parent_ino: NormalIno, target_name: String }
     /// Removes the directory entry (from dentries) for the target
     ///
     /// If it's the only directory entry for this inode, it will remove the inode entry as well
@@ -1966,13 +1983,29 @@ impl GitFs {
     /// TODO: Do not delete inode entry only when open fh are 0
     /// TODO: Perform that in the fn release - using a channel
     fn remove_db_record(&self, parent_ino: NormalIno, target_name: &str) -> anyhow::Result<()> {
-        let conn_arc = {
-            let repo = &self.get_repo(parent_ino.to_norm_u64())?;
-            let repo = repo.lock().map_err(|_| anyhow!("Lock poisoned"))?;
-            std::sync::Arc::clone(&repo.connection)
+        let repo_id = GitFs::ino_to_repo_id(parent_ino.into());
+        let writer_tx = {
+            let guard = self
+                .conn_list
+                .get(&repo_id)
+                .ok_or_else(|| anyhow::anyhow!("No db for repo id {repo_id}"))?;
+            guard.writer_tx.clone()
         };
-        let mut conn = conn_arc.lock().map_err(|_| anyhow!("Lock poisoned"))?;
-        conn.remove_db_record(parent_ino.to_norm_u64(), target_name)
+
+        let (tx, rx) = oneshot::<()>();
+
+        let msg = DbWriteMsg::RemoveRecord {
+            parent_ino,
+            target_name: target_name.to_string(),
+            resp: tx,
+        };
+        writer_tx
+            .send(msg)
+            .context("writer_tx error on remove_db_record")?;
+
+        rx.recv().context("writer_rx disc on remove_db_record")??;
+
+        Ok(())
     }
 
     fn update_db_record(
@@ -1981,13 +2014,30 @@ impl GitFs {
         old_name: &str,
         node: StorageNode,
     ) -> anyhow::Result<()> {
-        let conn_arc = {
-            let repo = &self.get_repo(node.attr.ino)?;
-            let repo = repo.lock().map_err(|_| anyhow!("Lock poisoned"))?;
-            std::sync::Arc::clone(&repo.connection)
+        let repo_id = GitFs::ino_to_repo_id(old_parent.into());
+        let writer_tx = {
+            let guard = self
+                .conn_list
+                .get(&repo_id)
+                .ok_or_else(|| anyhow::anyhow!("No db for repo id {repo_id}"))?;
+            guard.writer_tx.clone()
         };
-        let mut conn = conn_arc.lock().map_err(|_| anyhow!("Lock poisoned"))?;
-        conn.update_db_record(old_parent.into(), old_name, node)
+
+        let (tx, rx) = oneshot::<()>();
+
+        let msg = DbWriteMsg::UpdateRecord {
+            old_parent,
+            old_name: old_name.to_string(),
+            node,
+            resp: tx,
+        };
+        writer_tx
+            .send(msg)
+            .context("writer_tx error on update_db_record")?;
+
+        rx.recv().context("writer_rx disc on update_db_record")??;
+
+        Ok(())
     }
 
     pub fn write_dentry(
@@ -1996,24 +2046,33 @@ impl GitFs {
         target_ino: NormalIno,
         target_name: &str,
     ) -> anyhow::Result<()> {
-        let parent_name = self.get_single_parent(parent_ino.to_norm_u64())?;
-        tracing::info!(
-            "Writing entry: {} w/ new parent {}",
-            target_ino,
-            parent_name
-        );
-
-        let conn_arc = {
-            let repo = &self.get_repo(parent_ino.to_norm_u64())?;
-            let repo = repo.lock().map_err(|_| anyhow!("Lock poisoned"))?;
-            std::sync::Arc::clone(&repo.connection)
+        let repo_id = GitFs::ino_to_repo_id(parent_ino.into());
+        let writer_tx = {
+            let guard = self
+                .conn_list
+                .get(&repo_id)
+                .ok_or_else(|| anyhow::anyhow!("No db for repo id {repo_id}"))?;
+            guard.writer_tx.clone()
         };
-        let mut conn = conn_arc.lock().map_err(|_| anyhow!("Lock poisoned"))?;
-        conn.write_dentry(
-            parent_ino.to_norm_u64(),
-            target_ino.to_norm_u64(),
-            target_name,
-        )
+
+        let (tx, rx) = oneshot::<()>();
+
+        let msg = DbWriteMsg::WriteDentry {
+            parent_ino,
+            target_ino,
+            target_name: target_name.to_string(),
+            resp: tx,
+        };
+        writer_tx
+            .send(msg)
+            .context("writer_tx error on write_dentry")?;
+
+        rx.recv().context(format!(
+            "writer_rx disc on write_dentry for target {}",
+            target_name
+        ))??;
+
+        Ok(())
     }
 
     #[instrument(level = "debug", skip(self), err(Display))]
@@ -2035,36 +2094,36 @@ impl GitFs {
 
         Ok(cur_oid)
     }
+
     // TODO: FIX NEW SQL
     fn get_path_from_db(&self, ino: NormalIno) -> anyhow::Result<PathBuf> {
-        let conn_arc = {
-            let repo = &self.get_repo(ino.into())?;
-            let repo = repo.lock().map_err(|_| anyhow!("Lock poisoned"))?;
-            std::sync::Arc::clone(&repo.connection)
-        };
-        let conn = conn_arc.lock().map_err(|_| anyhow!("Lock poisoned"))?;
-        conn.get_path_from_db(ino.into())
+        let repo_id = GitFs::ino_to_repo_id(ino.into());
+        let repo_db = self
+            .conn_list
+            .get(&repo_id)
+            .ok_or_else(|| anyhow::anyhow!("no db"))?;
+        let conn = repo_db.ro_pool.get()?;
+        MetaDb::get_path_from_db(&conn, ino.into())
     }
 
     fn get_oid_from_db(&self, ino: u64) -> anyhow::Result<Oid> {
-        let conn_arc = {
-            let repo = &self.get_repo(ino)?;
-            let repo = repo.lock().map_err(|_| anyhow!("Lock poisoned"))?;
-            std::sync::Arc::clone(&repo.connection)
-        };
-        let conn = conn_arc.lock().map_err(|_| anyhow!("Lock poisoned"))?;
-        conn.get_oid_from_db(ino)
+        let repo_id = GitFs::ino_to_repo_id(ino);
+        let repo_db = self
+            .conn_list
+            .get(&repo_id)
+            .ok_or_else(|| anyhow::anyhow!("no db"))?;
+        let conn = repo_db.ro_pool.get()?;
+        MetaDb::get_oid_from_db(&conn, ino)
     }
 
     pub fn get_ino_flag_from_db(&self, ino: NormalIno) -> anyhow::Result<InoFlag> {
-        let conn_arc = {
-            let repo = &self.get_repo(ino.to_norm_u64())?;
-            let repo = repo.lock().map_err(|_| anyhow!("Lock poisoned"))?;
-            std::sync::Arc::clone(&repo.connection)
-        };
-        let conn = conn_arc.lock().map_err(|_| anyhow!("Lock poisoned"))?;
-        let mask: InoFlag = conn
-            .get_ino_flag_from_db(ino.to_norm_u64())?
+        let repo_id = GitFs::ino_to_repo_id(ino.into());
+        let repo_db = self
+            .conn_list
+            .get(&repo_id)
+            .ok_or_else(|| anyhow::anyhow!("no db"))?;
+        let conn = repo_db.ro_pool.get()?;
+        let mask: InoFlag = MetaDb::get_ino_flag_from_db(&conn, ino.to_norm_u64())?
             .try_into()
             .map_err(|_| anyhow!("Invalid ino mask"))?;
         Ok(mask)
@@ -2075,38 +2134,72 @@ impl GitFs {
         if ino.to_norm_u64() == 0 {
             return Ok(FileMode::Tree);
         }
-        let conn_arc = {
-            let repo = &self.get_repo(ino.into())?;
-            let repo = repo.lock().map_err(|_| anyhow!("Lock poisoned"))?;
-            std::sync::Arc::clone(&repo.connection)
-        };
-        let conn = conn_arc.lock().map_err(|_| anyhow!("Lock poisoned"))?;
-        let mode = conn.get_mode_from_db(ino.into())?;
+        let repo_id = GitFs::ino_to_repo_id(ino.into());
+        let repo_db = self
+            .conn_list
+            .get(&repo_id)
+            .ok_or_else(|| anyhow::anyhow!("no db"))?;
+        let conn = repo_db.ro_pool.get()?;
+        let mode = MetaDb::get_mode_from_db(&conn, ino.into())?;
         repo::try_into_filemode(mode).ok_or_else(|| anyhow!("Invalid filemode"))
     }
 
     fn get_name_from_db(&self, ino: u64) -> anyhow::Result<String> {
-        let ino: Inodes = ino.into();
-        let conn_arc = {
-            let repo = &self.get_repo(ino.into())?;
-            let repo = repo.lock().map_err(|_| anyhow!("Lock poisoned"))?;
-            std::sync::Arc::clone(&repo.connection)
+        let repo_id = GitFs::ino_to_repo_id(ino);
+        let repo_db = self
+            .conn_list
+            .get(&repo_id)
+            .ok_or_else(|| anyhow::anyhow!("no db"))?;
+        let conn = repo_db.ro_pool.get()?;
+        MetaDb::get_name_from_db(&conn, ino)
+    }
+
+    fn db_ensure_root(&self, ino: u64) -> anyhow::Result<()> {
+        let repo_id = GitFs::ino_to_repo_id(ino);
+        let writer_tx = {
+            let guard = self
+                .conn_list
+                .get(&repo_id)
+                .ok_or_else(|| anyhow::anyhow!("No db for repo id {repo_id}"))?;
+            guard.writer_tx.clone()
         };
-        let conn = conn_arc.lock().map_err(|_| anyhow!("Lock poisoned"))?;
-        conn.get_name_from_db(ino.into())
+
+        let (tx, rx) = oneshot::<()>();
+        let msg = DbWriteMsg::EnsureRoot { resp: tx };
+
+        writer_tx
+            .send(msg)
+            .context("writer_tx error on ensure_root")?;
+
+        rx.recv().context("writer_rx disc on ensure_root")??;
+
+        Ok(())
     }
 
     fn write_inodes_to_db(&self, nodes: Vec<StorageNode>) -> anyhow::Result<()> {
         if nodes.is_empty() {
             return Ok(());
         }
-        let conn_arc = {
-            let repo = &self.get_repo(nodes[0].parent_ino)?;
-            let repo = repo.lock().map_err(|_| anyhow!("Lock poisoned"))?;
-            std::sync::Arc::clone(&repo.connection)
+
+        let repo_id = GitFs::ino_to_repo_id(nodes[0].attr.ino);
+        let writer_tx = {
+            let guard = self
+                .conn_list
+                .get(&repo_id)
+                .ok_or_else(|| anyhow::anyhow!("No db for repo id {repo_id}"))?;
+            guard.writer_tx.clone()
         };
-        let mut conn = conn_arc.lock().map_err(|_| anyhow!("Lock poisoned"))?;
-        conn.write_inodes_to_db(nodes)
+
+        let (tx, rx) = oneshot::<()>();
+        let msg = DbWriteMsg::WriteInodes { nodes, resp: tx };
+
+        writer_tx
+            .send(msg)
+            .context("writer_tx error on write_dentry")?;
+
+        rx.recv().context("writer_rx disc on write_inodes")??;
+
+        Ok(())
     }
 
     fn get_repo_ino(&self, ino: u64) -> anyhow::Result<u64> {

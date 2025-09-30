@@ -1,8 +1,14 @@
-use std::{collections::HashSet, path::PathBuf};
+use std::{
+    collections::HashSet,
+    path::{Path, PathBuf},
+};
 
 use anyhow::{Context, anyhow, bail};
+use crossbeam_channel::{Receiver, Sender};
 use git2::Oid;
-use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
+use r2d2::Pool;
+use r2d2_sqlite::SqliteConnectionManager;
+use rusqlite::{OptionalExtension, params};
 
 use crate::{
     fs::{
@@ -17,13 +23,195 @@ use crate::{
 };
 
 pub struct MetaDb {
-    pub conn: Connection,
+    pub ro_pool: Pool<SqliteConnectionManager>,
+    pub writer_tx: Sender<DbWriteMsg>,
+}
+
+pub fn init_pragma(conn: &rusqlite::Connection) -> rusqlite::Result<()> {
+    conn.execute_batch(
+        r#"
+        PRAGMA journal_mode=WAL;
+        PRAGMA synchronous=NORMAL;
+        PRAGMA busy_timeout=5000;
+        PRAGMA foreign_keys=ON;
+        PRAGMA temp_store=MEMORY;
+        PRAGMA cache_size=-20000;
+        "#,
+    )
+}
+
+pub fn new_repo_db<P: AsRef<Path>>(db_path: P) -> anyhow::Result<std::sync::Arc<MetaDb>> {
+    let mgr = SqliteConnectionManager::file(&db_path).with_init(|c| init_pragma(c)); // runs for every pooled conn
+
+    let ro_pool = Pool::builder()
+        .max_size(8_u32) // tune
+        .min_idle(Some(2))
+        .build(mgr)?;
+
+    let writer = rusqlite::Connection::open(&db_path)?;
+    init_pragma(&writer)?;
+
+    let (writer_tx, _jh) = spawn_repo_writer(db_path.as_ref().to_path_buf())?;
+
+    Ok(std::sync::Arc::new(MetaDb { ro_pool, writer_tx }))
+}
+
+pub type Resp<T> = crossbeam_channel::Sender<anyhow::Result<T>>;
+
+pub fn oneshot<T>() -> (Resp<T>, crossbeam_channel::Receiver<anyhow::Result<T>>) {
+    crossbeam_channel::bounded(1)
+}
+
+pub enum DbWriteMsg {
+    EnsureRoot {
+        resp: Resp<()>,
+    },
+    WriteDentry {
+        parent_ino: NormalIno,
+        target_ino: NormalIno,
+        target_name: String,
+        resp: Resp<()>,
+    },
+    WriteInodes {
+        nodes: Vec<StorageNode>,
+        resp: Resp<()>,
+    },
+    UpdateMetadata {
+        attr: SetStoredAttr,
+        resp: Resp<()>,
+    },
+    UpdateSize {
+        ino: NormalIno,
+        size: u64,
+        resp: Resp<()>,
+    },
+    UpdateRecord {
+        old_parent: NormalIno,
+        old_name: String,
+        node: StorageNode,
+        resp: Resp<()>,
+    },
+    RemoveRecord {
+        parent_ino: NormalIno,
+        target_name: String,
+        resp: Resp<()>,
+    },
+    ChangeRepoId {
+        repo_id: u16,
+        resp: Resp<()>,
+    },
+}
+
+fn spawn_repo_writer(
+    db_path: PathBuf,
+) -> anyhow::Result<(Sender<DbWriteMsg>, std::thread::JoinHandle<()>)> {
+    let (tx, rx): (Sender<DbWriteMsg>, Receiver<DbWriteMsg>) = crossbeam_channel::unbounded();
+
+    let handle = std::thread::Builder::new()
+        .name(format!("db-writer-{}", db_path.display()))
+        .spawn(move || {
+            let conn = match rusqlite::Connection::open(&db_path) {
+                Ok(c) => c,
+                Err(e) => {
+                    tracing::error!("Writer open failed: {e}");
+                    return;
+                }
+            };
+            if let Err(e) = init_pragma(&conn) {
+                tracing::error!("Writer PRAGMA failed: {e}");
+                return;
+            }
+
+            while let Ok(first) = rx.recv() {
+                if let Err(e) = (|| -> anyhow::Result<()> {
+                    let tx_sql = conn.unchecked_transaction()?;
+                    apply_msg(&tx_sql, first)?;
+                    for _ in 0..64 {
+                        match rx.try_recv() {
+                            Ok(m) => apply_msg(&tx_sql, m)?,
+                            Err(crossbeam_channel::TryRecvError::Empty) => break,
+                            Err(crossbeam_channel::TryRecvError::Disconnected) => break,
+                        }
+                    }
+                    tx_sql.commit()?;
+                    Ok(())
+                })() {
+                    tracing::error!("Writer failed: {e}");
+                }
+            }
+        })?;
+
+    Ok((tx, handle))
+}
+
+fn apply_msg<C>(conn: &C, msg: DbWriteMsg) -> anyhow::Result<()>
+where
+    C: std::ops::Deref<Target = rusqlite::Connection>,
+{
+    match msg {
+        DbWriteMsg::EnsureRoot { resp } => {
+            let res = MetaDb::ensure_root(conn);
+            let _ = resp.send(res.map(|_| ()));
+            Ok(())
+        }
+        DbWriteMsg::WriteDentry {
+            parent_ino,
+            target_ino,
+            target_name,
+            resp,
+        } => {
+            let res =
+                MetaDb::write_dentry(conn, parent_ino.into(), target_ino.into(), &target_name);
+            let _ = resp.send(res.map(|_| ()));
+            Ok(())
+        }
+        DbWriteMsg::WriteInodes { nodes, resp } => {
+            let res = MetaDb::write_inodes_to_db(conn, nodes);
+            let _ = resp.send(res);
+            Ok(())
+        }
+        DbWriteMsg::UpdateMetadata { attr, resp } => {
+            let res = MetaDb::update_inodes_table(conn, attr);
+            let _ = resp.send(res);
+            Ok(())
+        }
+        DbWriteMsg::UpdateSize { ino, size, resp } => {
+            let res = MetaDb::update_size_in_db(conn, ino.into(), size);
+            let _ = resp.send(res);
+            Ok(())
+        }
+        DbWriteMsg::UpdateRecord {
+            old_parent,
+            old_name,
+            node,
+            resp,
+        } => {
+            let res = MetaDb::update_db_record(conn, old_parent.into(), &old_name, node);
+            let _ = resp.send(res);
+            Ok(())
+        }
+        DbWriteMsg::RemoveRecord {
+            parent_ino,
+            target_name,
+            resp,
+        } => {
+            let res = MetaDb::remove_db_record(conn, parent_ino.into(), &target_name);
+            let _ = resp.send(res);
+            Ok(())
+        }
+        DbWriteMsg::ChangeRepoId { repo_id, resp } => {
+            let res = MetaDb::change_repo_id(conn, repo_id);
+            let _ = resp.send(res);
+            Ok(())
+        }
+    }
 }
 
 impl MetaDb {
-    pub fn write_inodes_to_db(&mut self, nodes: Vec<StorageNode>) -> anyhow::Result<()> {
-        let tx = self.conn.transaction()?;
-
+    pub fn write_inodes_to_db<C>(tx: &C, nodes: Vec<StorageNode>) -> anyhow::Result<()>
+    where
+        C: std::ops::Deref<Target = rusqlite::Connection>,
+    {
         {
             let mut upsert_inode = tx.prepare(
                 r#"
@@ -98,13 +286,13 @@ impl MetaDb {
             "#,
         )?;
 
-        tx.commit()?;
         Ok(())
     }
 
-    pub fn ensure_root(&mut self) -> anyhow::Result<()> {
-        let tx = self.conn.transaction()?;
-
+    pub fn ensure_root<C>(tx: &C) -> anyhow::Result<()>
+    where
+        C: std::ops::Deref<Target = rusqlite::Connection>,
+    {
         tx.execute(
             r#"
         INSERT INTO inode_map
@@ -120,14 +308,14 @@ impl MetaDb {
                 unsafe { libc::getgid() } as i64,
             ],
         )?;
-        tx.commit()?;
 
         Ok(())
     }
 
-    pub fn update_inodes_table(&mut self, attr: SetStoredAttr) -> anyhow::Result<()> {
-        let tx = self.conn.transaction()?;
-
+    pub fn update_inodes_table<C>(tx: &C, attr: SetStoredAttr) -> anyhow::Result<()>
+    where
+        C: std::ops::Deref<Target = rusqlite::Connection>,
+    {
         let git_mode: u32 = tx
             .prepare("SELECT git_mode FROM inode_map WHERE inode=?1")?
             .query_row(params![attr.ino as i64], |r| r.get(0))
@@ -160,12 +348,10 @@ impl MetaDb {
                 attr.flags.map(|v| v as i64),
             ],
         )?;
-        tx.commit()?;
         Ok(())
     }
 
-    pub fn populate_res_inodes(&self) -> anyhow::Result<HashSet<u64>> {
-        let conn = &self.conn;
+    pub fn populate_res_inodes(conn: &rusqlite::Connection) -> anyhow::Result<HashSet<u64>> {
         let mut set = HashSet::new();
         let mut stmt = conn.prepare("SELECT inode FROM inode_map")?;
         let rows = stmt.query_map(params![], |row| row.get::<_, i64>(0))?;
@@ -175,15 +361,15 @@ impl MetaDb {
         Ok(set)
     }
 
-    pub fn clear(&self) -> anyhow::Result<()> {
-        self.conn.execute("DELETE FROM inode_map", params![])?;
-        self.conn.execute("DELETE FROM dentries", params![])?;
-        self.conn.execute_batch("VACUUM")?;
+    pub fn clear(conn: &rusqlite::Connection) -> anyhow::Result<()> {
+        conn.execute("DELETE FROM inode_map", params![])?;
+        conn.execute("DELETE FROM dentries", params![])?;
+        conn.execute_batch("VACUUM")?;
         Ok(())
     }
 
-    pub fn get_parent_ino(&self, ino: u64) -> anyhow::Result<u64> {
-        let mut stmt = self.conn.prepare(
+    pub fn get_parent_ino(conn: &rusqlite::Connection, ino: u64) -> anyhow::Result<u64> {
+        let mut stmt = conn.prepare(
             "SELECT parent_inode
                    FROM dentries
                   WHERE target_inode = ?1",
@@ -195,8 +381,11 @@ impl MetaDb {
         Ok(parent_i64 as u64)
     }
 
-    pub fn get_parent_name_from_ino(&self, parent_ino: u64) -> anyhow::Result<String> {
-        let mut stmt = self.conn.prepare(
+    pub fn get_parent_name_from_ino(
+        conn: &rusqlite::Connection,
+        parent_ino: u64,
+    ) -> anyhow::Result<String> {
+        let mut stmt = conn.prepare(
             "
             SELECT name
             FROM dentries
@@ -214,11 +403,11 @@ impl MetaDb {
     }
 
     pub fn get_parent_name_from_child(
-        &self,
+        conn: &rusqlite::Connection,
         child_ino: u64,
         child_name: &str,
     ) -> anyhow::Result<(u64, String)> {
-        let mut stmt = self.conn.prepare(
+        let mut stmt = conn.prepare(
             "
             SELECT parent_inode
             FROM dentries
@@ -234,7 +423,7 @@ impl MetaDb {
 
         let parent_ino: i64 = row.get(0)?;
 
-        let mut stmt2 = self.conn.prepare(
+        let mut stmt2 = conn.prepare(
             "
             SELECT name
             FROM dentries
@@ -248,10 +437,9 @@ impl MetaDb {
         Ok((parent_ino as u64, parent_name))
     }
 
-    pub fn get_dir_parent(&self, ino: NormalIno) -> anyhow::Result<u64> {
+    pub fn get_dir_parent(conn: &rusqlite::Connection, ino: NormalIno) -> anyhow::Result<u64> {
         let ino = ino.to_norm_u64();
-        let parent: Option<i64> = self
-            .conn
+        let parent: Option<i64> = conn
             .query_row(
                 r#"
                 SELECT parent_inode
@@ -271,8 +459,8 @@ impl MetaDb {
         }
     }
 
-    pub fn get_all_parents(&self, ino: u64) -> anyhow::Result<Vec<u64>> {
-        let mut stmt = self.conn.prepare(
+    pub fn get_all_parents(conn: &rusqlite::Connection, ino: u64) -> anyhow::Result<Vec<u64>> {
+        let mut stmt = conn.prepare(
             r#"
             SELECT parent_inode
             FROM dentries
@@ -294,8 +482,8 @@ impl MetaDb {
         Ok(out)
     }
 
-    pub fn count_children(&self, ino: u64) -> anyhow::Result<usize> {
-        let mut stmt = self.conn.prepare(
+    pub fn count_children(conn: &rusqlite::Connection, ino: u64) -> anyhow::Result<usize> {
+        let mut stmt = conn.prepare(
             "
             SELECT COUNT(*) 
             FROM dentries 
@@ -307,10 +495,13 @@ impl MetaDb {
         Ok(count)
     }
 
-    pub fn list_dentries_for_inode(&self, ino: u64) -> anyhow::Result<Vec<(u64, String)>> {
+    pub fn list_dentries_for_inode(
+        conn: &rusqlite::Connection,
+        ino: u64,
+    ) -> anyhow::Result<Vec<(u64, String)>> {
         let ino_i64 = i64::try_from(ino).context("inode u64→i64 overflow")?;
 
-        let mut stmt = self.conn.prepare(
+        let mut stmt = conn.prepare(
             r#"
             SELECT parent_inode, name
             FROM dentries
@@ -334,7 +525,10 @@ impl MetaDb {
         Ok(rows)
     }
 
-    pub fn read_children(&self, parent_ino: u64) -> anyhow::Result<Vec<DirectoryEntry>> {
+    pub fn read_children(
+        conn: &rusqlite::Connection,
+        parent_ino: u64,
+    ) -> anyhow::Result<Vec<DirectoryEntry>> {
         let sql = r#"
             SELECT d.name, d.target_inode, im.oid, im.git_mode
             FROM dentries AS d
@@ -343,8 +537,7 @@ impl MetaDb {
             ORDER BY d.name
         "#;
 
-        let mut stmt = self
-            .conn
+        let mut stmt = conn
             .prepare_cached(sql)
             .context("prepare read_dir_entries")?;
 
@@ -385,8 +578,8 @@ impl MetaDb {
         Ok(out)
     }
 
-    pub fn get_single_parent(&self, ino: u64) -> anyhow::Result<u64> {
-        let mut stmt = self.conn.prepare(
+    pub fn get_single_parent(conn: &rusqlite::Connection, ino: u64) -> anyhow::Result<u64> {
+        let mut stmt = conn.prepare(
             r#"
             SELECT parent_inode
             FROM dentries
@@ -408,7 +601,11 @@ impl MetaDb {
         }
     }
 
-    pub fn get_ino_from_db(&self, parent: u64, name: &str) -> anyhow::Result<u64> {
+    pub fn get_ino_from_db(
+        conn: &rusqlite::Connection,
+        parent: u64,
+        name: &str,
+    ) -> anyhow::Result<u64> {
         let sql = r#"
             SELECT target_inode
             FROM dentries
@@ -416,7 +613,7 @@ impl MetaDb {
             LIMIT 2
         "#;
 
-        let mut stmt = self.conn.prepare_cached(sql)?;
+        let mut stmt = conn.prepare_cached(sql)?;
 
         let mut rows = stmt.query((parent as i64, name))?;
 
@@ -436,8 +633,11 @@ impl MetaDb {
         Ok(child)
     }
 
-    pub fn update_size_in_db(&self, ino: u64, new_size: u64) -> anyhow::Result<()> {
-        let changed = self.conn.execute(
+    pub fn update_size_in_db<C>(tx: &C, ino: u64, new_size: u64) -> anyhow::Result<()>
+    where
+        C: std::ops::Deref<Target = rusqlite::Connection>,
+    {
+        let changed = tx.execute(
             "UPDATE inode_map SET size = ?1 WHERE inode = ?2",
             rusqlite::params![new_size as i64, ino as i64],
         )?;
@@ -452,8 +652,8 @@ impl MetaDb {
         Ok(())
     }
 
-    pub fn get_mode_from_db(&self, ino: u64) -> anyhow::Result<u64> {
-        let mut stmt = self.conn.prepare(
+    pub fn get_mode_from_db(conn: &rusqlite::Connection, ino: u64) -> anyhow::Result<u64> {
+        let mut stmt = conn.prepare(
             "SELECT git_mode
            FROM inode_map
           WHERE inode = ?1",
@@ -470,8 +670,8 @@ impl MetaDb {
         }
     }
 
-    pub fn get_oid_from_db(&self, ino: u64) -> anyhow::Result<Oid> {
-        let mut stmt = self.conn.prepare(
+    pub fn get_oid_from_db(conn: &rusqlite::Connection, ino: u64) -> anyhow::Result<Oid> {
+        let mut stmt = conn.prepare(
             "SELECT oid
            FROM inode_map
           WHERE inode = ?1",
@@ -485,8 +685,8 @@ impl MetaDb {
         Ok(git2::Oid::from_str(&oid_str)?)
     }
 
-    pub fn get_ino_flag_from_db(&self, ino: u64) -> anyhow::Result<u64> {
-        let mut stmt = self.conn.prepare(
+    pub fn get_ino_flag_from_db(conn: &rusqlite::Connection, ino: u64) -> anyhow::Result<u64> {
+        let mut stmt = conn.prepare(
             "SELECT inode_flag
            FROM inode_map
           WHERE inode = ?1",
@@ -503,8 +703,8 @@ impl MetaDb {
         }
     }
 
-    pub fn get_name_from_db(&self, ino: u64) -> anyhow::Result<String> {
-        let mut stmt = self.conn.prepare(
+    pub fn get_name_from_db(conn: &rusqlite::Connection, ino: u64) -> anyhow::Result<String> {
+        let mut stmt = conn.prepare(
             r#"
             SELECT name
             FROM dentries
@@ -525,8 +725,12 @@ impl MetaDb {
         }
     }
 
-    pub fn get_name_in_parent(&self, parent_ino: u64, ino: u64) -> anyhow::Result<String> {
-        let mut stmt = self.conn.prepare(
+    pub fn get_name_in_parent(
+        conn: &rusqlite::Connection,
+        parent_ino: u64,
+        ino: u64,
+    ) -> anyhow::Result<String> {
+        let mut stmt = conn.prepare(
             r#"
         SELECT name
         FROM dentries
@@ -541,9 +745,10 @@ impl MetaDb {
         name.ok_or_else(|| anyhow::anyhow!("name not found for ino={ino} in parent={parent_ino}"))
     }
 
-    pub fn change_repo_id(&mut self, repo_id: u16) -> anyhow::Result<()> {
-        let tx = self.conn.transaction()?;
-
+    pub fn change_repo_id<C>(tx: &C, repo_id: u16) -> anyhow::Result<()>
+    where
+        C: std::ops::Deref<Target = rusqlite::Connection>,
+    {
         let repo_ino = GitFs::repo_id_to_ino(repo_id);
         let low48_mask: i64 = 0x0000_FFFF_FFFF_FFFFu64 as i64;
 
@@ -564,23 +769,20 @@ impl MetaDb {
             params![repo_ino, low48_mask],
         )?;
 
-        tx.commit()?;
         Ok(())
     }
 
-    pub fn write_dentry(
-        &mut self,
+    pub fn write_dentry<C>(
+        tx: &C,
         parent_ino: u64,
         source_ino: u64,
         target_name: &str,
-    ) -> anyhow::Result<()> {
+    ) -> anyhow::Result<()>
+    where
+        C: std::ops::Deref<Target = rusqlite::Connection>,
+    {
         let parent_i64 = i64::try_from(parent_ino)?;
         let source_i64 = i64::try_from(source_ino)?;
-
-        let tx = self
-            .conn
-            .transaction_with_behavior(TransactionBehavior::Immediate)
-            .context("begin write_dentry tx")?;
 
         let parent_exists: Option<i64> = tx
             .prepare("SELECT 1 FROM inode_map WHERE inode = ?1")?
@@ -627,18 +829,18 @@ impl MetaDb {
             );
         }
 
-        tx.commit()?;
         Ok(())
     }
 
-    pub fn update_db_record(
-        &mut self,
+    pub fn update_db_record<C>(
+        tx: &C,
         old_parent: u64,
         old_name: &str,
         node: StorageNode,
-    ) -> anyhow::Result<()> {
-        let tx = self.conn.transaction()?;
-
+    ) -> anyhow::Result<()>
+    where
+        C: std::ops::Deref<Target = rusqlite::Connection>,
+    {
         {
             let a = &node.attr;
             tx.execute(
@@ -710,13 +912,13 @@ impl MetaDb {
             rusqlite::params![node.attr.ino as i64],
         )?;
 
-        tx.commit()?;
         Ok(())
     }
 
-    pub fn remove_db_record(&mut self, parent_ino: u64, target_name: &str) -> anyhow::Result<()> {
-        let tx = self.conn.transaction()?;
-
+    pub fn remove_db_record<C>(tx: &C, parent_ino: u64, target_name: &str) -> anyhow::Result<()>
+    where
+        C: std::ops::Deref<Target = rusqlite::Connection>,
+    {
         let target_inode: u64 = tx
             .prepare(
                 r#"
@@ -773,15 +975,14 @@ impl MetaDb {
             )?;
         }
 
-        tx.commit()?;
         Ok(())
     }
 
     // TODO: Move to fs.rs TODO
     // TODO: Move to fs.rs TODO
     // TODO: Move to fs.rs TODO
-    pub fn get_path_from_db(&self, ino: u64) -> anyhow::Result<PathBuf> {
-        let mut stmt = self.conn.prepare(
+    pub fn get_path_from_db(conn: &rusqlite::Connection, ino: u64) -> anyhow::Result<PathBuf> {
+        let mut stmt = conn.prepare(
             "SELECT parent_inode, name
                FROM dentries
               WHERE target_inode = ?1",
@@ -817,10 +1018,14 @@ impl MetaDb {
         Ok(components.iter().collect::<PathBuf>())
     }
 
-    pub fn exists_by_name(&self, parent: NormalIno, name: &str) -> anyhow::Result<Option<u64>> {
+    pub fn exists_by_name(
+        conn: &rusqlite::Connection,
+        parent: NormalIno,
+        name: &str,
+    ) -> anyhow::Result<Option<u64>> {
         let parent = parent.to_norm_u64();
         let parent_i64 = i64::try_from(parent)?;
-        let mut stmt = self.conn.prepare(
+        let mut stmt = conn.prepare(
             "
             SELECT target_inode
             FROM dentries
@@ -837,16 +1042,16 @@ impl MetaDb {
     }
 
     pub fn get_metadata_by_name(
-        &self,
+        conn: &rusqlite::Connection,
         parent_ino: u64,
         child_name: &str,
     ) -> anyhow::Result<FileAttr> {
-        let target_ino = self.get_ino_from_db(parent_ino, child_name)?;
-        self.get_metadata(target_ino)
+        let target_ino = MetaDb::get_ino_from_db(conn, parent_ino, child_name)?;
+        MetaDb::get_metadata(conn, target_ino)
     }
 
-    pub fn get_metadata(&self, target_ino: u64) -> anyhow::Result<FileAttr> {
-        let mut stmt = self.conn.prepare(
+    pub fn get_metadata(conn: &rusqlite::Connection, target_ino: u64) -> anyhow::Result<FileAttr> {
+        let mut stmt = conn.prepare(
             r#"
             SELECT
                 inode,
@@ -964,8 +1169,11 @@ impl MetaDb {
         Ok(attr)
     }
 
-    pub fn get_storage_node_from_db(&self, ino: u64) -> anyhow::Result<StoredAttr> {
-        let mut stmt = self.conn.prepare(
+    pub fn get_storage_node_from_db(
+        conn: &rusqlite::Connection,
+        ino: u64,
+    ) -> anyhow::Result<StoredAttr> {
+        let mut stmt = conn.prepare(
             r#"
         SELECT
             inode,

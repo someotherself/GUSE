@@ -262,6 +262,7 @@ impl fuser::Filesystem for GitFsAdapter {
         }
     }
 
+    #[instrument(level = "debug", skip(self), fields(parent = %parent))]
     fn mkdir(
         &mut self,
         req: &fuser::Request<'_>,

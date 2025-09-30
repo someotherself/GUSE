@@ -129,14 +129,7 @@ fn test_mkdir_fetch() -> anyhow::Result<()> {
             assert_eq!(live_attr.ino, LIVE_DIR_INO);
 
             assert_eq!(read_dir_root[0].name, "git_rust");
-            let parent_for_mio = {
-                let repo = fs.get_repo(read_dir_root[0].ino)?;
-                let repo = repo.lock().map_err(|_| anyhow!("Lock poisoned"))?;
-                repo.connection
-                    .lock()
-                    .unwrap()
-                    .get_parent_ino(read_dir_root[0].ino)?
-            };
+            let parent_for_mio = fs.get_single_parent(read_dir_root[0].ino)?;
             assert_eq!(parent_for_mio, ROOT_INO);
 
             // GET ATTR LIVE_DIR
