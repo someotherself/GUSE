@@ -23,7 +23,10 @@ use std::thread;
 use std::time::{Duration, SystemTime};
 use std::{num::NonZeroU32, path::PathBuf};
 
-use crate::fs::fileattr::{dir_attr, pair_to_system_time, system_time_to_pair, CreateFileAttr, FileAttr, FileType, InoFlag, SetStoredAttr};
+use crate::fs::fileattr::{
+    CreateFileAttr, FileAttr, FileType, InoFlag, SetStoredAttr, dir_attr, pair_to_system_time,
+    system_time_to_pair,
+};
 use crate::fs::ops::readdir::{DirectoryEntry, DirectoryEntryPlus};
 use crate::fs::{GitFs, REPO_SHIFT, ROOT_INO, SourceTypes, repo};
 use crate::internals::sock::{socket_path, start_control_server};
@@ -762,7 +765,7 @@ impl fuser::Filesystem for GitFsAdapter {
             Some(TimeOrNow::SpecificTime(t)) => {
                 let (secs, nsecs) = system_time_to_pair(t);
                 (Some(secs), Some(nsecs))
-            },
+            }
             _ => (None, None),
         };
         let (mtime_secs_opt, mtime_nsecs_opt) = match mtime {
@@ -773,7 +776,7 @@ impl fuser::Filesystem for GitFsAdapter {
             Some(TimeOrNow::SpecificTime(t)) => {
                 let (secs, nsecs) = system_time_to_pair(t);
                 (Some(secs), Some(nsecs))
-            },
+            }
             _ => (None, None),
         };
 
@@ -794,10 +797,14 @@ impl fuser::Filesystem for GitFsAdapter {
             Err(e) => return reply.error(errno_from_anyhow(&e)),
         };
 
-        if let Some(atime_secs) = atime_secs_opt && let Some(atime_nsecs) = atime_nsecs_opt {
+        if let Some(atime_secs) = atime_secs_opt
+            && let Some(atime_nsecs) = atime_nsecs_opt
+        {
             attr.atime = pair_to_system_time(atime_secs, atime_nsecs);
         };
-        if let Some(mtime_secs) = mtime_secs_opt && let Some(mtime_nsecs) = mtime_nsecs_opt {
+        if let Some(mtime_secs) = mtime_secs_opt
+            && let Some(mtime_nsecs) = mtime_nsecs_opt
+        {
             attr.mtime = pair_to_system_time(mtime_secs, mtime_nsecs);
         };
 

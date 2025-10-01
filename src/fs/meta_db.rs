@@ -12,10 +12,10 @@ use rusqlite::{OptionalExtension, params};
 
 use crate::{
     fs::{
-        GitFs, ROOT_INO,
+        ROOT_INO,
         fileattr::{
-            FileAttr, FileType, InoFlag, SetStoredAttr, StorageNode,
-            pair_to_system_time, try_into_filetype,
+            FileAttr, FileType, InoFlag, SetStoredAttr, StorageNode, pair_to_system_time,
+            try_into_filetype,
         },
         ops::readdir::DirectoryEntry,
     },
@@ -152,7 +152,7 @@ where
         DbWriteMsg::EnsureRoot { resp } => {
             let res = MetaDb::ensure_root(conn).map(|_| ());
             let _ = resp.send(
-            res.as_ref()
+                res.as_ref()
                     .map(|_| ())
                     .map_err(|e| anyhow::anyhow!(e.to_string())),
             );
@@ -172,7 +172,7 @@ where
         DbWriteMsg::WriteInodes { nodes, resp } => {
             let res = MetaDb::write_inodes_to_db(conn, nodes);
             let _ = resp.send(
-            res.as_ref()
+                res.as_ref()
                     .map(|_| ())
                     .map_err(|e| anyhow::anyhow!(e.to_string())),
             );
@@ -181,7 +181,7 @@ where
         DbWriteMsg::UpdateMetadata { attr, resp } => {
             let res = MetaDb::update_inodes_table(conn, attr);
             let _ = resp.send(
-            res.as_ref()
+                res.as_ref()
                     .map(|_| ())
                     .map_err(|e| anyhow::anyhow!(e.to_string())),
             );
@@ -191,11 +191,17 @@ where
             let res = MetaDb::update_size_in_db(conn, ino.into(), size);
             match resp {
                 Some(tx) => {
-                    let _ = tx.try_send(res.as_ref().map(|_| ()).map_err(|e| anyhow::anyhow!(e.to_string())));
+                    let _ = tx.try_send(
+                        res.as_ref()
+                            .map(|_| ())
+                            .map_err(|e| anyhow::anyhow!(e.to_string())),
+                    );
                     res
-                },
+                }
                 None => {
-                    if let Err(e) = &res { tracing::warn!("db write (FNF) WriteDentry failed: {e}"); }
+                    if let Err(e) = &res {
+                        tracing::warn!("db write (FNF) WriteDentry failed: {e}");
+                    }
                     Ok(())
                 }
             }
@@ -209,11 +215,17 @@ where
             let res = MetaDb::update_db_record(conn, old_parent.into(), &old_name, node);
             match resp {
                 Some(tx) => {
-                    let _ = tx.try_send(res.as_ref().map(|_| ()).map_err(|e| anyhow::anyhow!(e.to_string())));
+                    let _ = tx.try_send(
+                        res.as_ref()
+                            .map(|_| ())
+                            .map_err(|e| anyhow::anyhow!(e.to_string())),
+                    );
                     res
-                },
+                }
                 None => {
-                    if let Err(e) = &res { tracing::warn!("db write (FNF) WriteDentry failed: {e}"); }
+                    if let Err(e) = &res {
+                        tracing::warn!("db write (FNF) WriteDentry failed: {e}");
+                    }
                     Ok(())
                 }
             }
@@ -226,11 +238,17 @@ where
             let res = MetaDb::remove_db_record(conn, parent_ino.into(), &target_name);
             match resp {
                 Some(tx) => {
-                    let _ = tx.try_send(res.as_ref().map(|_| ()).map_err(|e| anyhow::anyhow!(e.to_string())));
+                    let _ = tx.try_send(
+                        res.as_ref()
+                            .map(|_| ())
+                            .map_err(|e| anyhow::anyhow!(e.to_string())),
+                    );
                     res
-                },
+                }
                 None => {
-                    if let Err(e) = &res { tracing::warn!("db write (FNF) WriteDentry failed: {e}"); }
+                    if let Err(e) = &res {
+                        tracing::warn!("db write (FNF) WriteDentry failed: {e}");
+                    }
                     Ok(())
                 }
             }
@@ -366,9 +384,9 @@ impl MetaDb {
                 ":uid":       attr.uid.map(|v| v as i64),
                 ":gid":       attr.gid.map(|v| v as i64),
                 ":flags":     attr.flags.map(|v| v as i64),
-                ":atime_s":   attr.atime_secs.map(|v| v as i64),
+                ":atime_s":   attr.atime_secs,
                 ":atime_ns":  attr.atime_nsecs.map(|v| v as i64),
-                ":mtime_s":   attr.mtime_secs.map(|v| v as i64),
+                ":mtime_s":   attr.mtime_secs,
                 ":mtime_ns":  attr.mtime_nsecs.map(|v| v as i64),
             },
         )?;

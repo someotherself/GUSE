@@ -1941,7 +1941,7 @@ impl GitFs {
         MetaDb::get_ino_from_db(&conn, parent, name)
     }
 
-    /// Send and forget but will log errors as tracing::error! 
+    /// Send and forget but will log errors as tracing::error!
     pub fn update_size_in_db(&self, ino: NormalIno, size: u64) -> anyhow::Result<()> {
         let repo_id = GitFs::ino_to_repo_id(ino.into());
         let writer_tx = {
@@ -1971,7 +1971,7 @@ impl GitFs {
     ///
     /// TODO: Do not delete inode entry only when open fh are 0
     /// TODO: Perform that in the fn release - using a channel
-    /// Send and forget but will log errors as tracing::error! 
+    /// Send and forget but will log errors as tracing::error!
     fn remove_db_record(&self, parent_ino: NormalIno, target_name: &str) -> anyhow::Result<()> {
         let repo_id = GitFs::ino_to_repo_id(parent_ino.into());
         let writer_tx = {
@@ -1994,7 +1994,7 @@ impl GitFs {
         Ok(())
     }
 
-    /// Send and forget but will log errors as tracing::error! 
+    /// Send and forget but will log errors as tracing::error!
     fn update_db_record(
         &self,
         old_parent: NormalIno,
