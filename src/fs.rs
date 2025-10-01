@@ -19,7 +19,7 @@ use tracing::{Level, field, info, instrument};
 
 use crate::fs::fileattr::{
     CreateFileAttr, FileAttr, FileType, InoFlag, ObjectAttr, SetStoredAttr, StorageNode,
-    StoredAttr, build_attr_dir, dir_attr, file_attr,
+    build_attr_dir, dir_attr, file_attr,
 };
 use crate::fs::meta_db::{DbWriteMsg, MetaDb, oneshot};
 use crate::fs::ops::readdir::{DirectoryEntry, DirectoryEntryPlus, DirectoryStreamCookie};
@@ -1553,6 +1553,7 @@ impl GitFs {
         Ok(attr)
     }
 
+    #[instrument(level = "debug", skip(self, stored_attr), fields(ino = %stored_attr.ino), err(Display))]
     pub fn update_db_metadata(&self, stored_attr: SetStoredAttr) -> anyhow::Result<FileAttr> {
         let target_ino = stored_attr.ino;
 
@@ -1860,6 +1861,7 @@ impl GitFs {
         MetaDb::get_metadata_by_name(&conn, parent_ino.to_norm_u64(), child_name)
     }
 
+    #[instrument(level = "debug", skip(self), fields(ino = %target_ino), err(Display))]
     pub fn get_metadata(&self, target_ino: u64) -> anyhow::Result<FileAttr> {
         let repo_id = GitFs::ino_to_repo_id(target_ino);
         let repo_db = self
@@ -1868,16 +1870,6 @@ impl GitFs {
             .ok_or_else(|| anyhow::anyhow!("no db"))?;
         let conn = repo_db.ro_pool.get()?;
         MetaDb::get_metadata(&conn, target_ino)
-    }
-
-    pub fn get_stored_attr_by_name(&self, target_ino: u64) -> anyhow::Result<StoredAttr> {
-        let repo_id = GitFs::ino_to_repo_id(target_ino);
-        let repo_db = self
-            .conn_list
-            .get(&repo_id)
-            .ok_or_else(|| anyhow::anyhow!("no db"))?;
-        let conn = repo_db.ro_pool.get()?;
-        MetaDb::get_storage_node_from_db(&conn, target_ino)
     }
 
     /// Takes Inodes as virtual inodes do not "exist"
@@ -1949,6 +1941,7 @@ impl GitFs {
         MetaDb::get_ino_from_db(&conn, parent, name)
     }
 
+    /// Send and forget but will log errors as tracing::error! 
     pub fn update_size_in_db(&self, ino: NormalIno, size: u64) -> anyhow::Result<()> {
         let repo_id = GitFs::ino_to_repo_id(ino.into());
         let writer_tx = {
@@ -1959,18 +1952,14 @@ impl GitFs {
             guard.writer_tx.clone()
         };
 
-        let (tx, rx) = oneshot::<()>();
-
         let msg = DbWriteMsg::UpdateSize {
             ino,
             size,
-            resp: tx,
+            resp: None,
         };
         writer_tx
             .send(msg)
             .context("writer_tx error on update_size_in_db")?;
-
-        rx.recv().context("writer_rx disc on update_size_in_db")??;
 
         Ok(())
     }
@@ -1982,6 +1971,7 @@ impl GitFs {
     ///
     /// TODO: Do not delete inode entry only when open fh are 0
     /// TODO: Perform that in the fn release - using a channel
+    /// Send and forget but will log errors as tracing::error! 
     fn remove_db_record(&self, parent_ino: NormalIno, target_name: &str) -> anyhow::Result<()> {
         let repo_id = GitFs::ino_to_repo_id(parent_ino.into());
         let writer_tx = {
@@ -1992,22 +1982,19 @@ impl GitFs {
             guard.writer_tx.clone()
         };
 
-        let (tx, rx) = oneshot::<()>();
-
         let msg = DbWriteMsg::RemoveRecord {
             parent_ino,
             target_name: target_name.to_string(),
-            resp: tx,
+            resp: None,
         };
         writer_tx
             .send(msg)
             .context("writer_tx error on remove_db_record")?;
 
-        rx.recv().context("writer_rx disc on remove_db_record")??;
-
         Ok(())
     }
 
+    /// Send and forget but will log errors as tracing::error! 
     fn update_db_record(
         &self,
         old_parent: NormalIno,
@@ -2023,19 +2010,15 @@ impl GitFs {
             guard.writer_tx.clone()
         };
 
-        let (tx, rx) = oneshot::<()>();
-
         let msg = DbWriteMsg::UpdateRecord {
             old_parent,
             old_name: old_name.to_string(),
             node,
-            resp: tx,
+            resp: None,
         };
         writer_tx
             .send(msg)
             .context("writer_tx error on update_db_record")?;
-
-        rx.recv().context("writer_rx disc on update_db_record")??;
 
         Ok(())
     }

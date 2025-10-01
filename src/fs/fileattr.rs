@@ -215,9 +215,10 @@ pub struct SetStoredAttr {
     pub size: Option<u64>,
     pub uid: Option<u32>,
     pub gid: Option<u32>,
-    pub atime: Option<SystemTime>,
-    pub mtime: Option<SystemTime>,
-    pub ctime: Option<SystemTime>,
+    pub atime_secs: Option<i64>,
+    pub atime_nsecs: Option<i32>,
+    pub mtime_secs: Option<i64>,
+    pub mtime_nsecs: Option<i32>,
     pub flags: Option<u32>,
 }
 

@@ -23,7 +23,7 @@ use std::thread;
 use std::time::{Duration, SystemTime};
 use std::{num::NonZeroU32, path::PathBuf};
 
-use crate::fs::fileattr::{CreateFileAttr, FileAttr, FileType, InoFlag, SetStoredAttr, dir_attr};
+use crate::fs::fileattr::{dir_attr, pair_to_system_time, system_time_to_pair, CreateFileAttr, FileAttr, FileType, InoFlag, SetStoredAttr};
 use crate::fs::ops::readdir::{DirectoryEntry, DirectoryEntryPlus};
 use crate::fs::{GitFs, REPO_SHIFT, ROOT_INO, SourceTypes, repo};
 use crate::internals::sock::{socket_path, start_control_server};
@@ -753,43 +753,52 @@ impl fuser::Filesystem for GitFsAdapter {
                 return reply.error(EIO);
             }
         };
-        let atime_opt = match atime {
+
+        let (atime_secs_opt, atime_nsecs_opt) = match atime {
             Some(TimeOrNow::Now) => {
-                let a = libc::timespec {
-                    tv_sec: 0,
-                    tv_nsec: libc::UTIME_NOW,
-                };
-                Some(SystemTime::now())
+                let (secs, nsecs) = system_time_to_pair(SystemTime::now());
+                (Some(secs), Some(nsecs))
             }
-            Some(TimeOrNow::SpecificTime(t)) => Some(t),
-            _ => None,
+            Some(TimeOrNow::SpecificTime(t)) => {
+                let (secs, nsecs) = system_time_to_pair(t);
+                (Some(secs), Some(nsecs))
+            },
+            _ => (None, None),
         };
-        let mtime_opt = match mtime {
-            Some(TimeOrNow::Now) => Some(SystemTime::now()),
-            Some(TimeOrNow::SpecificTime(t)) => Some(t),
-            _ => None,
+        let (mtime_secs_opt, mtime_nsecs_opt) = match mtime {
+            Some(TimeOrNow::Now) => {
+                let (secs, nsecs) = system_time_to_pair(SystemTime::now());
+                (Some(secs), Some(nsecs))
+            }
+            Some(TimeOrNow::SpecificTime(t)) => {
+                let (secs, nsecs) = system_time_to_pair(t);
+                (Some(secs), Some(nsecs))
+            },
+            _ => (None, None),
         };
 
-        let set_stored_attr: SetStoredAttr = SetStoredAttr {
+        let set_stored_attr = SetStoredAttr {
             ino,
             size,
             uid,
             gid,
             flags,
-            atime: atime_opt,
-            mtime: mtime_opt,
-            ctime,
+            atime_secs: atime_secs_opt,
+            atime_nsecs: atime_nsecs_opt,
+            mtime_secs: mtime_secs_opt,
+            mtime_nsecs: mtime_nsecs_opt,
         };
+
         let mut attr = match fs.update_db_metadata(set_stored_attr) {
             Ok(a) => a,
             Err(e) => return reply.error(errno_from_anyhow(&e)),
         };
 
-        if let Some(atime) = atime_opt {
-            attr.atime = atime;
+        if let Some(atime_secs) = atime_secs_opt && let Some(atime_nsecs) = atime_nsecs_opt {
+            attr.atime = pair_to_system_time(atime_secs, atime_nsecs);
         };
-        if let Some(mtime) = mtime_opt {
-            attr.mtime = mtime;
+        if let Some(mtime_secs) = mtime_secs_opt && let Some(mtime_nsecs) = mtime_nsecs_opt {
+            attr.mtime = pair_to_system_time(mtime_secs, mtime_nsecs);
         };
 
         if let Some(size) = size

@@ -14,7 +14,7 @@ use crate::{
     fs::{
         GitFs, ROOT_INO,
         fileattr::{
-            FileAttr, FileType, InoFlag, SetStoredAttr, StorageNode, StoredAttr,
+            FileAttr, FileType, InoFlag, SetStoredAttr, StorageNode,
             pair_to_system_time, try_into_filetype,
         },
         ops::readdir::DirectoryEntry,
@@ -27,6 +27,7 @@ pub struct MetaDb {
     pub writer_tx: Sender<DbWriteMsg>,
 }
 
+// https://github.com/the-lean-crate/criner/issues/1#issue-577429787
 pub fn init_pragma(conn: &rusqlite::Connection) -> rusqlite::Result<()> {
     conn.execute_batch(
         r#"
@@ -80,25 +81,24 @@ pub enum DbWriteMsg {
         attr: SetStoredAttr,
         resp: Resp<()>,
     },
+    /// Send and forget
     UpdateSize {
         ino: NormalIno,
         size: u64,
-        resp: Resp<()>,
+        resp: Option<Resp<()>>,
     },
+    /// Send and forget
     UpdateRecord {
         old_parent: NormalIno,
         old_name: String,
         node: StorageNode,
-        resp: Resp<()>,
+        resp: Option<Resp<()>>,
     },
+    /// Send and forget
     RemoveRecord {
         parent_ino: NormalIno,
         target_name: String,
-        resp: Resp<()>,
-    },
-    ChangeRepoId {
-        repo_id: u16,
-        resp: Resp<()>,
+        resp: Option<Resp<()>>,
     },
 }
 
@@ -150,9 +150,13 @@ where
 {
     match msg {
         DbWriteMsg::EnsureRoot { resp } => {
-            let res = MetaDb::ensure_root(conn);
-            let _ = resp.send(res.map(|_| ()));
-            Ok(())
+            let res = MetaDb::ensure_root(conn).map(|_| ());
+            let _ = resp.send(
+            res.as_ref()
+                    .map(|_| ())
+                    .map_err(|e| anyhow::anyhow!(e.to_string())),
+            );
+            res
         }
         DbWriteMsg::WriteDentry {
             parent_ino,
@@ -167,18 +171,34 @@ where
         }
         DbWriteMsg::WriteInodes { nodes, resp } => {
             let res = MetaDb::write_inodes_to_db(conn, nodes);
-            let _ = resp.send(res);
-            Ok(())
+            let _ = resp.send(
+            res.as_ref()
+                    .map(|_| ())
+                    .map_err(|e| anyhow::anyhow!(e.to_string())),
+            );
+            res
         }
         DbWriteMsg::UpdateMetadata { attr, resp } => {
             let res = MetaDb::update_inodes_table(conn, attr);
-            let _ = resp.send(res);
-            Ok(())
+            let _ = resp.send(
+            res.as_ref()
+                    .map(|_| ())
+                    .map_err(|e| anyhow::anyhow!(e.to_string())),
+            );
+            res
         }
         DbWriteMsg::UpdateSize { ino, size, resp } => {
             let res = MetaDb::update_size_in_db(conn, ino.into(), size);
-            let _ = resp.send(res);
-            Ok(())
+            match resp {
+                Some(tx) => {
+                    let _ = tx.try_send(res.as_ref().map(|_| ()).map_err(|e| anyhow::anyhow!(e.to_string())));
+                    res
+                },
+                None => {
+                    if let Err(e) = &res { tracing::warn!("db write (FNF) WriteDentry failed: {e}"); }
+                    Ok(())
+                }
+            }
         }
         DbWriteMsg::UpdateRecord {
             old_parent,
@@ -187,8 +207,16 @@ where
             resp,
         } => {
             let res = MetaDb::update_db_record(conn, old_parent.into(), &old_name, node);
-            let _ = resp.send(res);
-            Ok(())
+            match resp {
+                Some(tx) => {
+                    let _ = tx.try_send(res.as_ref().map(|_| ()).map_err(|e| anyhow::anyhow!(e.to_string())));
+                    res
+                },
+                None => {
+                    if let Err(e) = &res { tracing::warn!("db write (FNF) WriteDentry failed: {e}"); }
+                    Ok(())
+                }
+            }
         }
         DbWriteMsg::RemoveRecord {
             parent_ino,
@@ -196,13 +224,16 @@ where
             resp,
         } => {
             let res = MetaDb::remove_db_record(conn, parent_ino.into(), &target_name);
-            let _ = resp.send(res);
-            Ok(())
-        }
-        DbWriteMsg::ChangeRepoId { repo_id, resp } => {
-            let res = MetaDb::change_repo_id(conn, repo_id);
-            let _ = resp.send(res);
-            Ok(())
+            match resp {
+                Some(tx) => {
+                    let _ = tx.try_send(res.as_ref().map(|_| ()).map_err(|e| anyhow::anyhow!(e.to_string())));
+                    res
+                },
+                None => {
+                    if let Err(e) = &res { tracing::warn!("db write (FNF) WriteDentry failed: {e}"); }
+                    Ok(())
+                }
+            }
         }
     }
 }
@@ -316,37 +347,30 @@ impl MetaDb {
     where
         C: std::ops::Deref<Target = rusqlite::Connection>,
     {
-        let git_mode: u32 = tx
-            .prepare("SELECT git_mode FROM inode_map WHERE inode=?1")?
-            .query_row(params![attr.ino as i64], |r| r.get(0))
-            .optional()?
-            .ok_or_else(|| anyhow!("inode {} not found in inode_map", attr.ino))?;
-
-        if attr.size.is_some() {
-            let typ = git_mode & 0o170000;
-            anyhow::ensure!(
-                typ == 0o100000,
-                "truncate only allowed on regular files (ino {})",
-                attr.ino
-            );
-        }
-
         tx.execute(
             r#"
             UPDATE inode_map SET
-                size  = COALESCE(?2, size),
-                uid   = COALESCE(?3, uid),
-                gid   = COALESCE(?4, gid),
-                flags = COALESCE(?5, flags)
-            WHERE inode = ?1
+                size        = COALESCE(:size, size),
+                uid         = COALESCE(:uid, uid),
+                gid         = COALESCE(:gid, gid),
+                flags       = COALESCE(:flags, flags),
+                atime_secs  = COALESCE(:atime_s, atime_secs),
+                atime_nsecs = COALESCE(:atime_ns, atime_nsecs),
+                mtime_secs  = COALESCE(:mtime_s, mtime_secs),
+                mtime_nsecs = COALESCE(:mtime_ns, mtime_nsecs)
+            WHERE inode = :ino
             "#,
-            params![
-                attr.ino as i64,
-                attr.size.map(|v| v as i64),
-                attr.uid.map(|v| v as i64),
-                attr.gid.map(|v| v as i64),
-                attr.flags.map(|v| v as i64),
-            ],
+            rusqlite::named_params! {
+                ":ino":       attr.ino as i64,
+                ":size":      attr.size.map(|v| v as i64),
+                ":uid":       attr.uid.map(|v| v as i64),
+                ":gid":       attr.gid.map(|v| v as i64),
+                ":flags":     attr.flags.map(|v| v as i64),
+                ":atime_s":   attr.atime_secs.map(|v| v as i64),
+                ":atime_ns":  attr.atime_nsecs.map(|v| v as i64),
+                ":mtime_s":   attr.mtime_secs.map(|v| v as i64),
+                ":mtime_ns":  attr.mtime_nsecs.map(|v| v as i64),
+            },
         )?;
         Ok(())
     }
@@ -745,33 +769,6 @@ impl MetaDb {
         name.ok_or_else(|| anyhow::anyhow!("name not found for ino={ino} in parent={parent_ino}"))
     }
 
-    pub fn change_repo_id<C>(tx: &C, repo_id: u16) -> anyhow::Result<()>
-    where
-        C: std::ops::Deref<Target = rusqlite::Connection>,
-    {
-        let repo_ino = GitFs::repo_id_to_ino(repo_id);
-        let low48_mask: i64 = 0x0000_FFFF_FFFF_FFFFu64 as i64;
-
-        tx.execute(
-            r#"
-            UPDATE inode_map
-            SET inode = (?1 | (inode & ?2))
-            "#,
-            params![repo_ino, low48_mask],
-        )?;
-
-        tx.execute(
-            r#"
-            UPDATE inode_map
-            SET parent_inode = (?1 | (parent_inode & ?2))
-            WHERE parent_inode != 0
-            "#,
-            params![repo_ino, low48_mask],
-        )?;
-
-        Ok(())
-    }
-
     pub fn write_dentry<C>(
         tx: &C,
         parent_ino: u64,
@@ -1167,99 +1164,5 @@ impl MetaDb {
         };
 
         Ok(attr)
-    }
-
-    pub fn get_storage_node_from_db(
-        conn: &rusqlite::Connection,
-        ino: u64,
-    ) -> anyhow::Result<StoredAttr> {
-        let mut stmt = conn.prepare(
-            r#"
-        SELECT
-            inode,
-            oid,
-            git_mode,
-            size,
-            inode_flag,
-            uid,
-            gid,
-            atime,
-            mtime,
-            ctime,
-            nlink,
-            rdev,
-            flags
-        FROM inode_map
-        WHERE inode = ?1
-        LIMIT 1
-        "#,
-        )?;
-
-        let row = stmt
-            .query_row(params![i64::try_from(ino)?], |row| {
-                Ok((
-                    row.get::<_, i64>(0)?,
-                    row.get::<_, String>(1)?,
-                    row.get::<_, i64>(2)?,
-                    row.get::<_, i64>(3)?,
-                    row.get::<_, i64>(4)?,
-                    row.get::<_, i64>(5)?,
-                    row.get::<_, i64>(6)?,
-                    row.get::<_, i64>(7)?,
-                    row.get::<_, i64>(8)?,
-                    row.get::<_, i64>(9)?,
-                    row.get::<_, i64>(10)?,
-                    row.get::<_, i64>(11)?,
-                    row.get::<_, i64>(12)?,
-                    row.get::<_, i64>(13)?,
-                    row.get::<_, i64>(14)?,
-                    row.get::<_, i64>(15)?,
-                ))
-            })
-            .optional()?
-            .ok_or_else(|| anyhow!("inode {} not found in inode_map", ino))?;
-
-        let (
-            inode_i,
-            oid_str,
-            git_mode_i,
-            size_i,
-            inode_flag_i,
-            uid_i,
-            gid_i,
-            atime_secs,
-            atime_nsecs,
-            mtime_secs,
-            mtime_nsecs,
-            ctime_secs,
-            ctime_nsecs,
-            _nlink_i,
-            rdev_i,
-            flags_i,
-        ) = row;
-
-        let oid = Oid::from_str(&oid_str)?;
-
-        let ino_flag_u64 = u64::try_from(inode_flag_i)?;
-        let ino_flag = InoFlag::try_from(ino_flag_u64)
-            .map_err(|_| anyhow!("invalid inode_flag {:#x} for inode {}", ino_flag_u64, ino))?;
-
-        Ok(StoredAttr {
-            ino: u64::try_from(inode_i)?,
-            ino_flag,
-            oid,
-            size: u64::try_from(size_i)?,
-            git_mode: u32::try_from(git_mode_i)?,
-            uid: u32::try_from(uid_i)?,
-            gid: u32::try_from(gid_i)?,
-            atime_secs,
-            atime_nsecs: i32::try_from(atime_nsecs)?,
-            mtime_secs,
-            mtime_nsecs: i32::try_from(mtime_nsecs)?,
-            ctime_secs,
-            ctime_nsecs: i32::try_from(ctime_nsecs)?,
-            rdev: u32::try_from(rdev_i)?,
-            flags: u32::try_from(flags_i)?,
-        })
     }
 }
