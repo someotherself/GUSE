@@ -12,15 +12,17 @@ pub struct FileHandles {
     open_counts: DashMap<u64, AtomicU64>,
 }
 
-impl FileHandles {
-    pub fn init() -> Self {
+impl Default for FileHandles {
+    fn default() -> Self {
         Self {
             current_handle: AtomicU64::new(1),
             handles: DashMap::new(),
             open_counts: DashMap::new(),
         }
     }
+}
 
+impl FileHandles {
     /// Opens a file handle
     pub fn open(&self, handle: Handle) -> anyhow::Result<u64> {
         let fh = self.next_handle();
@@ -38,14 +40,15 @@ impl FileHandles {
         fh: u64,
         writer_tx: crossbeam_channel::Sender<DbWriteMsg>,
     ) -> anyhow::Result<bool> {
-        let ino = match self.handles.remove(&fh) {
-            Some(h) => h.1.ino,
-            None => return Ok(false),
-        };
-        if self.register_close(ino)?.is_some() {
-            GitFs::cleanup_entry_with_writemsg(ino.into(), writer_tx)?;
-        };
-        Ok(true)
+        if let Some((_, handle)) = self.handles.remove(&fh) {
+            let ino = handle.ino;
+            if let Err(e) = GitFs::cleanup_entry_with_writemsg(ino.into(), writer_tx) {
+                tracing::error!("cleanup_entry_with_writemsg failed for ino {ino}: {e}");
+            }
+            Ok(true)
+        } else {
+            Ok(false)
+        }
     }
 
     fn register_open(&self, ino: u64) {
@@ -59,25 +62,33 @@ impl FileHandles {
         }
     }
 
-    /// Returns OK(Some(())) if the DB entry needs to be removed from inode_map
-    fn register_close(&self, ino: u64) -> anyhow::Result<Option<()>> {
+    /// Returns Some(()) if the DB entry needs to be removed from inode_map
+    fn register_close(&self, ino: u64) -> Option<()> {
         match self.open_counts.entry(ino) {
             dashmap::Entry::Occupied(e) => {
                 let counter = e.get();
-                let prev = counter.load(Ordering::Acquire);
-                if prev == 0 {
-                    e.remove();
-                    return Ok(Some(()));
+                match counter.fetch_update(Ordering::AcqRel, Ordering::Acquire, |v| v.checked_sub(1)) {
+                    // Counter is now zero
+                    Ok(1) => {
+                        e.remove();
+                        None
+                    },
+                    // Counter is still higher than zero
+                    Ok(_) => None,
+                    // Counter was already zero
+                    Err(0) => {
+                        e.remove();
+                        return Some(());
+                    },
+                    Err(_) => {
+                        tracing::error!("Unreacheable. Atomic returned Err with non-zero value");
+                        None
+                    }
                 }
-                if counter.fetch_sub(1, Ordering::AcqRel) == 1 {
-                    e.remove();
-                    return Ok(Some(()));
-                };
-                Ok(None)
             }
             dashmap::Entry::Vacant(_) => {
                 tracing::error!("Inode {ino} has no open filehandles");
-                Ok(None)
+                None
             }
         }
     }
