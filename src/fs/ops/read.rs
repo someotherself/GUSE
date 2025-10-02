@@ -1,6 +1,6 @@
 use std::os::unix::fs::FileExt;
 
-use anyhow::{anyhow, bail};
+use anyhow::bail;
 use tracing::instrument;
 
 use crate::{fs::GitFs, inodes::Inodes};
@@ -13,10 +13,9 @@ pub fn read_live(
     buf: &mut [u8],
     fh: u64,
 ) -> anyhow::Result<usize> {
-    let guard = fs.handles.read().map_err(|_| anyhow!("Lock poisoned."))?;
-    let ctx = guard
-        .get(&fh)
-        .ok_or_else(|| anyhow!(format!("Handle {} for ino {} does not exist", fh, ino)))?;
+    let Some(ctx) = fs.handles.get_context(fh) else {
+        bail!(format!("Handle {} for ino {} does not exist", fh, ino))
+    };
     if !ctx.source.is_file() {
         bail!("Invalid handle - wrong file type")
     }
@@ -43,10 +42,9 @@ pub fn read_git(
     buf: &mut [u8],
     fh: u64,
 ) -> anyhow::Result<usize> {
-    let guard = fs.handles.read().map_err(|_| anyhow!("Lock poisoned."))?;
-    let ctx = guard
-        .get(&fh)
-        .ok_or_else(|| anyhow!("Handle does not exist"))?;
+    let Some(ctx) = fs.handles.get_context(fh) else {
+        bail!(format!("Handle {} for ino {} does not exist", fh, ino))
+    };
     if ctx.ino != *ino {
         bail!("Invalid handle - wrong inode")
     }

@@ -1,4 +1,4 @@
-use anyhow::{anyhow, bail};
+use anyhow::bail;
 
 use crate::{fs::GitFs, inodes::NormalIno, mount::InvalMsg};
 
@@ -7,10 +7,9 @@ pub fn truncate_live(fs: &GitFs, ino: NormalIno, size: u64, fh: Option<u64>) -> 
         Some(fh) => fh,
         None => fs.open(ino.to_norm_u64(), true, true, false)?,
     };
-    let guard = fs.handles.read().map_err(|_| anyhow!("Lock poisoned."))?;
-    let ctx = guard
-        .get(&fh)
-        .ok_or_else(|| anyhow!(format!("Handle {} for ino {} does not exist", fh, ino)))?;
+    let Some(ctx) = fs.handles.get_context(fh) else {
+        bail!(format!("Handle {} for ino {} does not exist", fh, ino))
+    };
     if ctx.ino != ino.to_norm_u64() {
         bail!("Invalid filehandle")
     }
@@ -33,10 +32,9 @@ pub fn truncate_git(fs: &GitFs, ino: NormalIno, size: u64, fh: Option<u64>) -> a
         Some(fh) => fh,
         None => fs.open(ino.to_norm_u64(), true, true, false)?,
     };
-    let guard = fs.handles.read().map_err(|_| anyhow!("Lock poisoned."))?;
-    let ctx = guard
-        .get(&fh)
-        .ok_or_else(|| anyhow!(format!("Handle {} for ino {} does not exist", fh, ino)))?;
+    let Some(ctx) = fs.handles.get_context(fh) else {
+        bail!(format!("Handle {} for ino {} does not exist", fh, ino))
+    };
     if ctx.ino != ino.to_norm_u64() {
         bail!("Invalid filehandle")
     }

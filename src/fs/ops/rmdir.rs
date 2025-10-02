@@ -14,7 +14,7 @@ pub fn rmdir_live(fs: &GitFs, parent: NormalIno, name: &str) -> anyhow::Result<(
         bail!(std::io::Error::from_raw_os_error(libc::ENOENT))
     };
     std::fs::remove_dir(path)?;
-    fs.remove_db_record(parent, name)?;
+    fs.remove_db_dentry(parent, name)?;
     {
         let _ = fs.notifier.try_send(InvalMsg::Entry {
             parent: parent.into(),
@@ -42,7 +42,7 @@ pub fn rmdir_git(fs: &GitFs, parent: NormalIno, name: &str) -> anyhow::Result<()
     };
 
     std::fs::remove_dir(path)?;
-    fs.remove_db_record(parent, name)?;
+    fs.remove_db_dentry(parent, name)?;
     {
         let _ = fs.notifier.try_send(InvalMsg::Entry {
             parent: parent.to_norm_u64(),

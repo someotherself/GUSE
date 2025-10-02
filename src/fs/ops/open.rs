@@ -33,17 +33,13 @@ pub fn open_live(
         .write(write)
         .truncate(truncate)
         .open(path)?;
-    let fh = fs.next_file_handle();
     let handle = Handle {
         ino,
         source: SourceTypes::RealFile(file),
         read: true,
         write,
     };
-    {
-        let mut guard = fs.handles.write().map_err(|_| anyhow!("Lock poisoned"))?;
-        guard.insert(fh, handle);
-    }
+    let fh = fs.handles.open(handle)?;
     Ok(fh)
 }
 
@@ -86,17 +82,13 @@ pub fn open_git(
             .write(write)
             .truncate(write && truncate)
             .open(path)?;
-        let fh = fs.next_file_handle();
         let handle = Handle {
             ino: ino.to_norm_u64(),
             source: SourceTypes::RealFile(file),
             read: true,
             write,
         };
-        {
-            let mut guard = fs.handles.write().map_err(|_| anyhow!("Lock poisoned"))?;
-            guard.insert(fh, handle);
-        }
+        let fh = fs.handles.open(handle)?;
         return Ok(fh);
     }
     open_blob(fs, oid, ino.to_norm_u64(), read)
@@ -127,17 +119,13 @@ pub fn open_vfile(fs: &GitFs, ino: Inodes, read: bool, write: bool) -> anyhow::R
                 oid: Oid::zero(),
                 data,
             };
-            let fh = fs.next_file_handle();
             let handle = Handle {
                 ino: ino.to_u64_v(),
                 source: blob_file,
                 read: true,
                 write: false,
             };
-            {
-                let mut guard = fs.handles.write().map_err(|_| anyhow!("Lock poisoned"))?;
-                guard.insert(fh, handle);
-            }
+            let fh = fs.handles.open(handle)?;
             Ok(fh)
         }
         DirCase::Commit { oid } => {
@@ -162,17 +150,13 @@ pub fn open_vfile(fs: &GitFs, ino: Inodes, read: bool, write: bool) -> anyhow::R
                 oid: Oid::zero(),
                 data,
             };
-            let fh = fs.next_file_handle();
             let handle = Handle {
                 ino: ino.to_u64_v(),
                 source: blob_file,
                 read: true,
                 write: false,
             };
-            {
-                let mut guard = fs.handles.write().map_err(|_| anyhow!("Lock poisoned"))?;
-                guard.insert(fh, handle);
-            }
+            let fh = fs.handles.open(handle)?;
             Ok(fh)
         }
     }
@@ -261,17 +245,13 @@ fn open_blob(fs: &GitFs, oid: Oid, ino: u64, read: bool) -> anyhow::Result<u64> 
         oid,
         data: Arc::new(buf),
     };
-    let fh = fs.next_file_handle();
     let handle = Handle {
         ino,
         source: blob_file,
         read: true,
         write: false,
     };
-    {
-        let mut guard = fs.handles.write().map_err(|_| anyhow!("Lock poisoned"))?;
-        guard.insert(fh, handle);
-    }
+    let fh = fs.handles.open(handle)?;
     Ok(fh)
 }
 

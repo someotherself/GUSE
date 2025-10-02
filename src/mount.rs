@@ -430,15 +430,11 @@ impl fuser::Filesystem for GitFsAdapter {
         };
 
         let state_arc = {
-            let handles = fs.handles.read().unwrap();
-            let h = match handles.get(&fh) {
-                Some(h) if h.ino == ino => h,
-                _ => {
-                    reply.error(libc::ENOTDIR);
-                    return;
-                }
+            let Some(ctx) = fs.handles.get_context(fh) else {
+                reply.error(libc::ENOTDIR);
+                return;
             };
-            match &h.source {
+            match &ctx.source {
                 SourceTypes::DirSnapshot { entries } => Arc::clone(entries),
                 _ => {
                     reply.error(libc::ENOTDIR);

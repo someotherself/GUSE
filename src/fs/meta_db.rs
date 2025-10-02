@@ -95,9 +95,13 @@ pub enum DbWriteMsg {
         resp: Option<Resp<()>>,
     },
     /// Send and forget
-    RemoveRecord {
+    RemoveDentry {
         parent_ino: NormalIno,
         target_name: String,
+        resp: Option<Resp<()>>,
+    },
+    CleanupEntry {
+        target_ino: NormalIno,
         resp: Option<Resp<()>>,
     },
 }
@@ -200,7 +204,7 @@ where
                 }
                 None => {
                     if let Err(e) = &res {
-                        tracing::warn!("db write (FNF) WriteDentry failed: {e}");
+                        tracing::warn!("db update_size_in_db failed: {e}");
                     }
                     Ok(())
                 }
@@ -224,18 +228,18 @@ where
                 }
                 None => {
                     if let Err(e) = &res {
-                        tracing::warn!("db write (FNF) WriteDentry failed: {e}");
+                        tracing::warn!("db update_db_record failed: {e}");
                     }
                     Ok(())
                 }
             }
         }
-        DbWriteMsg::RemoveRecord {
+        DbWriteMsg::RemoveDentry {
             parent_ino,
             target_name,
             resp,
         } => {
-            let res = MetaDb::remove_db_record(conn, parent_ino.into(), &target_name);
+            let res = MetaDb::remove_db_dentry(conn, parent_ino.into(), &target_name);
             match resp {
                 Some(tx) => {
                     let _ = tx.try_send(
@@ -247,7 +251,26 @@ where
                 }
                 None => {
                     if let Err(e) = &res {
-                        tracing::warn!("db write (FNF) WriteDentry failed: {e}");
+                        tracing::warn!("db remove_db_dentry failed: {e}");
+                    }
+                    Ok(())
+                }
+            }
+        }
+        DbWriteMsg::CleanupEntry { target_ino, resp } => {
+            let res = MetaDb::cleanup_dentry(conn, target_ino.into());
+            match resp {
+                Some(tx) => {
+                    let _ = tx.try_send(
+                        res.as_ref()
+                            .map(|_| ())
+                            .map_err(|e| anyhow::anyhow!(e.to_string())),
+                    );
+                    res
+                }
+                None => {
+                    if let Err(e) = &res {
+                        tracing::warn!("db cleanup_dentry failed: {e}");
                     }
                     Ok(())
                 }
@@ -930,7 +953,11 @@ impl MetaDb {
         Ok(())
     }
 
-    pub fn remove_db_record<C>(tx: &C, parent_ino: u64, target_name: &str) -> anyhow::Result<()>
+    /// Will only remove the dentry and decrement the nlink in inode_map
+    ///
+    /// Record is removed from inode_map when there are no more open file handles
+    /// (see [`crate::fs::GitFs::release`])
+    pub fn remove_db_dentry<C>(tx: &C, parent_ino: u64, target_name: &str) -> anyhow::Result<()>
     where
         C: std::ops::Deref<Target = rusqlite::Connection>,
     {
@@ -955,39 +982,53 @@ impl MetaDb {
                 )
             })?;
 
-        let affected = tx.execute(
+        tx.execute(
             r#"
         DELETE FROM dentries
         WHERE parent_inode = ?1 AND name = ?2
         "#,
             params![parent_ino as i64, target_name],
         )?;
-        if affected != 1 {
-            bail!("Expected to delete exactly 1 dentry, deleted {}", affected);
-        }
 
+        tx.execute(
+            r#"
+            UPDATE inode_map
+            SET nlink = (
+                SELECT COUNT(*)
+                FROM dentries
+                WHERE target_inode = ?1
+            )
+            WHERE inode = ?1
+            "#,
+            params![target_inode as i64],
+        )?;
+
+        Ok(())
+    }
+
+    pub fn cleanup_dentry<C>(tx: &C, target_ino: u64) -> anyhow::Result<()>
+    where
+        C: std::ops::Deref<Target = rusqlite::Connection>,
+    {
         let remaining_links: i64 = tx.query_row(
             r#"
-        SELECT COUNT(*) FROM dentries WHERE target_inode = ?1
+        SELECT COUNT(*)
+        FROM dentries
+        WHERE target_inode = ?1
         "#,
-            params![target_inode as i64],
+            params![target_ino as i64],
             |row| row.get(0),
         )?;
 
         if remaining_links == 0 {
             tx.execute(
                 r#"
-            DELETE FROM inode_map WHERE inode = ?1
+            DELETE FROM inode_map
+            WHERE inode = ?1
             "#,
-                params![target_inode as i64],
-            )?;
-        } else {
-            tx.execute(
-                r#"
-            UPDATE inode_map SET nlink = ?2 WHERE inode = ?1
-            "#,
-                params![target_inode as i64, remaining_links],
-            )?;
+                params![target_ino as i64],
+            )
+            .context("Failed to delete from inode_map")?;
         }
 
         Ok(())

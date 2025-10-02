@@ -43,9 +43,9 @@ pub fn rename_live(
 
     std::fs::rename(src, &dest)?;
 
-    fs.remove_db_record(parent, name)?;
+    fs.remove_db_dentry(parent, name)?;
     if dest_exists {
-        fs.remove_db_record(new_parent, new_name)?;
+        fs.remove_db_dentry(new_parent, new_name)?;
     }
 
     {
@@ -145,7 +145,7 @@ pub fn rename_git_build(
     std::fs::rename(&src, &dest)?;
 
     if dest_exists {
-        fs.remove_db_record(new_parent, new_name)?;
+        fs.remove_db_dentry(new_parent, new_name)?;
     }
 
     let ino_flag = if dest_in_build {

@@ -1,14 +1,13 @@
 use std::os::unix::fs::FileExt;
 
-use anyhow::{anyhow, bail};
+use anyhow::bail;
 
 use crate::{fs::GitFs, inodes::NormalIno, mount::InvalMsg};
 
 pub fn write_live(fs: &GitFs, ino: u64, offset: u64, buf: &[u8], fh: u64) -> anyhow::Result<usize> {
-    let guard = fs.handles.read().map_err(|_| anyhow!("Lock poisoned."))?;
-    let ctx = guard
-        .get(&fh)
-        .ok_or_else(|| anyhow!(format!("Handle {} for ino {} does not exist", fh, ino)))?;
+    let Some(ctx) = fs.handles.get_context(fh) else {
+        bail!(format!("Handle {} for ino {} does not exist", fh, ino))
+    };
     if ctx.ino != ino {
         bail!("Invalid filehandle")
     }
@@ -43,10 +42,9 @@ pub fn write_git(
     buf: &[u8],
     fh: u64,
 ) -> anyhow::Result<usize> {
-    let guard = fs.handles.read().map_err(|_| anyhow!("Lock poisoned."))?;
-    let ctx = guard
-        .get(&fh)
-        .ok_or_else(|| anyhow!(format!("Handle {} for ino {} does not exist", fh, ino)))?;
+    let Some(ctx) = fs.handles.get_context(fh) else {
+        bail!(format!("Handle {} for ino {} does not exist", fh, ino))
+    };
     if ctx.ino != ino.to_norm_u64() {
         bail!("Invalid filehandle")
     }

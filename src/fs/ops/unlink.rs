@@ -11,7 +11,7 @@ pub fn unlink_live(fs: &GitFs, parent: u64, name: &str) -> anyhow::Result<()> {
     };
     let path = fs.build_full_path(target_ino.into())?;
     std::fs::remove_file(path)?;
-    fs.remove_db_record(parent.into(), name)?;
+    fs.remove_db_dentry(parent.into(), name)?;
 
     let _ = fs.notifier.try_send(InvalMsg::Entry {
         parent,
@@ -38,7 +38,7 @@ pub fn unlink_build_dir(fs: &GitFs, parent: NormalIno, name: &str) -> anyhow::Re
     };
 
     std::fs::remove_file(path)?;
-    fs.remove_db_record(parent, name)?;
+    fs.remove_db_dentry(parent, name)?;
 
     let _ = fs.notifier.try_send(InvalMsg::Entry {
         parent: parent.to_norm_u64(),

@@ -21,6 +21,7 @@ use crate::fs::fileattr::{
     CreateFileAttr, FileAttr, FileType, InoFlag, ObjectAttr, SetStoredAttr, StorageNode,
     build_attr_dir, dir_attr, file_attr,
 };
+use crate::fs::handles::FileHandles;
 use crate::fs::meta_db::{DbWriteMsg, MetaDb, oneshot};
 use crate::fs::ops::readdir::{DirectoryEntry, DirectoryEntryPlus, DirectoryStreamCookie};
 use crate::fs::repo::{GitRepo, VirtualNode};
@@ -30,6 +31,7 @@ use crate::namespec::NameSpec;
 
 pub mod builds;
 pub mod fileattr;
+pub mod handles;
 pub mod meta_db;
 pub mod ops;
 pub mod repo;
@@ -114,13 +116,16 @@ impl FsOperationContext {
 pub struct GitFs {
     pub repos_dir: PathBuf,
     /// Use helpers `self.insert_repo` and `self.delete_repo`
-    repos_list: BTreeMap<u16, Arc<Mutex<GitRepo>>>, // <repo_id, repo>
-    conn_list: DashMap<u16, Arc<MetaDb>>, // <repo_id, connections>
+    /// <repo_id, repo>
+    repos_list: BTreeMap<u16, Arc<Mutex<GitRepo>>>,
+    /// <repo_id, connections>
+    conn_list: DashMap<u16, Arc<MetaDb>>,
     /// Use helpers `self.insert_repo` and `self.delete_repo`
-    repos_map: HashMap<String, u16>, // <repo_name, repo_id>
-    next_inode: HashMap<u16, AtomicU64>,  // Each Repo has a set of inodes
-    current_handle: AtomicU64,
-    pub handles: RwLock<HashMap<u64, Handle>>, // (fh, Handle)
+    /// <repo_name, repo_id>
+    repos_map: HashMap<String, u16>,
+    /// Each Repo has a set of inodes
+    next_inode: HashMap<u16, AtomicU64>,
+    pub handles: FileHandles,
     read_only: bool,
     vfile_entry: RwLock<HashMap<VirtualIno, VFileEntry>>,
     notifier: crossbeam_channel::Sender<InvalMsg>,
@@ -234,8 +239,7 @@ impl GitFs {
             conn_list: DashMap::new(),
             repos_map: HashMap::new(),
             read_only,
-            handles: RwLock::new(HashMap::new()),
-            current_handle: AtomicU64::new(1),
+            handles: FileHandles::default(),
             next_inode: HashMap::new(),
             vfile_entry: RwLock::new(HashMap::new()),
             notifier: tx.clone(),
@@ -759,13 +763,15 @@ impl GitFs {
         if fh == 0 {
             return Ok(true);
         }
-        let ino = {
-            let mut guard = self.handles.write().map_err(|_| anyhow!("Lock poisoned"))?;
-            match guard.remove(&fh) {
-                Some(h) => h.ino,
-                None => return Ok(false),
-            }
+        let Some(ino) = self.handles.exists(fh) else {
+            return Ok(false);
         };
+        let writer_tx = if ino == ROOT_INO {
+            None
+        } else {
+            Some(self.prepare_writemsg(ino.into())?)
+        };
+        self.handles.close(fh, writer_tx)?;
         {
             let mut guard = self
                 .vfile_entry
@@ -1707,10 +1713,6 @@ impl GitFs {
         Ok(ino)
     }
 
-    fn next_file_handle(&self) -> u64 {
-        self.current_handle.fetch_add(1, Ordering::SeqCst)
-    }
-
     fn next_repo_id(&self) -> u16 {
         match self.repos_list.keys().next_back() {
             Some(&i) => {
@@ -1964,15 +1966,10 @@ impl GitFs {
         Ok(())
     }
 
-    // TODO: DB WRITER - RemoveRecord { parent_ino: NormalIno, target_name: String }
-    /// Removes the directory entry (from dentries) for the target
+    /// Removes the directory entry (from dentries) for the target and decrements nlinks
     ///
-    /// If it's the only directory entry for this inode, it will remove the inode entry as well
-    ///
-    /// TODO: Do not delete inode entry only when open fh are 0
-    /// TODO: Perform that in the fn release - using a channel
     /// Send and forget but will log errors as tracing::error!
-    fn remove_db_record(&self, parent_ino: NormalIno, target_name: &str) -> anyhow::Result<()> {
+    fn remove_db_dentry(&self, parent_ino: NormalIno, target_name: &str) -> anyhow::Result<()> {
         let repo_id = GitFs::ino_to_repo_id(parent_ino.into());
         let writer_tx = {
             let guard = self
@@ -1982,7 +1979,7 @@ impl GitFs {
             guard.writer_tx.clone()
         };
 
-        let msg = DbWriteMsg::RemoveRecord {
+        let msg = DbWriteMsg::RemoveDentry {
             parent_ino,
             target_name: target_name.to_string(),
             resp: None,
@@ -1990,6 +1987,64 @@ impl GitFs {
         writer_tx
             .send(msg)
             .context("writer_tx error on remove_db_record")?;
+
+        Ok(())
+    }
+
+    /// Returns a sender for DbWriteMsg to be used when no reference to GitFs is available
+    fn prepare_writemsg(
+        &self,
+        ino: NormalIno,
+    ) -> anyhow::Result<crossbeam_channel::Sender<DbWriteMsg>> {
+        let repo_id = GitFs::ino_to_repo_id(ino.into());
+        let writer_tx = {
+            let guard = self
+                .conn_list
+                .get(&repo_id)
+                .ok_or_else(|| anyhow::anyhow!("No db for repo id {repo_id}"))?;
+            guard.writer_tx.clone()
+        };
+        Ok(writer_tx)
+    }
+
+    /// Must be passed a sender from [`crate::fs::GitFs::prepare_writemsg`]
+    fn cleanup_entry_with_writemsg(
+        target_ino: NormalIno,
+        writer_tx: crossbeam_channel::Sender<DbWriteMsg>,
+    ) -> anyhow::Result<()> {
+        let msg = DbWriteMsg::CleanupEntry {
+            target_ino,
+            resp: None,
+        };
+        writer_tx
+            .send(msg)
+            .context("writer_tx error on cleanup_dentry")?;
+
+        Ok(())
+    }
+
+    /// Checks and removes the inode record from inode_map
+    ///
+    /// Must have nlinks == 0 and is only called when there are no open file handles
+    ///
+    /// Send and forget but will log errors as tracing::error!
+    fn cleanup_dentry(&self, target_ino: NormalIno) -> anyhow::Result<()> {
+        let repo_id = GitFs::ino_to_repo_id(target_ino.into());
+        let writer_tx = {
+            let guard = self
+                .conn_list
+                .get(&repo_id)
+                .ok_or_else(|| anyhow::anyhow!("No db for repo id {repo_id}"))?;
+            guard.writer_tx.clone()
+        };
+
+        let msg = DbWriteMsg::CleanupEntry {
+            target_ino,
+            resp: None,
+        };
+        writer_tx
+            .send(msg)
+            .context("writer_tx error on cleanup_dentry")?;
 
         Ok(())
     }
