@@ -14,7 +14,6 @@ use std::{
 use anyhow::{Context, anyhow, bail};
 use dashmap::DashMap;
 use git2::{FileMode, ObjectType, Oid};
-use rusqlite::Connection;
 use tracing::{Level, field, info, instrument};
 
 use crate::fs::fileattr::{
@@ -22,7 +21,7 @@ use crate::fs::fileattr::{
     build_attr_dir, dir_attr, file_attr,
 };
 use crate::fs::handles::FileHandles;
-use crate::fs::meta_db::{DbWriteMsg, MetaDb, oneshot};
+use crate::fs::meta_db::{DbWriteMsg, MetaDb, oneshot, set_conn_pragmas, set_wal_once};
 use crate::fs::ops::readdir::{DirectoryEntry, DirectoryEntryPlus, DirectoryStreamCookie};
 use crate::fs::repo::{GitRepo, VirtualNode};
 use crate::inodes::{Inodes, NormalIno, VirtualIno};
@@ -531,12 +530,28 @@ impl GitFs {
     ///
     ///------------------└── .git/
     pub fn init_meta_db<P: AsRef<Path>>(&self, db_path: P) -> anyhow::Result<()> {
-        if db_path.as_ref().exists() {
-            std::fs::remove_file(&db_path)?;
-        }
-        let conn = Connection::open(&db_path)?;
+        let dbp = db_path.as_ref();
 
-        conn.execute_batch("PRAGMA foreign_keys = ON;")?;
+        if dbp.exists() {
+            std::fs::remove_file(dbp)?;
+            let wal = dbp.with_extension(format!(
+                "{}-wal",
+                dbp.extension().and_then(|s| s.to_str()).unwrap_or("")
+            ));
+            let shm = dbp.with_extension(format!(
+                "{}-shm",
+                dbp.extension().and_then(|s| s.to_str()).unwrap_or("")
+            ));
+            let _ = std::fs::remove_file(dbp.with_extension("db-wal"));
+            let _ = std::fs::remove_file(dbp.with_extension("db-shm"));
+            let _ = std::fs::remove_file(wal);
+            let _ = std::fs::remove_file(shm);
+        }
+
+        let conn = rusqlite::Connection::open(dbp)?;
+
+        set_wal_once(&conn)?;
+        set_conn_pragmas(&conn)?;
 
         // DB layout
         // INODE storage
@@ -556,6 +571,11 @@ impl GitFs {
         //   nlink        INTEGER   NOT NULL        -> calculated by sql
         //   rdev         INTEGER   NOT NULL
         //   flags        INTEGER   NOT NULL
+        //
+        // Directory Entries Storage
+        //  target_inode INTEGER   NOT NULL       -> inode from inode_map
+        //  parent_inode INTEGER   NOT NULL       -> the parent directory’s inode
+        //  name         TEXT      NOT NULL       -> the filename or directory name
         conn.execute_batch(
             r#"
                 CREATE TABLE IF NOT EXISTS inode_map (
@@ -576,15 +596,7 @@ impl GitFs {
                     rdev         INTEGER NOT NULL,
                     flags        INTEGER NOT NULL
                 );
-            "#,
-        )?;
 
-        // Directory Entries Storage
-        //  target_inode INTEGER   NOT NULL       -> inode from inode_map
-        //  parent_inode INTEGER   NOT NULL       -> the parent directory’s inode
-        //  name         TEXT      NOT NULL       -> the filename or directory name
-        conn.execute_batch(
-            r#"
                 CREATE TABLE IF NOT EXISTS dentries (
                 parent_inode INTEGER NOT NULL,
                 target_inode INTEGER NOT NULL,
@@ -592,13 +604,10 @@ impl GitFs {
                 PRIMARY KEY (parent_inode, name),
                 FOREIGN KEY (parent_inode) REFERENCES inode_map(inode) ON DELETE RESTRICT,
                 FOREIGN KEY (target_inode) REFERENCES inode_map(inode) ON DELETE RESTRICT
-                );
-            "#,
-        )?;
+                ) WITHOUT ROWID;
 
-        conn.execute_batch(
-            r#"
-            CREATE INDEX dentries_by_target ON dentries(target_inode);
+                CREATE INDEX IF NOT EXISTS dentries_by_target ON dentries(target_inode);
+                CREATE INDEX IF NOT EXISTS dentries_by_parent ON dentries(parent_inode);
             "#,
         )?;
         Ok(())

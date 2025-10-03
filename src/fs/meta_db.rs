@@ -27,23 +27,32 @@ pub struct MetaDb {
     pub writer_tx: Sender<DbWriteMsg>,
 }
 
-// TODO: FIX ISSUES CAUSED BY WAL
+pub fn set_wal_once(conn: &rusqlite::Connection) -> rusqlite::Result<()> {
+    let mode: String = conn.query_row("PRAGMA journal_mode=WAL;", [], |r| r.get(0))?;
+    if mode.to_lowercase() != "wal" {
+        return Err(rusqlite::Error::ExecuteReturnedResults);
+    }
+    Ok(())
+}
+
 // https://github.com/the-lean-crate/criner/issues/1#issue-577429787
-pub fn init_pragma(conn: &rusqlite::Connection) -> rusqlite::Result<()> {
+pub fn set_conn_pragmas(conn: &rusqlite::Connection) -> rusqlite::Result<()> {
     conn.execute_batch(
         r#"
-        PRAGMA journal_mode=WAL;
         PRAGMA synchronous=NORMAL;
-        PRAGMA busy_timeout=5000;
         PRAGMA foreign_keys=ON;
         PRAGMA temp_store=MEMORY;
         PRAGMA cache_size=-20000;
-        "#,
-    )
+        PRAGMA wal_autocheckpoint=1000;
+    "#,
+    )?;
+
+    conn.busy_timeout(std::time::Duration::from_millis(5000))?;
+    Ok(())
 }
 
 pub fn new_repo_db<P: AsRef<Path>>(db_path: P) -> anyhow::Result<std::sync::Arc<MetaDb>> {
-    let mgr = SqliteConnectionManager::file(&db_path).with_init(|c| init_pragma(c)); // runs for every pooled conn
+    let mgr = SqliteConnectionManager::file(&db_path).with_init(|c| set_conn_pragmas(c));
 
     let ro_pool = Pool::builder()
         .max_size(8_u32) // tune
@@ -51,7 +60,7 @@ pub fn new_repo_db<P: AsRef<Path>>(db_path: P) -> anyhow::Result<std::sync::Arc<
         .build(mgr)?;
 
     let writer = rusqlite::Connection::open(&db_path)?;
-    init_pragma(&writer)?;
+    set_conn_pragmas(&writer)?;
 
     let (writer_tx, _jh) = spawn_repo_writer(db_path.as_ref().to_path_buf())?;
 
@@ -122,7 +131,7 @@ fn spawn_repo_writer(
                     return;
                 }
             };
-            if let Err(e) = init_pragma(&conn) {
+            if let Err(e) = set_conn_pragmas(&conn) {
                 tracing::error!("Writer PRAGMA failed: {e}");
                 return;
             }
