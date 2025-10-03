@@ -27,6 +27,7 @@ pub struct MetaDb {
     pub writer_tx: Sender<DbWriteMsg>,
 }
 
+// TODO: FIX ISSUES CAUSED BY WAL
 // https://github.com/the-lean-crate/criner/issues/1#issue-577429787
 pub fn init_pragma(conn: &rusqlite::Connection) -> rusqlite::Result<()> {
     conn.execute_batch(

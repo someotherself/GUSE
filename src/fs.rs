@@ -272,6 +272,7 @@ impl GitFs {
             let repo_name_os = entry.file_name();
             let repo_name = repo_name_os.to_str().context("Not a valid UTF-8 name")?;
             let repo_path = entry.path();
+            // TODO: Allow orphaned repos?
             if !repo_path.join(META_STORE).exists() {
                 continue;
             }
@@ -402,7 +403,6 @@ impl GitFs {
 
         // Create build folder again
         std::fs::create_dir(&build_path)?;
-        std::fs::set_permissions(&build_path, std::fs::Permissions::from_mode(0o775))?;
 
         Ok(())
     }
@@ -450,13 +450,13 @@ impl GitFs {
         Ok(nodes)
     }
 
+    // TODO
     pub fn new_repo(&mut self, repo_name: &str) -> anyhow::Result<Arc<Mutex<GitRepo>>> {
         let repo_path = self.repos_dir.join(repo_name);
         if repo_path.exists() {
             bail!("Re1po already exists");
         }
         std::fs::create_dir(&repo_path)?;
-        std::fs::set_permissions(&repo_path, std::fs::Permissions::from_mode(0o775))?;
 
         let repo_id = self.next_repo_id();
         let repo_ino = GitFs::repo_id_to_ino(repo_id);
@@ -464,13 +464,11 @@ impl GitFs {
             .insert(repo_id, AtomicU64::from(repo_ino + 1));
 
         // Initialite database
-        // TODO: Take path and don't return anything
         let db_path = repo_path.join(META_STORE);
         self.db_ensure_root(repo_ino)?;
 
         let dn_conn = meta_db::new_repo_db(db_path)?;
         self.conn_list.insert(repo_id, dn_conn);
-        tracing::info!("db connections: {}", self.conn_list.len());
 
         let mut repo_attr: FileAttr = dir_attr(InoFlag::RepoRoot).into();
         repo_attr.ino = repo_ino;
@@ -592,7 +590,7 @@ impl GitFs {
                 target_inode INTEGER NOT NULL,
                 name         TEXT    NOT NULL,
                 PRIMARY KEY (parent_inode, name),
-                FOREIGN KEY (parent_inode) REFERENCES inode_map(inode) ON DELETE CASCADE,
+                FOREIGN KEY (parent_inode) REFERENCES inode_map(inode) ON DELETE RESTRICT,
                 FOREIGN KEY (target_inode) REFERENCES inode_map(inode) ON DELETE RESTRICT
                 );
             "#,
