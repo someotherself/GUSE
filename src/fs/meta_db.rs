@@ -894,13 +894,14 @@ impl MetaDb {
             tx.execute(
                 r#"
                 INSERT INTO inode_map
-                    (inode, oid, git_mode, size, inode_flag, uid, gid, atime_secs, atime_nsecs, nlink, mtime_secs, mtime_nsecs, ctime_secs, ctime_nsecs, rdev, flags)
+                    (inode, oid, git_mode, size, inode_flag, uid, gid, nlink, atime_secs, atime_nsecs, mtime_secs, mtime_nsecs, ctime_secs, ctime_nsecs, rdev, flags)
                 VALUES
-                    (?1, ?2, ?3, ?4, ?5, ?6, ?7, 0, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)
+                    (?1, ?2, ?3, ?4, ?5, ?6, ?7, 1, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)
                 ON CONFLICT(inode) DO UPDATE SET
                     oid      = excluded.oid,
                     git_mode = excluded.git_mode,
                     size     = excluded.size,
+                    inode_flag = excluded.inode_flag,
                     uid      = excluded.uid,
                     gid      = excluded.gid,
                     atime_secs  = excluded.atime_secs,
