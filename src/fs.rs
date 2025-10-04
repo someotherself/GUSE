@@ -1888,8 +1888,7 @@ impl GitFs {
             return Ok(true);
         }
 
-        let res = self.get_oid_from_db(ino);
-        Ok(res.is_ok())
+        self.inode_exists(ino)
     }
 
     fn is_dir(&self, ino: Inodes) -> anyhow::Result<bool> {
@@ -2159,6 +2158,17 @@ impl GitFs {
             .ok_or_else(|| anyhow::anyhow!("no db"))?;
         let conn = repo_db.ro_pool.get()?;
         MetaDb::get_oid_from_db(&conn, ino)
+    }
+
+    #[instrument(level = "error", skip(self), fields(ino = %ino), ret(level = Level::DEBUG), err(Display))]
+    fn inode_exists(&self, ino: u64) -> anyhow::Result<bool> {
+        let repo_id = GitFs::ino_to_repo_id(ino);
+        let repo_db = self
+            .conn_list
+            .get(&repo_id)
+            .ok_or_else(|| anyhow::anyhow!("no db"))?;
+        let conn = repo_db.ro_pool.get()?;
+        MetaDb::inode_exists(&conn, ino)
     }
 
     pub fn get_ino_flag_from_db(&self, ino: NormalIno) -> anyhow::Result<InoFlag> {
