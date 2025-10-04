@@ -100,7 +100,7 @@ pub enum DbWriteMsg {
     UpdateSize {
         ino: NormalIno,
         size: u64,
-        resp: Option<Resp<()>>,
+        resp: Resp<()>,
     },
     /// Send and forget
     UpdateRecord {
@@ -207,23 +207,9 @@ where
             Ok(())
         }
         DbWriteMsg::UpdateSize { ino, size, resp } => {
-            let res = MetaDb::update_size_in_db(conn, ino.into(), size);
-            match resp {
-                Some(tx) => {
-                    let _ = tx.try_send(
-                        res.as_ref()
-                            .map(|_| ())
-                            .map_err(|e| anyhow::anyhow!(e.to_string())),
-                    );
-                    res
-                }
-                None => {
-                    // if let Err(e) = &res {
-                    //     tracing::warn!("db update_size_in_db failed: {e}");
-                    // }
-                    Ok(())
-                }
-            }
+            MetaDb::update_size_in_db(conn, ino.into(), size)?;
+            results.push(resp);
+            Ok(())
         }
         DbWriteMsg::UpdateRecord {
             old_parent,

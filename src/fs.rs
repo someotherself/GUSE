@@ -1960,14 +1960,18 @@ impl GitFs {
             guard.writer_tx.clone()
         };
 
+        let (tx, rx) = oneshot::<()>();
+
         let msg = DbWriteMsg::UpdateSize {
             ino,
             size,
-            resp: None,
+            resp: tx,
         };
         writer_tx
             .send(msg)
             .context("writer_tx error on update_size_in_db")?;
+
+        rx.recv().context("writer_rx disc on update_size_in_db for target")??;
 
         Ok(())
     }
