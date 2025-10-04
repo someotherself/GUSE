@@ -42,15 +42,15 @@ pub fn set_conn_pragmas(conn: &rusqlite::Connection) -> rusqlite::Result<()> {
         PRAGMA synchronous=NORMAL;
         PRAGMA foreign_keys=ON;
         PRAGMA temp_store=MEMORY;
-        PRAGMA journal_size_limit = 67108864;
-        PRAGMA mmap_size = 134217728;
-        PRAGMA cache_size=-2000;
+        PRAGMA journal_size_limit = 67108864 -- 64 megabytes;
+        PRAGMA mmap_size = 134217728 -- 128 megabytes;
+        PRAGMA cache_size=-20000;
         PRAGMA wal_autocheckpoint=1000;
-        PRAGMA read_uncommitted=OFF
+        PRAGMA read_uncommitted=OFF;
+        PRAGMA busy_timeout = 5000
     "#,
     )?;
 
-    conn.busy_timeout(std::time::Duration::from_millis(5000))?;
     Ok(())
 }
 
@@ -60,7 +60,7 @@ pub fn new_repo_db<P: AsRef<Path>>(db_path: P) -> anyhow::Result<std::sync::Arc<
         .with_init(|c| set_conn_pragmas(c));
 
     let ro_pool = Pool::builder()
-        .max_size(8_u32) // tune
+        .max_size(12_u32)
         .min_idle(Some(2))
         .build(ro_mgr)?;
 
@@ -149,7 +149,7 @@ fn spawn_repo_writer(
 
                     apply_msg(&tx_sql, first, &mut acks)?;
 
-                    for _ in 0..32 {
+                    for _ in 0..16 {
                         match rx.try_recv() {
                             Ok(m) => apply_msg(&tx_sql, m, &mut acks)?,
                             Err(crossbeam_channel::TryRecvError::Empty) => break,
