@@ -1971,7 +1971,8 @@ impl GitFs {
             .send(msg)
             .context("writer_tx error on update_size_in_db")?;
 
-        rx.recv().context("writer_rx disc on update_size_in_db for target")??;
+        rx.recv()
+            .context("writer_rx disc on update_size_in_db for target")??;
 
         Ok(())
     }
