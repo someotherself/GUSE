@@ -2119,7 +2119,6 @@ impl GitFs {
         Ok(())
     }
 
-    #[instrument(level = "debug", skip(self), err(Display))]
     pub fn parent_commit_build_session(&self, ino: NormalIno) -> anyhow::Result<Oid> {
         let oid = self.get_oid_from_db(ino.to_norm_u64())?;
 

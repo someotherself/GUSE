@@ -8,7 +8,7 @@ use crossbeam_channel::{Receiver, Sender};
 use git2::Oid;
 use r2d2::Pool;
 use r2d2_sqlite::SqliteConnectionManager;
-use rusqlite::{OptionalExtension, params};
+use rusqlite::{OpenFlags, OptionalExtension, TransactionBehavior, params};
 
 use crate::{
     fs::{
@@ -42,8 +42,11 @@ pub fn set_conn_pragmas(conn: &rusqlite::Connection) -> rusqlite::Result<()> {
         PRAGMA synchronous=NORMAL;
         PRAGMA foreign_keys=ON;
         PRAGMA temp_store=MEMORY;
-        PRAGMA cache_size=-20000;
+        PRAGMA journal_size_limit = 67108864;
+        PRAGMA mmap_size = 134217728;
+        PRAGMA cache_size=-2000;
         PRAGMA wal_autocheckpoint=1000;
+        PRAGMA read_uncommitted=OFF
     "#,
     )?;
 
@@ -52,12 +55,14 @@ pub fn set_conn_pragmas(conn: &rusqlite::Connection) -> rusqlite::Result<()> {
 }
 
 pub fn new_repo_db<P: AsRef<Path>>(db_path: P) -> anyhow::Result<std::sync::Arc<MetaDb>> {
-    let mgr = SqliteConnectionManager::file(&db_path).with_init(|c| set_conn_pragmas(c));
+    let ro_mgr = SqliteConnectionManager::file(&db_path)
+        .with_flags(OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_URI)
+        .with_init(|c| set_conn_pragmas(c));
 
     let ro_pool = Pool::builder()
         .max_size(8_u32) // tune
         .min_idle(Some(2))
-        .build(mgr)?;
+        .build(ro_mgr)?;
 
     let writer = rusqlite::Connection::open(&db_path)?;
     set_conn_pragmas(&writer)?;
@@ -124,7 +129,7 @@ fn spawn_repo_writer(
     let handle = std::thread::Builder::new()
         .name(format!("db-writer-{}", db_path.display()))
         .spawn(move || {
-            let conn = match rusqlite::Connection::open(&db_path) {
+            let mut conn = match rusqlite::Connection::open(&db_path) {
                 Ok(c) => c,
                 Err(e) => {
                     tracing::error!("Writer open failed: {e}");
@@ -138,16 +143,25 @@ fn spawn_repo_writer(
 
             while let Ok(first) = rx.recv() {
                 if let Err(e) = (|| -> anyhow::Result<()> {
-                    let tx_sql = conn.unchecked_transaction()?;
-                    apply_msg(&tx_sql, first)?;
-                    for _ in 0..64 {
+                    let tx_sql = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+
+                    let mut acks: Vec<crossbeam_channel::Sender<anyhow::Result<()>>> = Vec::new();
+
+                    apply_msg(&tx_sql, first, &mut acks)?;
+
+                    for _ in 0..32 {
                         match rx.try_recv() {
-                            Ok(m) => apply_msg(&tx_sql, m)?,
+                            Ok(m) => apply_msg(&tx_sql, m, &mut acks)?,
                             Err(crossbeam_channel::TryRecvError::Empty) => break,
                             Err(crossbeam_channel::TryRecvError::Disconnected) => break,
                         }
                     }
+
                     tx_sql.commit()?;
+
+                    for r in acks {
+                        let _ = r.send(Ok(()));
+                    }
                     Ok(())
                 })() {
                     tracing::error!("Writer failed: {e}");
@@ -158,19 +172,19 @@ fn spawn_repo_writer(
     Ok((tx, handle))
 }
 
-fn apply_msg<C>(conn: &C, msg: DbWriteMsg) -> anyhow::Result<()>
+fn apply_msg<C>(
+    conn: &C,
+    msg: DbWriteMsg,
+    results: &mut Vec<crossbeam_channel::Sender<anyhow::Result<()>>>,
+) -> anyhow::Result<()>
 where
     C: std::ops::Deref<Target = rusqlite::Connection>,
 {
     match msg {
         DbWriteMsg::EnsureRoot { resp } => {
-            let res = MetaDb::ensure_root(conn).map(|_| ());
-            let _ = resp.send(
-                res.as_ref()
-                    .map(|_| ())
-                    .map_err(|e| anyhow::anyhow!(e.to_string())),
-            );
-            res
+            MetaDb::ensure_root(conn).map(|_| ())?;
+            results.push(resp);
+            Ok(())
         }
         DbWriteMsg::WriteDentry {
             parent_ino,
@@ -178,28 +192,19 @@ where
             target_name,
             resp,
         } => {
-            let res =
-                MetaDb::write_dentry(conn, parent_ino.into(), target_ino.into(), &target_name);
-            let _ = resp.send(res.map(|_| ()));
+            MetaDb::write_dentry(conn, parent_ino.into(), target_ino.into(), &target_name)?;
+            results.push(resp);
             Ok(())
         }
         DbWriteMsg::WriteInodes { nodes, resp } => {
-            let res = MetaDb::write_inodes_to_db(conn, nodes);
-            let _ = resp.send(
-                res.as_ref()
-                    .map(|_| ())
-                    .map_err(|e| anyhow::anyhow!(e.to_string())),
-            );
-            res
+            MetaDb::write_inodes_to_db(conn, nodes)?;
+            results.push(resp);
+            Ok(())
         }
         DbWriteMsg::UpdateMetadata { attr, resp } => {
-            let res = MetaDb::update_inodes_table(conn, attr);
-            let _ = resp.send(
-                res.as_ref()
-                    .map(|_| ())
-                    .map_err(|e| anyhow::anyhow!(e.to_string())),
-            );
-            res
+            MetaDb::update_inodes_table(conn, attr)?;
+            results.push(resp);
+            Ok(())
         }
         DbWriteMsg::UpdateSize { ino, size, resp } => {
             let res = MetaDb::update_size_in_db(conn, ino.into(), size);
@@ -213,9 +218,9 @@ where
                     res
                 }
                 None => {
-                    if let Err(e) = &res {
-                        tracing::warn!("db update_size_in_db failed: {e}");
-                    }
+                    // if let Err(e) = &res {
+                    //     tracing::warn!("db update_size_in_db failed: {e}");
+                    // }
                     Ok(())
                 }
             }
@@ -294,79 +299,86 @@ impl MetaDb {
     where
         C: std::ops::Deref<Target = rusqlite::Connection>,
     {
-        {
-            let mut upsert_inode = tx.prepare(
-                r#"
-            INSERT INTO inode_map
-                (inode, oid, git_mode, size, inode_flag,
-                uid, gid, nlink,
-                atime_secs, atime_nsecs,
-                mtime_secs, mtime_nsecs,
-                ctime_secs, ctime_nsecs,
-                rdev, flags)
-            VALUES
-                (?1, ?2, ?3, ?4, ?5, ?6, ?7, 0, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)
-            ON CONFLICT(inode) DO UPDATE SET
-                oid         = excluded.oid,
-                git_mode    = excluded.git_mode,
-                size        = excluded.size,
-                uid         = excluded.uid,
-                gid         = excluded.gid,
-                atime_secs  = excluded.atime_secs,
-                atime_nsecs = excluded.atime_nsecs,
-                mtime_secs  = excluded.mtime_secs,
-                mtime_nsecs = excluded.mtime_nsecs,
-                ctime_secs  = excluded.ctime_secs,
-                ctime_nsecs = excluded.ctime_nsecs,
-                rdev        = excluded.rdev,
-                flags       = excluded.flags
-            ;
-            "#,
-            )?;
+        let mut upsert_inode = tx.prepare(
+            r#"
+        INSERT INTO inode_map
+            (inode, oid, git_mode, size, inode_flag,
+             uid, gid, nlink,
+             atime_secs, atime_nsecs,
+             mtime_secs, mtime_nsecs,
+             ctime_secs, ctime_nsecs,
+             rdev, flags)
+        VALUES
+            (?1, ?2, ?3, ?4, ?5,
+             ?6, ?7, 0,
+             ?8, ?9,
+             ?10, ?11,
+             ?12, ?13,
+             ?14, ?15)
+        ON CONFLICT(inode) DO UPDATE SET
+            oid         = excluded.oid,
+            git_mode    = excluded.git_mode,
+            size        = excluded.size,
+            inode_flag  = excluded.inode_flag,
+            uid         = excluded.uid,
+            gid         = excluded.gid,
+            atime_secs  = excluded.atime_secs,
+            atime_nsecs = excluded.atime_nsecs,
+            mtime_secs  = excluded.mtime_secs,
+            mtime_nsecs = excluded.mtime_nsecs,
+            ctime_secs  = excluded.ctime_secs,
+            ctime_nsecs = excluded.ctime_nsecs,
+            rdev        = excluded.rdev,
+            flags       = excluded.flags
+        ;
+        "#,
+        )?;
 
-            let mut insert_dentry = tx.prepare(
-                r#"
-            INSERT INTO dentries (parent_inode, name, target_inode)
-            VALUES (?1, ?2, ?3)
-            ON CONFLICT(parent_inode, name) DO UPDATE
-            SET target_inode = excluded.target_inode;
-            "#,
-            )?;
+        let mut insert_dentry = tx.prepare(
+            r#"
+        INSERT INTO dentries (parent_inode, name, target_inode)
+        VALUES (?1, ?2, ?3)
+        ON CONFLICT(parent_inode, name) DO UPDATE
+        SET target_inode = excluded.target_inode;
+        "#,
+        )?;
 
-            for node in nodes {
-                let a = &node.attr;
+        let mut affected: std::collections::BTreeSet<i64> = std::collections::BTreeSet::new();
 
-                upsert_inode.execute(params![
-                    a.ino as i64,
-                    a.oid.to_string(),
-                    a.git_mode as i64,
-                    a.size as i64,
-                    a.ino_flag as i64,
-                    a.uid as i64,
-                    a.gid as i64,
-                    a.atime_secs,
-                    a.atime_nsecs as i64,
-                    a.mtime_secs,
-                    a.mtime_nsecs as i64,
-                    a.ctime_secs,
-                    a.ctime_nsecs as i64,
-                    a.rdev as i64,
-                    a.flags as i64,
-                ])?;
+        for node in nodes {
+            let a = &node.attr;
 
-                insert_dentry.execute(params![node.parent_ino as i64, node.name, a.ino as i64,])?;
-            }
+            upsert_inode.execute(params![
+                a.ino as i64,
+                a.oid.to_string(),
+                a.git_mode as i64,
+                a.size as i64,
+                a.ino_flag as i64,
+                a.uid as i64,
+                a.gid as i64,
+                a.atime_secs,
+                a.atime_nsecs as i64,
+                a.mtime_secs,
+                a.mtime_nsecs as i64,
+                a.ctime_secs,
+                a.ctime_nsecs as i64,
+                a.rdev as i64,
+                a.flags as i64,
+            ])?;
+
+            insert_dentry.execute(params![node.parent_ino as i64, node.name, a.ino as i64,])?;
+
+            affected.insert(a.ino as i64);
         }
 
-        tx.execute_batch(
-            r#"
-            UPDATE inode_map
-            SET nlink = COALESCE(
-                (SELECT COUNT(*) FROM dentries d WHERE d.target_inode = inode_map.inode),
-                0
-            );
-            "#,
+        let mut upd = tx.prepare(
+            "UPDATE inode_map
+         SET nlink = (SELECT COUNT(*) FROM dentries d WHERE d.target_inode = inode_map.inode)
+         WHERE inode = ?1",
         )?;
+        for ino in affected {
+            upd.execute(params![ino])?;
+        }
 
         Ok(())
     }
@@ -760,6 +772,15 @@ impl MetaDb {
         Ok(git2::Oid::from_str(&oid_str)?)
     }
 
+    pub fn inode_exists(conn: &rusqlite::Connection, ino: u64) -> anyhow::Result<bool> {
+        let exists: i64 = conn.query_row(
+            "SELECT EXISTS(SELECT 1 FROM inode_map WHERE inode = ?1)",
+            [ino as i64],
+            |row| row.get(0),
+        )?;
+        Ok(exists != 0)
+    }
+
     pub fn get_ino_flag_from_db(conn: &rusqlite::Connection, ino: u64) -> anyhow::Result<u64> {
         let mut stmt = conn.prepare(
             "SELECT inode_flag
@@ -774,7 +795,7 @@ impl MetaDb {
         if let Some(ino_flag) = ino_flag_opt {
             Ok(ino_flag as u64)
         } else {
-            bail!(format!("Could not find mode for {ino}"))
+            bail!(format!("Could not find {ino} - ino_flag"))
         }
     }
 
