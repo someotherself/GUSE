@@ -1,6 +1,7 @@
 #![allow(unused_imports, unused_variables)]
 
 use anyhow::{Context, anyhow};
+use fuser::consts::{FUSE_ASYNC_READ, FUSE_WRITEBACK_CACHE};
 use fuser::{
     BackgroundSession, MountOption, ReplyAttr, ReplyData, ReplyEntry, ReplyOpen, ReplyWrite,
     TimeOrNow, consts,
@@ -31,7 +32,7 @@ use crate::fs::ops::readdir::{DirectoryEntry, DirectoryEntryPlus};
 use crate::fs::{GitFs, REPO_SHIFT, ROOT_INO, SourceTypes, repo};
 use crate::internals::sock::{socket_path, start_control_server};
 
-const TTL: Duration = Duration::from_secs(1);
+const TTL: Duration = Duration::from_secs(15);
 
 pub struct MountPoint {
     mountpoint: PathBuf,
@@ -150,9 +151,12 @@ impl fuser::Filesystem for GitFsAdapter {
         _req: &fuser::Request<'_>,
         config: &mut fuser::KernelConfig,
     ) -> Result<(), libc::c_int> {
-        config
-            .add_capabilities(consts::FUSE_WRITEBACK_CACHE)
-            .unwrap();
+        let capabilities = consts::FUSE_WRITEBACK_CACHE
+            | consts::FUSE_BIG_WRITES
+            | consts::FUSE_PARALLEL_DIROPS
+            | consts::FUSE_ATOMIC_O_TRUNC;
+
+        config.add_capabilities(capabilities).unwrap();
         config.set_max_readahead(128 * 1024).unwrap();
         Ok(())
     }
