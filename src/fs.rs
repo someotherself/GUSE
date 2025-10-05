@@ -1,6 +1,6 @@
 use std::ffi::{OsStr, OsString};
 use std::fs::File;
-use std::os::unix::fs::{FileExt, MetadataExt, PermissionsExt};
+use std::os::unix::fs::{FileExt, MetadataExt};
 use std::path::Path;
 use std::sync::{Arc, Mutex, OnceLock, RwLock};
 use std::time::{Duration, UNIX_EPOCH};
@@ -294,6 +294,38 @@ impl GitFs {
         Ok(Arc::from(Mutex::new(fs)))
     }
 
+    fn new_repo_connection(&mut self, repo_name: &str, tmpdir: &Path) -> anyhow::Result<u16> {
+        // Assign repo id
+        let repo_id = self.next_repo_id();
+        let repo_ino = (repo_id as u64) << REPO_SHIFT;
+        self.next_inode
+            .insert(repo_id, AtomicU64::from(repo_ino + 1));
+
+        let db_path = tmpdir.join(META_STORE);
+        // Initialize the database (create file and schema)
+        self.init_meta_db(&db_path)?;
+        // Initialize the ro_pool and writer_tx
+        let db_conn = meta_db::new_repo_db(&db_path)?;
+        self.conn_list.insert(repo_id, db_conn);
+
+        let repo = git2::Repository::init(tmpdir)?;
+
+        let git_repo = GitRepo {
+            repo_dir: repo_name.to_owned(),
+            repo_id,
+            inner: repo,
+            head: None,
+            snapshots: BTreeMap::new(),
+            res_inodes: HashSet::new(),
+            vdir_cache: BTreeMap::new(),
+            build_sessions: HashMap::new(),
+        };
+
+        let repo_rc = Arc::from(Mutex::from(git_repo));
+        self.insert_repo(repo_rc, repo_name, repo_id)?;
+        Ok(repo_id)
+    }
+
     /// Loads the repo with empty database.
     fn load_repo_connection(&mut self, repo_name: &str) -> anyhow::Result<u16> {
         let repo_path = self.repos_dir.join(repo_name);
@@ -449,78 +481,93 @@ impl GitFs {
         Ok(nodes)
     }
 
-    // TODO
-    pub fn new_repo(&mut self, repo_name: &str) -> anyhow::Result<Arc<Mutex<GitRepo>>> {
-        let repo_path = self.repos_dir.join(repo_name);
-        if repo_path.exists() {
-            bail!("Re1po already exists");
-        }
-        std::fs::create_dir(&repo_path)?;
+    pub fn new_repo(
+        &mut self,
+        repo_name: &str,
+        url: Option<&str>,
+    ) -> anyhow::Result<Arc<Mutex<GitRepo>>> {
+        let tmpdir = tempfile::Builder::new()
+            .rand_bytes(4)
+            .tempdir_in(&self.repos_dir)?;
+        let repo_id = self.new_repo_connection(repo_name, tmpdir.path())?;
 
-        let repo_id = self.next_repo_id();
+        self.fetch_repo(repo_id, tmpdir.path(), url)?;
+
+        todo!()
+    }
+
+    fn fetch_repo(
+        &mut self,
+        repo_id: u16,
+        tmp_path: &Path,
+        url: Option<&str>,
+    ) -> anyhow::Result<()> {
         let repo_ino = GitFs::repo_id_to_ino(repo_id);
-        self.next_inode
-            .insert(repo_id, AtomicU64::from(repo_ino + 1));
+        let repo_name = tmp_path
+            .file_name()
+            .context("No available repo name")?
+            .to_str()
+            .ok_or_else(|| anyhow!("No available repo name"))?;
 
-        // Initialite database
-        let db_path = repo_path.join(META_STORE);
+        // Write the ROOT_INO in db
         self.db_ensure_root(repo_ino)?;
 
-        let dn_conn = meta_db::new_repo_db(db_path)?;
-        self.conn_list.insert(repo_id, dn_conn);
-
+        // Write the Repo Root in db
         let mut repo_attr: FileAttr = dir_attr(InoFlag::RepoRoot).into();
         repo_attr.ino = repo_ino;
-        let mut nodes: Vec<StorageNode> = vec![StorageNode {
+        let nodes: Vec<StorageNode> = vec![StorageNode {
             parent_ino: ROOT_INO,
             name: repo_name.into(),
             attr: repo_attr.into(),
         }];
+        self.write_inodes_to_db(nodes)?;
 
-        let mut res_inodes = HashSet::new();
+        // Prepare the live and build folders
 
         let live_ino = self.next_inode_raw(repo_ino)?;
-        res_inodes.insert(live_ino);
         let build_ino = self.next_inode_raw(repo_ino)?;
-        res_inodes.insert(build_ino);
 
-        let repo = git2::Repository::init(&repo_path)?;
-
-        let live_name = "live".to_string();
         let build_name = "build".to_string();
-        let build_path = self.repos_dir.join(repo_name).join(&build_name);
-        std::fs::create_dir(&build_path)?;
-        std::fs::set_permissions(&build_path, std::fs::Permissions::from_mode(0o775))?;
+        let live_name = "live".to_string();
 
         let perms = 0o775;
         let st_mode = libc::S_IFDIR | perms;
         let live_attr = build_attr_dir(live_ino, InoFlag::LiveRoot, st_mode);
         let build_attr = build_attr_dir(build_ino, InoFlag::BuildRoot, st_mode);
-        nodes.push(StorageNode {
-            parent_ino: repo_ino,
-            name: live_name,
-            attr: live_attr.into(),
-        });
-        nodes.push(StorageNode {
-            parent_ino: repo_ino,
-            name: build_name,
-            attr: build_attr.into(),
-        });
 
-        let git_repo = GitRepo {
-            repo_dir: repo_name.to_owned(),
-            repo_id,
-            inner: repo,
-            head: None,
-            snapshots: BTreeMap::new(),
-            res_inodes,
-            vdir_cache: BTreeMap::new(),
-            build_sessions: HashMap::new(),
+        {
+            let repo = self.get_repo(repo_ino)?;
+            let mut guard = repo.lock().map_err(|_| anyhow!("Lock poisoned"))?;
+            guard.res_inodes.insert(live_ino);
+            guard.res_inodes.insert(build_ino);
+        }
+
+        let nodes: Vec<StorageNode> = vec![
+            StorageNode {
+                parent_ino: repo_ino,
+                name: live_name,
+                attr: live_attr.into(),
+            },
+            StorageNode {
+                parent_ino: repo_ino,
+                name: build_name,
+                attr: build_attr.into(),
+            },
+        ];
+
+        self.write_inodes_to_db(nodes)?;
+
+        if let Some(url) = url {
+            let repo = self.get_repo(repo_ino)?;
+            let mut repo = repo.lock().map_err(|_| anyhow!("Lock poisoned"))?;
+            repo.fetch_anon(url)?;
+            repo.refresh_snapshots()?;
         };
 
-        let repo_rc = Arc::from(Mutex::from(git_repo));
-        self.insert_repo(repo_rc.clone(), repo_name, repo_id)?;
-        Ok(repo_rc)
+        let final_path = self.repos_dir.join(repo_name);
+        std::fs::rename(tmp_path, final_path)?;
+
+        Ok(())
     }
 
     /// Must take in the name of the folder of the REPO --
@@ -2213,6 +2260,7 @@ impl GitFs {
         MetaDb::get_name_from_db(&conn, ino)
     }
 
+    /// Write the ROOT_INO in db for parent mapping purposes
     fn db_ensure_root(&self, ino: u64) -> anyhow::Result<()> {
         let repo_id = GitFs::ino_to_repo_id(ino);
         let writer_tx = {

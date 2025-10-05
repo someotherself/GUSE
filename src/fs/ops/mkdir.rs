@@ -19,12 +19,7 @@ pub fn mkdir_root(
     match repo::parse_mkdir_url(name)? {
         Some((url, repo_name)) => {
             println!("fetching repo {}", &repo_name);
-            let repo = fs.new_repo(&repo_name)?;
-            {
-                let mut repo = repo.lock().map_err(|_| anyhow!("Lock poisoned"))?;
-                repo.fetch_anon(&url)?;
-                repo.refresh_snapshots()?;
-            }
+            let repo = fs.new_repo(&repo_name, Some(&url))?;
             let repo_id = {
                 let repo = repo.lock().map_err(|_| anyhow!("Lock poisoned"))?;
                 repo.repo_id
@@ -35,7 +30,7 @@ pub fn mkdir_root(
         None => {
             println!("Creating repo {name}");
             let repo_id = {
-                let repo = fs.new_repo(name)?;
+                let repo = fs.new_repo(name, None)?;
                 let repo = repo.lock().map_err(|_| anyhow!("Lock poisoned"))?;
                 repo.repo_id
             };
