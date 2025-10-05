@@ -17,8 +17,8 @@ use git2::{FileMode, ObjectType, Oid};
 use tracing::{Level, field, info, instrument};
 
 use crate::fs::fileattr::{
-    CreateFileAttr, FileAttr, FileType, InoFlag, ObjectAttr, SetStoredAttr, StorageNode,
-    build_attr_dir, dir_attr, file_attr,
+    CreateFileAttr, FileAttr, FileType, InoFlag, ObjectAttr, SetStoredAttr, StorageNode, dir_attr,
+    file_attr,
 };
 use crate::fs::handles::FileHandles;
 use crate::fs::meta_db::{DbWriteMsg, MetaDb, oneshot, set_conn_pragmas, set_wal_once};
@@ -407,8 +407,14 @@ impl GitFs {
 
         let perms = 0o775;
         let st_mode = libc::S_IFDIR | perms;
-        let live_attr = build_attr_dir(live_ino, InoFlag::LiveRoot, st_mode);
-        let build_attr = build_attr_dir(build_ino, InoFlag::BuildRoot, st_mode);
+
+        let mut live_attr: FileAttr = dir_attr(InoFlag::LiveRoot).into();
+        live_attr.ino = live_ino;
+        live_attr.git_mode = st_mode;
+
+        let mut build_attr: FileAttr = dir_attr(InoFlag::BuildRoot).into();
+        build_attr.ino = build_ino;
+        build_attr.git_mode = st_mode;
 
         {
             let repo = self.get_repo(repo_ino)?;
@@ -532,8 +538,14 @@ impl GitFs {
 
         let perms = 0o775;
         let st_mode = libc::S_IFDIR | perms;
-        let live_attr = build_attr_dir(live_ino, InoFlag::LiveRoot, st_mode);
-        let build_attr = build_attr_dir(build_ino, InoFlag::BuildRoot, st_mode);
+
+        let mut live_attr: FileAttr = dir_attr(InoFlag::LiveRoot).into();
+        live_attr.ino = live_ino;
+        live_attr.git_mode = st_mode;
+
+        let mut build_attr: FileAttr = dir_attr(InoFlag::BuildRoot).into();
+        build_attr.ino = build_ino;
+        build_attr.git_mode = st_mode;
 
         {
             let repo = self.get_repo(repo_ino)?;
@@ -899,9 +911,16 @@ impl GitFs {
 
         let ctx = FsOperationContext::get_operation(self, ino);
         match ctx? {
-            FsOperationContext::Root => Ok(build_attr_dir(ROOT_INO, InoFlag::Root, st_mode)),
+            FsOperationContext::Root => {
+                let mut attr: FileAttr = dir_attr(InoFlag::Root).into();
+                attr.ino = ROOT_INO;
+                attr.git_mode = st_mode;
+                Ok(attr)
+            }
             FsOperationContext::RepoDir { ino: _ } => {
-                let attr = build_attr_dir(ino.to_u64_n(), InoFlag::RepoRoot, st_mode);
+                let mut attr: FileAttr = dir_attr(InoFlag::RepoRoot).into();
+                attr.ino = ino.into();
+                attr.git_mode = st_mode;
                 let ino: Inodes = attr.ino.into();
                 match ino {
                     Inodes::NormalIno(_) => Ok(attr),

@@ -3,7 +3,7 @@ use tracing::instrument;
 
 use crate::{
     fs::{
-        FileAttr, GitFs, REPO_SHIFT, build_attr_dir,
+        FileAttr, GitFs,
         fileattr::{InoFlag, dir_attr},
         meta_db::MetaDb,
     },
@@ -20,8 +20,11 @@ pub fn lookup_root(fs: &GitFs, name: &str) -> anyhow::Result<Option<FileAttr>> {
         if repo_name == name {
             let perms = 0o775;
             let st_mode = libc::S_IFDIR | perms;
-            let repo_ino = (repo_id as u64) << REPO_SHIFT;
-            Some(build_attr_dir(repo_ino, InoFlag::Root, st_mode))
+            let repo_ino = GitFs::repo_id_to_ino(repo_id);
+            let mut attr: FileAttr = dir_attr(InoFlag::RepoRoot).into();
+            attr.ino = repo_ino;
+            attr.git_mode = st_mode;
+            Some(attr)
         } else {
             None
         }

@@ -5,12 +5,9 @@ use git2::{ObjectType, Oid};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct FileAttr {
-    // Inode in the fuse fs
     pub ino: u64,
     pub ino_flag: InoFlag,
-    // SHA-1 in git
     pub oid: Oid,
-    // Blob size
     pub size: u64,
     pub blocks: u64,
     pub atime: SystemTime,
@@ -121,54 +118,6 @@ impl From<CreateFileAttr> for FileAttr {
             blksize: 0,
             flags: value.flags,
         }
-    }
-}
-
-fn build_attr_file(ino: u64, ino_flag: InoFlag, st_mode: u32) -> FileAttr {
-    let now = SystemTime::now();
-    FileAttr {
-        ino,
-        ino_flag,
-        oid: Oid::zero(),
-        size: 0,
-        blocks: 0,
-        atime: now,
-        mtime: now,
-        ctime: now,
-        crtime: now,
-        kind: FileType::RegularFile,
-        perm: 0o655,
-        git_mode: st_mode,
-        nlink: 1,
-        uid: unsafe { libc::getuid() } as u32,
-        gid: unsafe { libc::getgid() } as u32,
-        rdev: 0,
-        blksize: 4096,
-        flags: 0,
-    }
-}
-
-pub fn build_attr_dir(ino: u64, ino_flag: InoFlag, st_mode: u32) -> FileAttr {
-    let now = SystemTime::now();
-    FileAttr {
-        ino,
-        ino_flag,
-        oid: Oid::zero(),
-        size: 0,
-        blocks: 0,
-        atime: now,
-        mtime: now,
-        ctime: now,
-        crtime: now,
-        kind: FileType::Directory,
-        perm: 0o775,
-        git_mode: st_mode,
-        nlink: 2,
-        uid: unsafe { libc::getuid() } as u32,
-        gid: unsafe { libc::getgid() } as u32,
-        rdev: 0,
-        blksize: 4096,
-        flags: 0,
     }
 }
 

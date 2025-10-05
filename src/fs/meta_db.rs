@@ -74,6 +74,9 @@ pub fn new_repo_db<P: AsRef<Path>>(db_path: P) -> anyhow::Result<std::sync::Arc<
 
 pub type Resp<T> = crossbeam_channel::Sender<anyhow::Result<T>>;
 
+/// Creates a one-shot channel for sending a single `anyhow::Result<T>` response.
+///
+/// Returns a `(Sender, Receiver)` pair backed by a bounded crossbeam channel of size 1.
 pub fn oneshot<T>() -> (Resp<T>, crossbeam_channel::Receiver<anyhow::Result<T>>) {
     crossbeam_channel::bounded(1)
 }
