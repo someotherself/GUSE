@@ -25,8 +25,7 @@ use std::time::{Duration, SystemTime};
 use std::{num::NonZeroU32, path::PathBuf};
 
 use crate::fs::fileattr::{
-    CreateFileAttr, FileAttr, FileType, InoFlag, SetStoredAttr, dir_attr, pair_to_system_time,
-    system_time_to_pair,
+    FileAttr, FileType, InoFlag, SetStoredAttr, dir_attr, pair_to_system_time, system_time_to_pair,
 };
 use crate::fs::ops::readdir::{DirectoryEntry, DirectoryEntryPlus};
 use crate::fs::{GitFs, REPO_SHIFT, ROOT_INO, SourceTypes, repo};
@@ -1006,6 +1005,12 @@ fn errno_from_anyhow(err: &anyhow::Error) -> i32 {
             std::io::ErrorKind::DirectoryNotEmpty => libc::ENOTEMPTY,
             std::io::ErrorKind::IsADirectory => libc::EISDIR,
             std::io::ErrorKind::NotADirectory => libc::ENOTDIR,
+            std::io::ErrorKind::ConnectionRefused => libc::ECONNREFUSED,
+            std::io::ErrorKind::ConnectionReset => libc::ECONNRESET,
+            std::io::ErrorKind::ConnectionAborted => libc::ECONNABORTED,
+            std::io::ErrorKind::BrokenPipe => libc::EPIPE,
+            std::io::ErrorKind::Interrupted => libc::EINTR,
+            std::io::ErrorKind::Unsupported => libc::ENOTSUP,
             _ => EIO,
         };
     }
