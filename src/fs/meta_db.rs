@@ -67,7 +67,7 @@ pub fn new_repo_db<P: AsRef<Path>>(db_path: P) -> anyhow::Result<std::sync::Arc<
     let writer = rusqlite::Connection::open(&db_path)?;
     set_conn_pragmas(&writer)?;
 
-    let (writer_tx, _jh) = spawn_repo_writer(db_path.as_ref().to_path_buf())?;
+    let (writer_tx, _) = spawn_repo_writer(db_path.as_ref().to_path_buf())?;
 
     Ok(std::sync::Arc::new(MetaDb { ro_pool, writer_tx }))
 }

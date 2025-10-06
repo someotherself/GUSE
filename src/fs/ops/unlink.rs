@@ -40,6 +40,7 @@ pub fn unlink_build_dir(fs: &GitFs, parent: NormalIno, name: &str) -> anyhow::Re
     std::fs::remove_file(path)?;
     fs.remove_db_dentry(parent, name)?;
 
+    // TODO: Replace with notifier.delete
     let _ = fs.notifier.try_send(InvalMsg::Entry {
         parent: parent.to_norm_u64(),
         name: OsString::from(name),
