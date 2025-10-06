@@ -577,7 +577,13 @@ impl GitFs {
         };
 
         let final_path = self.repos_dir.join(repo_name);
-        std::fs::rename(tmp_path, final_path)?;
+        std::fs::rename(tmp_path, &final_path)?;
+
+        {
+            let repo = self.get_repo(repo_ino)?;
+            let mut repo = repo.lock().map_err(|_| anyhow!("Lock poisoned"))?;
+            repo.inner = git2::Repository::init(final_path)?;
+        }
 
         Ok(())
     }
