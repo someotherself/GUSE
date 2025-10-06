@@ -13,7 +13,7 @@ use tracing::{Level, Span, info, instrument};
 use tracing::{debug, error, trace, warn};
 
 use std::ffi::{OsStr, OsString};
-use std::io::{BufRead, BufReader, ErrorKind, Read, Write};
+use std::io::{BufRead, BufReader, Read, Write};
 use std::iter::Skip;
 use std::os::linux::fs;
 use std::os::unix::fs::PermissionsExt;
