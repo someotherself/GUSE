@@ -1,4 +1,4 @@
-use std::ffi::OsStr;
+use std::ffi::{OsStr, OsString};
 
 use anyhow::anyhow;
 use git2::Oid;
@@ -42,7 +42,7 @@ fn test_mkdir_fetch() -> anyhow::Result<()> {
             assert_eq!(read_dir_root[0].name, "git_rust");
 
             // FIND BY NAME ROOT
-            let mio_attr = fs.lookup(ROOT_INO, "git_rust")?;
+            let mio_attr = fs.lookup(ROOT_INO, OsStr::new("git_rust"))?;
             assert!(mio_attr.is_some());
             let mio_attr = mio_attr.unwrap();
             assert_eq!(mio_attr.ino, REPO_DIR_INO);
@@ -58,7 +58,7 @@ fn test_mkdir_fetch() -> anyhow::Result<()> {
             assert_eq!(read_dir_repo[0].name, "live");
             assert_eq!(read_dir_repo.len(), 4);
             let snap_1_parent = &read_dir_repo[2];
-            let snap_1_parent_name: &String = &snap_1_parent.name.clone().into_string().unwrap();
+            let snap_1_parent_name = &snap_1_parent.name.clone();
             let parent_snap_attr = fs.lookup(REPO_DIR_INO, snap_1_parent_name)?.unwrap();
             let parent_snap_ino = parent_snap_attr.ino;
 
@@ -68,7 +68,7 @@ fn test_mkdir_fetch() -> anyhow::Result<()> {
                 assert_eq!(a.ino, a_attr_1.ino);
                 if a.kind == FileType::Directory {
                     let a_attr = fs
-                        .lookup(parent_snap_ino, &a.name.into_string().unwrap())?
+                        .lookup(parent_snap_ino, &a.name)?
                         .ok_or_else(|| anyhow!("Invalid input"))?;
                     assert_eq!(a.ino, a_attr.ino);
 
@@ -78,7 +78,7 @@ fn test_mkdir_fetch() -> anyhow::Result<()> {
                         assert_eq!(b.ino, b_attr_1.ino);
                         if b.kind == FileType::Directory {
                             let b_attr = fs
-                                .lookup(a_attr.ino, &b.name.into_string().unwrap())?
+                                .lookup(a_attr.ino, &b.name)?
                                 .ok_or_else(|| anyhow!("Invalid input"))?;
                             assert_eq!(b.ino, b_attr.ino);
                             for c in fs.readdir(b_attr.ino)? {
@@ -87,13 +87,16 @@ fn test_mkdir_fetch() -> anyhow::Result<()> {
                                 if c.kind == FileType::Directory {
                                     let _c_attr = fs.getattr(c.ino)?;
                                     let c_attr = fs
-                                        .lookup(b_attr.ino, &c.name.clone().into_string().unwrap())?
+                                        .lookup(b_attr.ino, &c.name.clone())?
                                         .ok_or_else(|| anyhow!("Invalid input"))?;
                                     assert_eq!(c.ino, c_attr.ino);
                                 }
                                 dbg!("startig v_dir search");
                                 if c.oid != Oid::zero() && c.kind == FileType::RegularFile {
-                                    let name = format!("{}@", c.name.into_string().unwrap());
+                                    let name = OsString::from(format!(
+                                        "{}@",
+                                        c.name.into_string().unwrap()
+                                    ));
                                     let v_dir_attr = fs.lookup(b_attr.ino, &name.clone())?.unwrap();
                                     dbg!(v_dir_attr.ino);
                                     let v_dir_entries = fs.readdir(v_dir_attr.ino)?;
@@ -104,10 +107,7 @@ fn test_mkdir_fetch() -> anyhow::Result<()> {
                                     dbg!(v_dir_attr.ino);
 
                                     let lookup_attr = fs
-                                        .lookup(
-                                            v_dir_attr.ino,
-                                            &v_dir_entries[0].name.clone().into_string().unwrap(),
-                                        )?
+                                        .lookup(v_dir_attr.ino, &v_dir_entries[0].name.clone())?
                                         .unwrap();
                                     dbg!(lookup_attr.ino);
 
@@ -123,7 +123,7 @@ fn test_mkdir_fetch() -> anyhow::Result<()> {
             }
 
             // FIND BY NAME REPO_DIR
-            let live_attr = fs.lookup(REPO_DIR_INO, "live")?;
+            let live_attr = fs.lookup(REPO_DIR_INO, OsStr::new("live"))?;
             assert!(live_attr.is_some());
             let live_attr = live_attr.unwrap();
             assert_eq!(live_attr.ino, LIVE_DIR_INO);
@@ -167,7 +167,7 @@ fn test_mkdir_normal() -> anyhow::Result<()> {
             assert_eq!(repo_attr.ino, REPO_DIR_INO);
 
             // FIND BY NAME
-            let live_attr = fs.lookup(REPO_DIR_INO, "live")?;
+            let live_attr = fs.lookup(REPO_DIR_INO, OsStr::new("live"))?;
             assert!(live_attr.is_some());
             let live_attr = live_attr.unwrap();
             assert_eq!(live_attr.ino, LIVE_DIR_INO);
@@ -177,7 +177,7 @@ fn test_mkdir_normal() -> anyhow::Result<()> {
             assert_eq!(read_dir.len(), 1);
 
             assert_eq!(read_dir[0].name, "new_repo");
-            let _folder_attr = fs.lookup(ROOT_INO, "new_repo")?.unwrap();
+            let _folder_attr = fs.lookup(ROOT_INO, OsStr::new("new_repo"))?.unwrap();
 
             let read_dir = fs.readdir(REPO_DIR_INO)?;
             assert_eq!(read_dir.len(), 2);
@@ -191,7 +191,7 @@ fn test_mkdir_normal() -> anyhow::Result<()> {
             let dir1attr_ino: Inodes = dir1_attr.ino.into();
             assert!(fs.exists(dir1attr_ino)?);
 
-            let find_dir1 = fs.lookup(LIVE_DIR_INO, "dir_in_live_1")?.unwrap();
+            let find_dir1 = fs.lookup(LIVE_DIR_INO, dir_name1)?.unwrap();
             assert_eq!(find_dir1.ino, dir1_ino);
             let getattr_dir1 = fs.getattr(find_dir1.ino)?;
             assert_eq!(getattr_dir1.ino, dir1_ino);
@@ -217,9 +217,9 @@ fn test_mkdir_normal() -> anyhow::Result<()> {
 
             let test_file1 = OsStr::new("new_file_1");
             fs.create(LIVE_DIR_INO, test_file1, true, true)?;
-            let attr_real_file = fs.lookup(LIVE_DIR_INO, "new_file_1")?;
+            let attr_real_file = fs.lookup(LIVE_DIR_INO, test_file1)?;
             assert!(attr_real_file.is_some());
-            let attr_vdir = fs.lookup(LIVE_DIR_INO, "new_file_1@");
+            let attr_vdir = fs.lookup(LIVE_DIR_INO, OsStr::new("new_file_1@"));
             assert!(attr_vdir.is_ok());
             let attr_vdir = attr_vdir?;
             let attr_vdir = attr_vdir.unwrap();
@@ -243,7 +243,7 @@ fn test_mkdir_normal() -> anyhow::Result<()> {
 
 /// Helper to get the ino of the "live" dir under the repo-dir.
 fn live_ino(fs: &GitFs) -> anyhow::Result<u64> {
-    fs.lookup(REPO_DIR_INO, "live")?
+    fs.lookup(REPO_DIR_INO, OsStr::new("live"))?
         .map(|a| a.ino)
         .ok_or_else(|| anyhow!("live not found"))
 }
@@ -268,15 +268,15 @@ fn test_rename_live_same_parent_dir() -> anyhow::Result<()> {
             let alpha = OsStr::new("alpha");
             fs.mkdir(live, alpha)?;
             // Sanity
-            assert!(fs.lookup(live, "alpha")?.is_some());
+            assert!(fs.lookup(live, alpha)?.is_some());
 
             // Rename live/alpha -> live/bravo
             let bravo = OsStr::new("bravo");
             fs.rename(live, alpha, live, bravo)?;
 
             // Old gone, new present
-            assert!(fs.lookup(live, "alpha")?.is_none());
-            let bravo_attr = fs.lookup(live, "bravo")?.expect("bravo missing");
+            assert!(fs.lookup(live, alpha)?.is_none());
+            let bravo_attr = fs.lookup(live, bravo)?.expect("bravo missing");
             // Bravo is a dir
             assert_eq!(bravo_attr.kind, FileType::Directory);
 
@@ -310,14 +310,14 @@ fn test_rename_live_across_parents() -> anyhow::Result<()> {
             // left/x
             let x = OsStr::new("x");
             fs.mkdir(left_attr.ino, x)?;
-            assert!(fs.lookup(left_attr.ino, "x")?.is_some());
+            assert!(fs.lookup(left_attr.ino, x)?.is_some());
 
             // Move left/x -> right/x
             fs.rename(left_attr.ino, x, right_attr.ino, x)?;
 
             // Verify
-            assert!(fs.lookup(left_attr.ino, "x")?.is_none());
-            assert!(fs.lookup(right_attr.ino, "x")?.is_some());
+            assert!(fs.lookup(left_attr.ino, x)?.is_none());
+            assert!(fs.lookup(right_attr.ino, x)?.is_some());
 
             Ok(())
         },
@@ -350,7 +350,7 @@ fn test_rename_live_noop_same_name() -> anyhow::Result<()> {
 
             let after = fs.readdir(live)?;
             assert_eq!(before.len(), after.len());
-            assert!(fs.lookup(live, "noop_dir")?.is_some());
+            assert!(fs.lookup(live, name)?.is_some());
 
             Ok(())
         },
@@ -380,18 +380,18 @@ fn test_rename_live_overwrite_empty_dir() -> anyhow::Result<()> {
             let dst = OsStr::new("dst_dir");
             fs.mkdir(live, src)?;
             fs.mkdir(live, dst)?;
-            assert!(fs.lookup(live, "src_dir")?.is_some());
-            assert!(fs.lookup(live, "dst_dir")?.is_some());
+            assert!(fs.lookup(live, src)?.is_some());
+            assert!(fs.lookup(live, dst)?.is_some());
             // Ensure dst is empty
-            let dst_attr = fs.lookup(live, "dst_dir")?.unwrap();
+            let dst_attr = fs.lookup(live, dst)?.unwrap();
             assert!(fs.readdir(dst_attr.ino)?.is_empty());
 
             // Rename src_dir -> dst_dir (overwrite)
             fs.rename(live, src, live, dst)?;
 
             // src_dir gone; dst_dir now has src's inode (or at least exists)
-            assert!(fs.lookup(live, "src_dir")?.is_none());
-            assert!(fs.lookup(live, "dst_dir")?.is_some());
+            assert!(fs.lookup(live, src)?.is_none());
+            assert!(fs.lookup(live, dst)?.is_some());
 
             Ok(())
         },
@@ -430,8 +430,8 @@ fn test_rename_live_overwrite_nonempty_dir_fails() -> anyhow::Result<()> {
             assert!(msg.starts_with("Directory is not empty"));
 
             // Nothing should have changed
-            assert!(fs.lookup(live, "src_dir")?.is_some());
-            assert!(fs.lookup(live, "dst_dir")?.is_some());
+            assert!(fs.lookup(live, src)?.is_some());
+            assert!(fs.lookup(live, dst)?.is_some());
 
             Ok(())
         },
@@ -465,7 +465,7 @@ fn test_rename_live_invalid_name_with_slash() -> anyhow::Result<()> {
             assert!(msg.contains("Invalid name"));
 
             // Still present under old name
-            assert!(fs.lookup(live, "good")?.is_some());
+            assert!(fs.lookup(live, good)?.is_some());
 
             Ok(())
         },

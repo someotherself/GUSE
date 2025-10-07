@@ -1,3 +1,5 @@
+use std::ffi::{OsStr, OsString};
+
 use anyhow::anyhow;
 use tracing::instrument;
 
@@ -10,12 +12,12 @@ use crate::{
     inodes::{NormalIno, VirtualIno},
 };
 
-pub fn lookup_root(fs: &GitFs, name: &str) -> anyhow::Result<Option<FileAttr>> {
+pub fn lookup_root(fs: &GitFs, name: &OsStr) -> anyhow::Result<Option<FileAttr>> {
     // Handle a look-up for url -> github.tokio-rs.tokio.git
     let attr = fs.repos_list.values().find_map(|repo| {
         let (repo_name, repo_id) = {
             let repo = repo.lock().map_err(|_| anyhow!("Lock poisoned")).ok()?;
-            (repo.repo_dir.clone(), repo.repo_id)
+            (OsString::from(repo.repo_dir.clone()), repo.repo_id)
         };
         if repo_name == name {
             let perms = 0o775;
@@ -32,14 +34,18 @@ pub fn lookup_root(fs: &GitFs, name: &str) -> anyhow::Result<Option<FileAttr>> {
     Ok(attr)
 }
 
-pub fn lookup_repo(fs: &GitFs, parent: NormalIno, name: &str) -> anyhow::Result<Option<FileAttr>> {
+pub fn lookup_repo(
+    fs: &GitFs,
+    parent: NormalIno,
+    name: &OsStr,
+) -> anyhow::Result<Option<FileAttr>> {
     let repo_id = GitFs::ino_to_repo_id(parent.into());
     let repo = match fs.repos_list.get(&repo_id) {
         Some(repo) => repo,
         None => return Ok(None),
     };
     let attr = if name == "live" {
-        let live_ino = fs.get_ino_from_db(parent.into(), "live")?;
+        let live_ino = fs.get_ino_from_db(parent.into(), OsStr::new("live"))?;
         let path = {
             let repo = repo.lock().map_err(|_| anyhow!("Lock poisoned"))?;
             fs.repos_dir.join(&repo.repo_dir)
@@ -70,7 +76,11 @@ pub fn lookup_repo(fs: &GitFs, parent: NormalIno, name: &str) -> anyhow::Result<
     Ok(Some(attr))
 }
 
-pub fn lookup_live(fs: &GitFs, parent: NormalIno, name: &str) -> anyhow::Result<Option<FileAttr>> {
+pub fn lookup_live(
+    fs: &GitFs,
+    parent: NormalIno,
+    name: &OsStr,
+) -> anyhow::Result<Option<FileAttr>> {
     let repo_id = GitFs::ino_to_repo_id(parent.to_norm_u64());
     match fs.repos_list.get(&repo_id) {
         Some(_) => {}
@@ -86,7 +96,7 @@ pub fn lookup_live(fs: &GitFs, parent: NormalIno, name: &str) -> anyhow::Result<
 }
 
 #[instrument(level = "debug", skip(fs), fields(parent = %parent), err(Display))]
-pub fn lookup_git(fs: &GitFs, parent: NormalIno, name: &str) -> anyhow::Result<Option<FileAttr>> {
+pub fn lookup_git(fs: &GitFs, parent: NormalIno, name: &OsStr) -> anyhow::Result<Option<FileAttr>> {
     let Ok(attr) = fs.get_metadata_by_name(parent, name) else {
         return Ok(None);
     };
@@ -94,7 +104,11 @@ pub fn lookup_git(fs: &GitFs, parent: NormalIno, name: &str) -> anyhow::Result<O
 }
 
 #[instrument(level = "debug", skip(fs), fields(parent = %parent), err(Display))]
-pub fn lookup_vdir(fs: &GitFs, parent: VirtualIno, name: &str) -> anyhow::Result<Option<FileAttr>> {
+pub fn lookup_vdir(
+    fs: &GitFs,
+    parent: VirtualIno,
+    name: &OsStr,
+) -> anyhow::Result<Option<FileAttr>> {
     let repo = fs.get_repo(u64::from(parent))?;
     let Ok(repo) = repo.lock() else {
         return Ok(None);

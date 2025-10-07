@@ -7,6 +7,7 @@ use git2::{
 };
 use std::{
     collections::{BTreeMap, HashMap, HashSet, hash_map::Entry},
+    ffi::OsString,
     path::Path,
     sync::{
         Arc,
@@ -51,7 +52,7 @@ pub struct VirtualNode {
     /// Oids of the file history (if any)
     ///
     /// key: full file name, values: <file entry_ino, ObjectAttr>
-    pub log: BTreeMap<String, (u64, ObjectAttr)>,
+    pub log: BTreeMap<OsString, (u64, ObjectAttr)>,
 }
 
 impl GitRepo {
@@ -117,7 +118,7 @@ impl GitRepo {
         for secs in self.snapshots.keys() {
             let dt = chrono::DateTime::from_timestamp(*secs, 0)
                 .unwrap_or_else(|| chrono::DateTime::from_timestamp(0, 0).unwrap());
-            let folder_name = format!("{:04}-{:02}", dt.year(), dt.month());
+            let folder_name = OsString::from(format!("{:04}-{:02}", dt.year(), dt.month()));
 
             // No duplicates
             if out.iter().any(|attr: &ObjectAttr| attr.name == folder_name) {
@@ -161,7 +162,7 @@ impl GitRepo {
                 }
 
                 commit_num += 1;
-                let folder_name = format!("Snap{commit_num:03}_{commit_oid:.7}");
+                let folder_name = OsString::from(format!("Snap{commit_num:03}_{commit_oid:.7}"));
 
                 out.push(ObjectAttr {
                     name: folder_name,
@@ -272,7 +273,7 @@ impl GitRepo {
             None => commit.tree()?,
         };
         for entry in tree.iter() {
-            let name = entry.name().unwrap_or("").to_string();
+            let name = OsString::from(entry.name().unwrap_or(""));
             let kind = entry.kind().ok_or_else(|| anyhow!("Invalid object"))?;
 
             let mut size = 0;
@@ -337,8 +338,10 @@ impl GitRepo {
         let mut found: Option<ObjectAttr> = None;
         let walk_res = tree.walk(TreeWalkMode::PreOrder, |root, entry| {
             if entry.id() == oid {
+                let mut name = OsString::from(root);
+                name.push(entry.name().unwrap_or("<non-utf8>"));
                 found = Some(ObjectAttr {
-                    name: format!("{}{}", root, entry.name().unwrap_or("<non-utf8>")),
+                    name,
                     oid,
                     kind: entry.kind().unwrap_or(ObjectType::Any),
                     git_mode: entry.filemode() as u32,
@@ -386,7 +389,12 @@ impl GitRepo {
             }
             let oid = oid_res?;
             let commit = self.inner.find_commit(oid)?;
-            let commit_name = format!("snap{}_{:.7}", i + 1, commit.id());
+
+            let mut commit_name = OsString::from("snap");
+            commit_name.push((i + 1).to_string());
+            commit_name.push("_");
+            commit_name.push(&commit.id().to_string()[..7]);
+
             out.push(ObjectAttr {
                 name: commit_name,
                 oid,
@@ -407,7 +415,7 @@ impl GitRepo {
             let oid = entry.id();
             let kind = entry.kind().ok_or_else(|| anyhow!("Invalid object"))?;
             let git_mode = entry.filemode() as u32;
-            let name = entry.name().unwrap_or("").to_string();
+            let name = OsString::from(entry.name().unwrap_or(""));
             let commit_time = commit.time();
             entries.push(ObjectAttr {
                 name,
@@ -419,25 +427,6 @@ impl GitRepo {
             });
         }
         Ok(entries)
-    }
-
-    pub fn attr_from_snap(&self, commit_oid: Oid, name: &str) -> anyhow::Result<ObjectAttr> {
-        let commit = self.inner.find_commit(commit_oid)?;
-        let name = name.to_string();
-        let oid = commit.id();
-        let kind = ObjectType::Commit;
-        let git_mode = libc::S_IFDIR;
-        let size = 0;
-        let commit_time = commit.time();
-
-        Ok(ObjectAttr {
-            name,
-            oid,
-            kind,
-            git_mode,
-            size,
-            commit_time,
-        })
     }
 
     pub fn blob_history_objects(&self, target_blob: Oid) -> anyhow::Result<Vec<ObjectAttr>> {
@@ -546,7 +535,7 @@ impl GitRepo {
         let blob = repo.find_blob(oid)?;
         let git_mode = entry.filemode() as u32;
         let commit_time = commit.time();
-        let name = format!("{count:04}_{:.7}", commit.id());
+        let name = OsString::from(format!("{count:04}_{:.7}", commit.id()));
 
         Ok(Some(ObjectAttr {
             name,

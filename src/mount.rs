@@ -198,7 +198,7 @@ impl fuser::Filesystem for GitFsAdapter {
             }
         };
 
-        match fs.lookup(parent, name.to_str().unwrap()) {
+        match fs.lookup(parent, name) {
             Ok(Some(attr)) => {
                 let ino = attr.ino;
                 reply.entry(&TTL, &attr.into(), 0)

@@ -1,4 +1,4 @@
-use std::ffi::OsString;
+use std::ffi::{OsStr, OsString};
 
 use anyhow::{anyhow, bail};
 
@@ -12,7 +12,7 @@ pub fn link_git(
     fs: &GitFs,
     source_ino: NormalIno,
     newparent: NormalIno,
-    newname: &str,
+    newname: &OsStr,
 ) -> anyhow::Result<FileAttr> {
     if !fs.is_in_build(source_ino)? {
         tracing::error!("This directory is read only");

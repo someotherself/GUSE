@@ -1,5 +1,7 @@
 use std::{
     collections::HashSet,
+    ffi::{OsStr, OsString},
+    os::unix::ffi::{OsStrExt, OsStringExt},
     path::{Path, PathBuf},
 };
 
@@ -88,7 +90,7 @@ pub enum DbWriteMsg {
     WriteDentry {
         parent_ino: NormalIno,
         target_ino: NormalIno,
-        target_name: String,
+        target_name: OsString,
         resp: Resp<()>,
     },
     WriteInodes {
@@ -108,14 +110,14 @@ pub enum DbWriteMsg {
     /// Send and forget
     UpdateRecord {
         old_parent: NormalIno,
-        old_name: String,
+        old_name: OsString,
         node: StorageNode,
         resp: Option<Resp<()>>,
     },
     /// Send and forget
     RemoveDentry {
         parent_ino: NormalIno,
-        target_name: String,
+        target_name: OsString,
         resp: Option<Resp<()>>,
     },
     CleanupEntry {
@@ -355,7 +357,11 @@ impl MetaDb {
                 a.flags as i64,
             ])?;
 
-            insert_dentry.execute(params![node.parent_ino as i64, node.name, a.ino as i64,])?;
+            insert_dentry.execute(params![
+                node.parent_ino as i64,
+                node.name.as_bytes(),
+                a.ino as i64,
+            ])?;
 
             affected.insert(a.ino as i64);
         }
@@ -460,7 +466,7 @@ impl MetaDb {
     pub fn get_parent_name_from_ino(
         conn: &rusqlite::Connection,
         parent_ino: u64,
-    ) -> anyhow::Result<String> {
+    ) -> anyhow::Result<OsString> {
         let mut stmt = conn.prepare(
             "
             SELECT name
@@ -470,10 +476,10 @@ impl MetaDb {
         ",
         )?;
 
-        let name_opt: Option<String> = stmt.query_row(params![parent_ino], |row| row.get(0))?;
+        let name_opt: Option<Vec<u8>> = stmt.query_row(params![parent_ino], |row| row.get(0))?;
 
         match name_opt {
-            Some(n) => Ok(n),
+            Some(n) => Ok(OsString::from_vec(n)),
             None => bail!("Parent ino {parent_ino} not found"),
         }
     }
@@ -481,8 +487,8 @@ impl MetaDb {
     pub fn get_parent_name_from_child(
         conn: &rusqlite::Connection,
         child_ino: u64,
-        child_name: &str,
-    ) -> anyhow::Result<(u64, String)> {
+        child_name: &OsStr,
+    ) -> anyhow::Result<(u64, OsString)> {
         let mut stmt = conn.prepare(
             "
             SELECT parent_inode
@@ -492,9 +498,12 @@ impl MetaDb {
         ",
         )?;
 
-        let mut rows = stmt.query((child_ino as i64, child_name))?;
+        let mut rows = stmt.query((child_ino as i64, child_name.as_bytes()))?;
         let Some(row) = rows.next()? else {
-            anyhow::bail!("No parent found for inode {child_ino} with name {child_name}");
+            anyhow::bail!(
+                "No parent found for inode {child_ino} with name {}",
+                child_name.display()
+            );
         };
 
         let parent_ino: i64 = row.get(0)?;
@@ -508,9 +517,9 @@ impl MetaDb {
             ",
         )?;
 
-        let parent_name: String = stmt2.query_row([parent_ino], |row| row.get(0))?;
+        let parent_name: Vec<u8> = stmt2.query_row([parent_ino], |row| row.get(0))?;
 
-        Ok((parent_ino as u64, parent_name))
+        Ok((parent_ino as u64, OsString::from_vec(parent_name)))
     }
 
     pub fn get_dir_parent(conn: &rusqlite::Connection, ino: NormalIno) -> anyhow::Result<u64> {
@@ -574,7 +583,7 @@ impl MetaDb {
     pub fn list_dentries_for_inode(
         conn: &rusqlite::Connection,
         ino: u64,
-    ) -> anyhow::Result<Vec<(u64, String)>> {
+    ) -> anyhow::Result<Vec<(u64, OsString)>> {
         let ino_i64 = i64::try_from(ino).context("inode u64→i64 overflow")?;
 
         let mut stmt = conn.prepare(
@@ -589,7 +598,7 @@ impl MetaDb {
         let rows = stmt
             .query_map(params![ino_i64], |row| {
                 let parent_i64: i64 = row.get(0)?;
-                let name: String = row.get(1)?;
+                let name = OsString::from_vec(row.get(1)?);
                 let parent_u64 = u64::try_from(parent_i64).map_err(|_| {
                     rusqlite::Error::IntegralValueOutOfRange(parent_i64 as usize, parent_i64)
                 })?;
@@ -624,7 +633,7 @@ impl MetaDb {
         let mut out = Vec::new();
 
         while let Some(row) = rows.next().context("iterate read_dir_entries rows")? {
-            let name: String = row.get(0)?;
+            let name = OsString::from_vec(row.get(0)?);
             let child_i64: i64 = row.get(1)?;
             let oid_str: String = row.get(2)?;
             let git_mode_i64: i64 = row.get(3)?;
@@ -645,7 +654,7 @@ impl MetaDb {
             out.push(DirectoryEntry {
                 ino,
                 oid,
-                name: name.into(),
+                name,
                 kind,
                 git_mode,
             });
@@ -680,7 +689,7 @@ impl MetaDb {
     pub fn get_ino_from_db(
         conn: &rusqlite::Connection,
         parent: u64,
-        name: &str,
+        name: &OsStr,
     ) -> anyhow::Result<u64> {
         let sql = r#"
             SELECT target_inode
@@ -691,11 +700,11 @@ impl MetaDb {
 
         let mut stmt = conn.prepare_cached(sql)?;
 
-        let mut rows = stmt.query((parent as i64, name))?;
+        let mut rows = stmt.query((parent as i64, name.as_bytes()))?;
 
         let first = rows.next()?;
         let Some(row) = first else {
-            bail!("Not found: {name} under parent ino {parent}");
+            bail!("Not found: {} under parent ino {parent}", name.display());
         };
 
         let child_i64: i64 = row.get(0)?;
@@ -703,7 +712,10 @@ impl MetaDb {
             .map_err(|_| anyhow!("child_ino out of range: {}", child_i64))?;
 
         if rows.next()?.is_some() {
-            bail!("DB invariant violation: multiple dentries for ({parent}, {name})");
+            bail!(
+                "DB invariant violation: multiple dentries for ({parent}, {})",
+                name.display()
+            );
         }
 
         Ok(child)
@@ -788,7 +800,7 @@ impl MetaDb {
         }
     }
 
-    pub fn get_name_from_db(conn: &rusqlite::Connection, ino: u64) -> anyhow::Result<String> {
+    pub fn get_name_from_db(conn: &rusqlite::Connection, ino: u64) -> anyhow::Result<OsString> {
         let mut stmt = conn.prepare(
             r#"
             SELECT name
@@ -800,13 +812,13 @@ impl MetaDb {
         let mut rows = stmt.query(params![ino as i64])?;
 
         let first = match rows.next()? {
-            Some(row) => Some(row.get::<_, String>(0)?),
+            Some(row) => Some(row.get::<_, Vec<u8>>(0)?),
             None => None,
         };
 
         match first {
             None => bail!("No name found for ino={ino}"),
-            Some(p1) => Ok(p1),
+            Some(p1) => Ok(OsString::from_vec(p1)),
         }
     }
 
@@ -814,7 +826,7 @@ impl MetaDb {
         conn: &rusqlite::Connection,
         parent_ino: u64,
         ino: u64,
-    ) -> anyhow::Result<String> {
+    ) -> anyhow::Result<OsString> {
         let mut stmt = conn.prepare(
             r#"
         SELECT name
@@ -822,19 +834,23 @@ impl MetaDb {
         WHERE parent_inode = ?1 AND target_inode = ?2
         "#,
         )?;
-        let name: Option<String> = stmt
+        let name_opt: Option<Vec<u8>> = stmt
             .query_row(rusqlite::params![parent_ino as i64, ino as i64], |row| {
                 row.get(0)
             })
             .optional()?;
-        name.ok_or_else(|| anyhow::anyhow!("name not found for ino={ino} in parent={parent_ino}"))
+
+        match name_opt {
+            Some(n) => Ok(OsString::from_vec(n)),
+            None => bail!("name not found for ino={ino} in parent={parent_ino}"),
+        }
     }
 
     pub fn write_dentry<C>(
         tx: &C,
         parent_ino: u64,
         source_ino: u64,
-        target_name: &str,
+        target_name: &OsStr,
     ) -> anyhow::Result<()>
     where
         C: std::ops::Deref<Target = rusqlite::Connection>,
@@ -863,7 +879,7 @@ impl MetaDb {
             INSERT INTO dentries (parent_inode, target_inode, name)
             VALUES (?1, ?2, ?3)
             "#,
-            params![parent_i64, source_i64, target_name],
+            params![parent_i64, source_i64, target_name.as_bytes()],
         )?;
         if inserted != 1 {
             bail!(
@@ -893,7 +909,7 @@ impl MetaDb {
     pub fn update_db_record<C>(
         tx: &C,
         old_parent: u64,
-        old_name: &str,
+        old_name: &OsStr,
         node: StorageNode,
     ) -> anyhow::Result<()>
     where
@@ -949,7 +965,7 @@ impl MetaDb {
         DELETE FROM dentries
         WHERE parent_inode = ?1 AND name = ?2 AND target_inode = ?3
         "#,
-            rusqlite::params![old_parent as i64, old_name, node.attr.ino as i64],
+            rusqlite::params![old_parent as i64, old_name.as_bytes(), node.attr.ino as i64],
         )?;
 
         tx.execute(
@@ -959,7 +975,11 @@ impl MetaDb {
         ON CONFLICT(parent_inode, name) DO UPDATE
         SET target_inode = excluded.target_inode
         "#,
-            rusqlite::params![node.parent_ino as i64, node.name, node.attr.ino as i64],
+            rusqlite::params![
+                node.parent_ino as i64,
+                node.name.as_bytes(),
+                node.attr.ino as i64
+            ],
         )?;
 
         tx.execute(
@@ -978,7 +998,7 @@ impl MetaDb {
     ///
     /// Record is removed from inode_map when there are no more open file handles
     /// (see [`crate::fs::GitFs::release`])
-    pub fn remove_db_dentry<C>(tx: &C, parent_ino: u64, target_name: &str) -> anyhow::Result<()>
+    pub fn remove_db_dentry<C>(tx: &C, parent_ino: u64, target_name: &OsStr) -> anyhow::Result<()>
     where
         C: std::ops::Deref<Target = rusqlite::Connection>,
     {
@@ -990,7 +1010,7 @@ impl MetaDb {
             WHERE parent_inode = ?1 AND name = ?2
             "#,
             )?
-            .query_row(params![parent_ino as i64, target_name], |row| {
+            .query_row(params![parent_ino as i64, target_name.as_bytes()], |row| {
                 row.get::<_, i64>(0)
             })
             .optional()?
@@ -999,7 +1019,7 @@ impl MetaDb {
                 anyhow!(
                     "No such dentry: parent_ino={} name={}",
                     parent_ino,
-                    target_name
+                    target_name.display()
                 )
             })?;
 
@@ -1008,7 +1028,7 @@ impl MetaDb {
         DELETE FROM dentries
         WHERE parent_inode = ?1 AND name = ?2
         "#,
-            params![parent_ino as i64, target_name],
+            params![parent_ino as i64, target_name.as_bytes()],
         )?;
 
         tx.execute(
@@ -1068,9 +1088,9 @@ impl MetaDb {
         let mut curr = ino as i64;
 
         loop {
-            let row: Option<(i64, String)> = stmt
+            let row: Option<(i64, OsString)> = stmt
                 .query_row(params![curr], |r| {
-                    rusqlite::Result::Ok((r.get(0)?, r.get(1)?))
+                    rusqlite::Result::Ok((r.get(0)?, OsString::from_vec(r.get(1)?)))
                 })
                 .optional()?;
 
@@ -1098,10 +1118,11 @@ impl MetaDb {
     pub fn exists_by_name(
         conn: &rusqlite::Connection,
         parent: NormalIno,
-        name: &str,
+        name: &OsStr,
     ) -> anyhow::Result<Option<u64>> {
         let parent = parent.to_norm_u64();
         let parent_i64 = i64::try_from(parent)?;
+        let name_blob = name.as_bytes();
         let mut stmt = conn.prepare(
             "
             SELECT target_inode
@@ -1110,7 +1131,7 @@ impl MetaDb {
         )?;
 
         let ino_i64: Option<i64> = stmt
-            .query_row(params![parent_i64, name], |row| row.get(0))
+            .query_row(params![parent_i64, name_blob], |row| row.get(0))
             .optional()?;
         ino_i64
             .map(u64::try_from)
@@ -1121,7 +1142,7 @@ impl MetaDb {
     pub fn get_metadata_by_name(
         conn: &rusqlite::Connection,
         parent_ino: u64,
-        child_name: &str,
+        child_name: &OsStr,
     ) -> anyhow::Result<FileAttr> {
         let target_ino = MetaDb::get_ino_from_db(conn, parent_ino, child_name)?;
         MetaDb::get_metadata(conn, target_ino)

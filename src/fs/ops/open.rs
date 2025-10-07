@@ -16,6 +16,7 @@ use crate::{
         ops::readdir::{DirCase, classify_inode},
     },
     inodes::{Inodes, NormalIno, VirtualIno},
+    namespec,
 };
 
 #[instrument(level = "debug", skip(fs), fields(ino = %ino), ret(level = Level::DEBUG), err(Display))]
@@ -286,10 +287,13 @@ fn build_commits_text(
             (subject, committer)
         };
 
-        let clean_name = e.name.replace(['\n', '\t'], " ");
+        let clean_name = namespec::clean_name(&e.name);
         let clean_subject = subject.replace(['\n', '\t'], " ");
 
-        let row = format!("{ts}\t{soid}\t{clean_name}\t{committer}\t{clean_subject}\n");
+        let row = format!(
+            "{ts}\t{soid}\t{}\t{committer}\t{clean_subject}\n",
+            clean_name.display()
+        );
         contents.extend_from_slice(row.as_bytes());
     }
 

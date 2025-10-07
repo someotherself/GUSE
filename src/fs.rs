@@ -1,5 +1,6 @@
 use std::ffi::{OsStr, OsString};
 use std::fs::File;
+use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::{FileExt, MetadataExt};
 use std::path::Path;
 use std::sync::{Arc, Mutex, OnceLock, RwLock};
@@ -395,7 +396,7 @@ impl GitFs {
         self.write_inodes_to_db(nodes)?;
 
         // Clean the build folder
-        let build_name = "build".to_string();
+        let build_name = OsString::from("build");
         let build_path = repo_path.join(&build_name);
         if build_path.exists() {
             std::fs::remove_dir_all(&build_path)?;
@@ -405,7 +406,7 @@ impl GitFs {
         let live_ino = self.next_inode_raw(repo_ino)?;
         let build_ino = self.next_inode_raw(repo_ino)?;
 
-        let live_name = "live".to_string();
+        let live_name = OsString::from("live");
 
         let perms = 0o775;
         let st_mode = libc::S_IFDIR | perms;
@@ -471,7 +472,7 @@ impl GitFs {
                 attr.ino = ino;
                 nodes.push(StorageNode {
                     parent_ino,
-                    name: entry.file_name().to_string_lossy().into(),
+                    name: entry.file_name(),
                     attr: attr.into(),
                 });
                 nodes.extend(self.read_dir_to_db(&entry.path(), ino_flag, ino)?);
@@ -481,7 +482,7 @@ impl GitFs {
                 attr.ino = ino;
                 nodes.push(StorageNode {
                     parent_ino,
-                    name: entry.file_name().to_string_lossy().into(),
+                    name: entry.file_name(),
                     attr: attr.into(),
                 });
             }
@@ -528,8 +529,8 @@ impl GitFs {
         let live_ino = self.next_inode_raw(repo_ino)?;
         let build_ino = self.next_inode_raw(repo_ino)?;
 
-        let build_name = "build".to_string();
-        let live_name = "live".to_string();
+        let build_name = OsString::from("build");
+        let live_name = OsString::from("live");
 
         let perms = 0o775;
         let st_mode = libc::S_IFDIR | perms;
@@ -638,7 +639,7 @@ impl GitFs {
         // Directory Entries Storage
         //  target_inode INTEGER   NOT NULL       -> inode from inode_map
         //  parent_inode INTEGER   NOT NULL       -> the parent directory’s inode
-        //  name         TEXT      NOT NULL       -> the filename or directory name
+        //  name         BLOB      NOT NULL       -> the filename or directory name
         conn.execute_batch(
             r#"
                 CREATE TABLE IF NOT EXISTS inode_map (
@@ -663,7 +664,7 @@ impl GitFs {
                 CREATE TABLE IF NOT EXISTS dentries (
                 parent_inode INTEGER NOT NULL,
                 target_inode INTEGER NOT NULL,
-                name         TEXT    NOT NULL,
+                name         BLOB    NOT NULL,
                 PRIMARY KEY (parent_inode, name),
                 FOREIGN KEY (parent_inode) REFERENCES inode_map(inode) ON DELETE RESTRICT,
                 FOREIGN KEY (target_inode) REFERENCES inode_map(inode) ON DELETE RESTRICT
@@ -1006,12 +1007,14 @@ impl GitFs {
     pub fn link(&self, ino: u64, newparent: u64, newname: &OsStr) -> anyhow::Result<FileAttr> {
         let ino: Inodes = ino.into();
         let newparent: Inodes = newparent.into();
-        let newname = newname
-            .to_str()
-            .ok_or_else(|| anyhow!("Not a valid UTF-8 name"))?;
-        if newname.is_empty() || newname == "." || newname == ".." || newname.contains('/') {
+        if newname.is_empty() || newname == "." || newname == ".." {
             bail!(std::io::Error::from_raw_os_error(libc::EINVAL));
         }
+
+        if memchr::memchr2(b'/', b'\\', newname.as_bytes()).is_some() {
+            tracing::error!("invalid name: contains '/' or '\\' {}", newname.display());
+            bail!(format!("Invalid name {}", newname.display()));
+        };
 
         if self.read_only {
             bail!("Filesystem is in read only");
@@ -1079,16 +1082,16 @@ impl GitFs {
 
     #[instrument(
         level = "debug",
-        skip(self, os_name),
+        skip(self, name),
         fields(
             parent = %parent,
-            name = %os_name.to_string_lossy(),
+            name = %name.to_string_lossy(),
             read_only = self.read_only
         ),
         ret(level = Level::DEBUG),
         err(Display)
     )]
-    pub fn unlink(&self, parent: u64, os_name: &OsStr) -> anyhow::Result<()> {
+    pub fn unlink(&self, parent: u64, name: &OsStr) -> anyhow::Result<()> {
         let parent: Inodes = parent.into();
 
         if self.read_only {
@@ -1099,10 +1102,6 @@ impl GitFs {
             tracing::error!("Parent {} does not exist", parent);
             bail!(std::io::Error::from_raw_os_error(libc::EIO))
         }
-        let name = os_name.to_str().ok_or_else(|| {
-            tracing::error!("Not a valid UTF-8 name");
-            anyhow!(std::io::Error::from_raw_os_error(libc::EIO))
-        })?;
         if name == "." || name == ".." {
             tracing::error!("invalid name");
             bail!(std::io::Error::from_raw_os_error(libc::EIO))
@@ -1129,9 +1128,9 @@ impl GitFs {
     pub fn rename(
         &self,
         parent: u64,
-        os_name: &OsStr,
+        name: &OsStr,
         new_parent: u64,
-        os_new_name: &OsStr,
+        new_name: &OsStr,
     ) -> anyhow::Result<()> {
         let parent: Inodes = parent.into();
         let new_parent: Inodes = new_parent.into();
@@ -1145,30 +1144,23 @@ impl GitFs {
             bail!(format!("New parent {} does not exist", new_parent));
         }
 
-        let name = os_name
-            .to_str()
-            .ok_or_else(|| anyhow!("Not a valid UTF-8 name"))?;
-        let new_name = os_new_name
-            .to_str()
-            .ok_or_else(|| anyhow!("Not a valid UTF-8 name"))?;
-
         if self.lookup(parent.to_u64_n(), name).is_err() {
-            bail!(format!("Source {} does not exist", name));
+            bail!(format!("Source {} does not exist", name.display()));
         }
 
         if name == "." || name == ".." || new_name == "." || new_name == ".." {
             bail!("invalid name");
         }
 
-        if name.contains('/') || name.contains('\\') {
-            tracing::error!(%name, "invalid name: contains '/' or '\\'");
-            bail!(format!("Invalid name {}", name));
-        }
+        if memchr::memchr2(b'/', b'\\', name.as_bytes()).is_some() {
+            tracing::error!("invalid name: contains '/' or '\\' {}", name.display());
+            bail!(format!("Invalid name {}", name.display()));
+        };
 
-        if new_name.contains('/') || new_name.contains('\\') {
-            tracing::error!(%new_name, "invalid name: contains '/' or '\\'");
-            bail!(format!("Invalid name {}", new_name));
-        }
+        if memchr::memchr2(b'/', b'\\', new_name.as_bytes()).is_some() {
+            tracing::error!("invalid name: contains '/' or '\\' {}", new_name.display());
+            bail!(format!("Invalid name {}", new_name.display()));
+        };
 
         if parent.to_norm() == new_parent.to_norm() && name == new_name {
             return Ok(());
@@ -1199,8 +1191,8 @@ impl GitFs {
         }
     }
 
-    #[instrument(level = "debug", skip(self), fields(parent = %parent, name = %os_name.display()), ret(level = Level::DEBUG), err(Display))]
-    pub fn rmdir(&self, parent: u64, os_name: &OsStr) -> anyhow::Result<()> {
+    #[instrument(level = "debug", skip(self), fields(parent = %parent, name = %name.display()), ret(level = Level::DEBUG), err(Display))]
+    pub fn rmdir(&self, parent: u64, name: &OsStr) -> anyhow::Result<()> {
         let parent = parent.into();
 
         if self.read_only {
@@ -1209,9 +1201,7 @@ impl GitFs {
         if !self.exists(parent)? {
             bail!(format!("Parent {} does not exist", parent));
         }
-        let name = os_name
-            .to_str()
-            .ok_or_else(|| anyhow!("Not a valid UTF-8 name"))?;
+
         if name == "." || name == ".." {
             bail!("invalid name");
         }
@@ -1265,7 +1255,7 @@ impl GitFs {
         let entries = self.readdir(parent)?;
         for entry in entries {
             let attr = self
-                .lookup(parent, &entry.name.to_string_lossy())?
+                .lookup(parent, &entry.name)?
                 .ok_or_else(|| anyhow!("Repo not found"))?;
             let entry_plus = DirectoryEntryPlus { entry, attr };
             entries_plus.push(entry_plus);
@@ -1273,7 +1263,7 @@ impl GitFs {
         Ok(entries_plus)
     }
 
-    pub fn lookup(&self, parent: u64, name: &str) -> anyhow::Result<Option<FileAttr>> {
+    pub fn lookup(&self, parent: u64, name: &OsStr) -> anyhow::Result<Option<FileAttr>> {
         // Check if name if a virtual dir
         // If not, check if the parent is a virtual dir
         // If not, treat as regular
@@ -1467,12 +1457,10 @@ impl GitFs {
             .get(&repo_id)
             .ok_or_else(|| anyhow::anyhow!("no db"))?;
 
-        let parent_name = {
-            let conn = repo_db.ro_pool.get()?;
-            MetaDb::get_parent_name_from_ino(&conn, parent.into())?
-        };
+        let conn = repo_db.ro_pool.get()?;
+        let parent_name = { MetaDb::get_parent_name_from_ino(&conn, parent.into())? };
 
-        let mut out: Vec<String> = vec![];
+        let mut out: Vec<OsString> = vec![];
 
         let mut cur_par_ino = parent.to_norm_u64();
         let mut cur_par_name = parent_name;
@@ -1481,11 +1469,8 @@ impl GitFs {
 
         let max_loops = 1000;
         for _ in 0..max_loops {
-            (cur_par_ino, cur_par_name) = {
-                // TODO: Can re-use the previous one?
-                let conn = repo_db.ro_pool.get()?;
-                MetaDb::get_parent_name_from_child(&conn, cur_par_ino, &cur_par_name)?
-            };
+            (cur_par_ino, cur_par_name) =
+                MetaDb::get_parent_name_from_child(&conn, cur_par_ino, &cur_par_name)?;
 
             // live folder must be skipped. It doesn't exist on disk
             if live_ino == cur_par_ino {
@@ -1841,7 +1826,7 @@ impl GitFs {
         MetaDb::read_children(&conn, parent_ino.to_norm_u64())
     }
 
-    pub fn list_dentries_for_inode(&self, ino: NormalIno) -> anyhow::Result<Vec<(u64, String)>> {
+    pub fn list_dentries_for_inode(&self, ino: NormalIno) -> anyhow::Result<Vec<(u64, OsString)>> {
         let repo_id = GitFs::ino_to_repo_id(ino.into());
         let repo_db = self
             .conn_list
@@ -1913,10 +1898,10 @@ impl GitFs {
     #[allow(dead_code)]
     fn get_build_ino(&self, ino: NormalIno) -> anyhow::Result<u64> {
         let repo_ino = self.get_repo_ino(ino.to_norm_u64())?;
-        self.get_ino_from_db(repo_ino, "build")
+        self.get_ino_from_db(repo_ino, OsStr::new("build"))
     }
 
-    fn exists_by_name(&self, parent: u64, name: &str) -> anyhow::Result<Option<u64>> {
+    fn exists_by_name(&self, parent: u64, name: &OsStr) -> anyhow::Result<Option<u64>> {
         let repo_id = GitFs::ino_to_repo_id(parent);
         let repo_db = self
             .conn_list
@@ -1929,7 +1914,7 @@ impl GitFs {
     pub fn get_metadata_by_name(
         &self,
         parent_ino: NormalIno,
-        child_name: &str,
+        child_name: &OsStr,
     ) -> anyhow::Result<FileAttr> {
         let repo_id = GitFs::ino_to_repo_id(parent_ino.into());
         let repo_db = self
@@ -2009,7 +1994,7 @@ impl GitFs {
         (ino & VDIR_BIT) != 0
     }
 
-    fn get_ino_from_db(&self, parent: u64, name: &str) -> anyhow::Result<u64> {
+    fn get_ino_from_db(&self, parent: u64, name: &OsStr) -> anyhow::Result<u64> {
         let repo_id = GitFs::ino_to_repo_id(parent);
         let repo_db = self
             .conn_list
@@ -2050,7 +2035,7 @@ impl GitFs {
     /// Removes the directory entry (from dentries) for the target and decrements nlinks
     ///
     /// Send and forget but will log errors as tracing::error!
-    fn remove_db_dentry(&self, parent_ino: NormalIno, target_name: &str) -> anyhow::Result<()> {
+    fn remove_db_dentry(&self, parent_ino: NormalIno, target_name: &OsStr) -> anyhow::Result<()> {
         let repo_id = GitFs::ino_to_repo_id(parent_ino.into());
         let writer_tx = {
             let guard = self
@@ -2062,7 +2047,7 @@ impl GitFs {
 
         let msg = DbWriteMsg::RemoveDentry {
             parent_ino,
-            target_name: target_name.to_string(),
+            target_name: target_name.to_os_string(),
             resp: None,
         };
         writer_tx
@@ -2134,7 +2119,7 @@ impl GitFs {
     fn update_db_record(
         &self,
         old_parent: NormalIno,
-        old_name: &str,
+        old_name: &OsStr,
         node: StorageNode,
     ) -> anyhow::Result<()> {
         let repo_id = GitFs::ino_to_repo_id(old_parent.into());
@@ -2148,7 +2133,7 @@ impl GitFs {
 
         let msg = DbWriteMsg::UpdateRecord {
             old_parent,
-            old_name: old_name.to_string(),
+            old_name: old_name.to_os_string(),
             node,
             resp: None,
         };
@@ -2163,7 +2148,7 @@ impl GitFs {
         &self,
         parent_ino: NormalIno,
         target_ino: NormalIno,
-        target_name: &str,
+        target_name: &OsStr,
     ) -> anyhow::Result<()> {
         let repo_id = GitFs::ino_to_repo_id(parent_ino.into());
         let writer_tx = {
@@ -2179,7 +2164,7 @@ impl GitFs {
         let msg = DbWriteMsg::WriteDentry {
             parent_ino,
             target_ino,
-            target_name: target_name.to_string(),
+            target_name: target_name.to_os_string(),
             resp: tx,
         };
         writer_tx
@@ -2188,7 +2173,7 @@ impl GitFs {
 
         rx.recv().context(format!(
             "writer_rx disc on write_dentry for target {}",
-            target_name
+            target_name.display()
         ))??;
 
         Ok(())
@@ -2273,7 +2258,7 @@ impl GitFs {
         repo::try_into_filemode(mode).ok_or_else(|| anyhow!("Invalid filemode"))
     }
 
-    fn get_name_from_db(&self, ino: u64) -> anyhow::Result<String> {
+    fn get_name_from_db(&self, ino: u64) -> anyhow::Result<OsString> {
         let repo_id = GitFs::ino_to_repo_id(ino);
         let repo_db = self
             .conn_list

@@ -1,4 +1,4 @@
-use std::ffi::OsString;
+use std::ffi::{OsStr, OsString};
 
 use anyhow::{anyhow, bail};
 
@@ -14,9 +14,9 @@ use crate::{
 pub fn rename_live(
     fs: &GitFs,
     parent: NormalIno,
-    name: &str,
+    name: &OsStr,
     new_parent: NormalIno,
-    new_name: &str,
+    new_name: &OsStr,
 ) -> anyhow::Result<()> {
     let dest_in_live = fs.is_in_live(new_parent)?;
     let dest_in_build = fs.is_in_build(new_parent)?;
@@ -98,9 +98,9 @@ pub fn rename_live(
 pub fn rename_git_build(
     fs: &GitFs,
     old_parent: NormalIno,
-    old_name: &str,
+    old_name: &OsStr,
     new_parent: NormalIno,
-    new_name: &str,
+    new_name: &OsStr,
 ) -> anyhow::Result<()> {
     let dest_in_build = fs.is_in_build(new_parent)?;
     let oid = fs.get_oid_from_db(new_parent.into())?;

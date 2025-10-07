@@ -1,4 +1,9 @@
-use std::{collections::btree_map::Entry, ffi::OsString, path::Path, sync::Arc};
+use std::{
+    collections::btree_map::Entry,
+    ffi::{OsStr, OsString},
+    path::Path,
+    sync::Arc,
+};
 
 use anyhow::{anyhow, bail};
 use git2::{FileMode, ObjectType, Oid};
@@ -11,6 +16,7 @@ use crate::{
         fileattr::{FileType, InoFlag, ObjectAttr, StorageNode, dir_attr, file_attr},
     },
     inodes::{NormalIno, VirtualIno},
+    namespec,
 };
 
 pub struct DirectoryStreamCookie {
@@ -58,7 +64,7 @@ impl From<ObjectAttr> for DirectoryEntry {
         DirectoryEntry {
             ino: 0,
             oid: attr.oid,
-            name: OsString::from(attr.name),
+            name: attr.name,
             kind,
             git_mode: attr.git_mode,
         }
@@ -103,7 +109,7 @@ pub fn readdir_repo_dir(fs: &GitFs, parent: NormalIno) -> anyhow::Result<Vec<Dir
 
     let mut entries: Vec<DirectoryEntry> = vec![];
 
-    let live_ino = fs.get_ino_from_db(parent, "live")?;
+    let live_ino = fs.get_ino_from_db(parent, OsStr::new("live"))?;
     let live_entry = DirectoryEntry::new(
         live_ino,
         Oid::zero(),
@@ -112,7 +118,7 @@ pub fn readdir_repo_dir(fs: &GitFs, parent: NormalIno) -> anyhow::Result<Vec<Dir
         libc::S_IFDIR,
     );
 
-    let build_ino = fs.get_ino_from_db(parent, "build")?;
+    let build_ino = fs.get_ino_from_db(parent, OsStr::new("build"))?;
     let build_entry = DirectoryEntry::new(
         build_ino,
         Oid::zero(),
@@ -137,7 +143,7 @@ pub fn readdir_repo_dir(fs: &GitFs, parent: NormalIno) -> anyhow::Result<Vec<Dir
                 Some(i) => DirectoryEntry::new(
                     i,
                     Oid::zero(),
-                    OsString::from(month.name),
+                    month.name,
                     FileType::Directory,
                     month.git_mode,
                 ),
@@ -150,13 +156,7 @@ pub fn readdir_repo_dir(fs: &GitFs, parent: NormalIno) -> anyhow::Result<Vec<Dir
                         name: month.name.clone(),
                         attr: attr.into(),
                     });
-                    DirectoryEntry::new(
-                        entry_ino,
-                        attr.oid,
-                        OsString::from(month.name),
-                        attr.kind,
-                        attr.git_mode,
-                    )
+                    DirectoryEntry::new(entry_ino, attr.oid, month.name, attr.kind, attr.git_mode)
                 }
             };
             entries.push(dir_entry);
@@ -184,7 +184,6 @@ pub fn readdir_live_dir(fs: &GitFs, ino: NormalIno) -> anyhow::Result<Vec<Direct
     for node in path.read_dir()? {
         let node = node?;
         let node_name = node.file_name();
-        let node_name_str: String = node_name.to_string_lossy().into();
         if ignore_list.contains(&node_name) {
             continue;
         }
@@ -195,14 +194,14 @@ pub fn readdir_live_dir(fs: &GitFs, ino: NormalIno) -> anyhow::Result<Vec<Direct
         };
         let mut attr = fs.refresh_medata_using_path(node.path(), InoFlag::InsideLive)?;
         // It is reasonable to expect the user could add entries bypassing fuse
-        match fs.get_ino_from_db(ino, &node_name_str) {
+        match fs.get_ino_from_db(ino, &node_name) {
             Ok(ino) => attr.ino = ino,
             Err(_) => {
                 let new_ino = fs.next_inode_checked(ino)?;
                 attr.ino = new_ino;
                 nodes.push(StorageNode {
                     parent_ino: ino,
-                    name: node_name_str.clone(),
+                    name: node_name.clone(),
                     attr: attr.into(),
                 });
             }
@@ -224,8 +223,9 @@ pub fn classify_inode(fs: &GitFs, ino: u64) -> anyhow::Result<DirCase> {
     let target_name = fs.get_name_from_db(ino)?;
     if (mode == FileMode::Tree || mode == FileMode::Commit) && oid == Oid::zero() {
         // Branch 1
-        if let Some((y, m)) = target_name.split_once('-')
-            && let (Ok(year), Ok(month)) = (y.parse::<i32>(), m.parse::<u32>())
+        if let Some((y, m)) = namespec::split_once_os(&target_name, b'-')
+            && let (Some(year), Some(month)) =
+                (namespec::parse_i32_os(&y), namespec::parse_u32_os(&m))
         {
             return Ok(DirCase::Month { year, month });
         }
@@ -286,13 +286,12 @@ fn populate_build_entries(
     for node in build_path.read_dir()? {
         let node = node?;
         let node_name = node.file_name();
-        let node_name_str = node_name.to_string_lossy();
         let (kind, filemode) = if node.file_type()?.is_dir() {
             (FileType::Directory, libc::S_IFDIR)
         } else {
             (FileType::RegularFile, libc::S_IFREG)
         };
-        let entry_ino = match fs.exists_by_name(ino.into(), &node_name_str)? {
+        let entry_ino = match fs.exists_by_name(ino.into(), &node_name)? {
             Some(ino) => ino,
             None => continue,
         };
@@ -409,10 +408,10 @@ fn log_entries(
     fs: &GitFs,
     ino: u64,
     origin_oid: Oid,
-) -> anyhow::Result<Vec<(String, (u64, ObjectAttr))>> {
+) -> anyhow::Result<Vec<(OsString, (u64, ObjectAttr))>> {
     let entries = get_history_objects(fs, ino, origin_oid)?;
 
-    let mut log_entries: Vec<(String, (u64, ObjectAttr))> = vec![];
+    let mut log_entries: Vec<(OsString, (u64, ObjectAttr))> = vec![];
     for e in entries {
         let new_ino = fs.next_inode_checked(ino)?;
         log_entries.push((e.name.clone(), (new_ino, e)));
@@ -448,7 +447,7 @@ pub fn read_virtual_dir(fs: &GitFs, ino: VirtualIno) -> anyhow::Result<Vec<Direc
             None => bail!("Oid missing"),
         };
         for (name, entry) in log_entries {
-            let name = format!("{name}{file_ext}");
+            let name = OsString::from(format!("{}{file_ext}", name.display()));
             if let Entry::Vacant(e) = v_node.log.entry(name.clone()) {
                 e.insert(entry.clone());
                 let attr =
@@ -462,7 +461,7 @@ pub fn read_virtual_dir(fs: &GitFs, ino: VirtualIno) -> anyhow::Result<Vec<Direc
             dir_entries.push(DirectoryEntry::new(
                 entry.0,
                 entry.1.oid,
-                OsString::from(name),
+                name,
                 FileType::RegularFile,
                 entry.1.git_mode,
             ));
@@ -477,7 +476,7 @@ pub fn read_virtual_dir(fs: &GitFs, ino: VirtualIno) -> anyhow::Result<Vec<Direc
             None => bail!("Oid missing"),
         };
         for (ino, entry) in v_node.log.values() {
-            let name = format!("{}{file_ext}", entry.name);
+            let name = format!("{}{file_ext}", entry.name.display());
             dir_entries.push(DirectoryEntry::new(
                 *ino,
                 entry.oid,

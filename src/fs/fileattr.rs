@@ -1,4 +1,7 @@
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::{
+    ffi::OsString,
+    time::{SystemTime, UNIX_EPOCH},
+};
 
 use anyhow::bail;
 use git2::{ObjectType, Oid};
@@ -27,7 +30,7 @@ pub struct FileAttr {
 
 #[derive(Clone, Debug)]
 pub struct ObjectAttr {
-    pub name: String,
+    pub name: OsString,
     pub oid: Oid,
     pub kind: git2::ObjectType,
     pub git_mode: u32,
@@ -174,7 +177,7 @@ pub struct SetStoredAttr {
 /// Used for passing to Gitfs::write_inodes_to_db()
 pub struct StorageNode {
     pub parent_ino: u64,
-    pub name: String,
+    pub name: OsString,
     pub attr: StoredAttr,
 }
 

@@ -1,10 +1,10 @@
-use std::ffi::OsString;
+use std::ffi::{OsStr, OsString};
 
 use anyhow::{anyhow, bail};
 
 use crate::{fs::GitFs, inodes::NormalIno, mount::InvalMsg};
 
-pub fn rmdir_live(fs: &GitFs, parent: NormalIno, name: &str) -> anyhow::Result<()> {
+pub fn rmdir_live(fs: &GitFs, parent: NormalIno, name: &OsStr) -> anyhow::Result<()> {
     let Ok(target_ino) = fs.get_ino_from_db(parent.into(), name) else {
         tracing::error!("Target does not exist");
         bail!(std::io::Error::from_raw_os_error(libc::ENOENT))
@@ -30,7 +30,7 @@ pub fn rmdir_live(fs: &GitFs, parent: NormalIno, name: &str) -> anyhow::Result<(
     Ok(())
 }
 
-pub fn rmdir_git(fs: &GitFs, parent: NormalIno, name: &str) -> anyhow::Result<()> {
+pub fn rmdir_git(fs: &GitFs, parent: NormalIno, name: &OsStr) -> anyhow::Result<()> {
     let path = {
         let parent_oid = fs.parent_commit_build_session(parent)?;
         let build_root = fs.get_path_to_build_folder(parent)?;
