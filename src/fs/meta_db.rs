@@ -42,8 +42,8 @@ pub fn set_conn_pragmas(conn: &rusqlite::Connection) -> rusqlite::Result<()> {
         PRAGMA synchronous=NORMAL;
         PRAGMA foreign_keys=ON;
         PRAGMA temp_store=MEMORY;
-        PRAGMA journal_size_limit = 67108864 -- 64 megabytes;
-        PRAGMA mmap_size = 134217728 -- 128 megabytes;
+        PRAGMA journal_size_limit = 67108864; -- 64 megabytes
+        PRAGMA mmap_size = 134217728; -- 128 megabytes
         PRAGMA cache_size=-20000;
         PRAGMA wal_autocheckpoint=1000;
         PRAGMA read_uncommitted=OFF;

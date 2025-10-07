@@ -175,6 +175,8 @@ pub fn readdir_live_dir(fs: &GitFs, ino: NormalIno) -> anyhow::Result<Vec<Direct
         OsString::from("build"),
         OsString::from(".git"),
         OsString::from(META_STORE),
+        OsString::from("fs_meta.db-shm"),
+        OsString::from("fs_meta.db-wal"),
     ];
     let path = fs.get_live_path(ino.into())?;
     let mut entries: Vec<DirectoryEntry> = vec![];

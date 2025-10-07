@@ -42,7 +42,7 @@ const META_STORE: &str = "fs_meta.db";
 pub const REPO_SHIFT: u8 = 48;
 pub const ROOT_INO: u64 = 1;
 pub const VDIR_BIT: u64 = 1u64 << 47;
-const IGNORE_LIST: &[&str] = &[".git", META_STORE];
+const IGNORE_LIST: &[&str] = &[".git", META_STORE, "fs_meta.db-shm", "fs_meta.db-wal"];
 
 enum FsOperationContext {
     /// Is the root directory
@@ -498,24 +498,17 @@ impl GitFs {
             .rand_bytes(4)
             .tempdir_in(&self.repos_dir)?;
         let repo_id = self.new_repo_connection(repo_name, tmpdir.path())?;
-
-        self.fetch_repo(repo_id, tmpdir.path(), url)?;
-
-        todo!()
+        self.fetch_repo(repo_id, repo_name, tmpdir.path(), url)
     }
 
     fn fetch_repo(
         &mut self,
         repo_id: u16,
+        repo_name: &str,
         tmp_path: &Path,
         url: Option<&str>,
-    ) -> anyhow::Result<()> {
+    ) -> anyhow::Result<Arc<Mutex<GitRepo>>> {
         let repo_ino = GitFs::repo_id_to_ino(repo_id);
-        let repo_name = tmp_path
-            .file_name()
-            .context("No available repo name")?
-            .to_str()
-            .ok_or_else(|| anyhow!("No available repo name"))?;
 
         // Write the ROOT_INO in db
         self.db_ensure_root(repo_ino)?;
@@ -549,8 +542,8 @@ impl GitFs {
         build_attr.ino = build_ino;
         build_attr.git_mode = st_mode;
 
+        let repo = self.get_repo(repo_ino)?;
         {
-            let repo = self.get_repo(repo_ino)?;
             let mut guard = repo.lock().map_err(|_| anyhow!("Lock poisoned"))?;
             guard.res_inodes.insert(live_ino);
             guard.res_inodes.insert(build_ino);
@@ -572,7 +565,6 @@ impl GitFs {
         self.write_inodes_to_db(nodes)?;
 
         if let Some(url) = url {
-            let repo = self.get_repo(repo_ino)?;
             let mut repo = repo.lock().map_err(|_| anyhow!("Lock poisoned"))?;
             repo.fetch_anon(url)?;
             repo.refresh_snapshots()?;
@@ -582,12 +574,16 @@ impl GitFs {
         std::fs::rename(tmp_path, &final_path)?;
 
         {
+            // Refresh repo and db to new path
             let repo = self.get_repo(repo_ino)?;
             let mut repo = repo.lock().map_err(|_| anyhow!("Lock poisoned"))?;
-            repo.inner = git2::Repository::init(final_path)?;
+            repo.inner = git2::Repository::init(&final_path)?;
+            // self.init_meta_db(&final_path.join(META_STORE))?;
+            let db_conn = meta_db::new_repo_db(final_path.join(META_STORE))?;
+            self.conn_list.insert(repo_id, db_conn);
         }
 
-        Ok(())
+        Ok(repo)
     }
 
     /// Must take in the name of the folder of the REPO --
