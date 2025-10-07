@@ -124,6 +124,14 @@ pub enum DbWriteMsg {
         target_ino: NormalIno,
         resp: Option<Resp<()>>,
     },
+    CacheReadDir {
+        nodes: Vec<StorageNode>,
+        resp: Option<Resp<()>>,
+    },
+    CacheSnapReadDir {
+        nodes: Vec<StorageNode>,
+        resp: Option<Resp<()>>,
+    },
 }
 
 fn spawn_repo_writer(
@@ -281,6 +289,12 @@ where
                     Ok(())
                 }
             }
+        }
+        DbWriteMsg::CacheReadDir { nodes: _, resp: _ } => {
+            todo!()
+        }
+        DbWriteMsg::CacheSnapReadDir { nodes: _, resp: _ } => {
+            todo!()
         }
     }
 }

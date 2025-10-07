@@ -2144,6 +2144,80 @@ impl GitFs {
         Ok(())
     }
 
+/// Called when user does cd into a folder. Will read all the entries add them to db.
+    ///
+    /// Normally, this would only happen during ls
+    fn cache_readdir(&self, ino: NormalIno) -> anyhow::Result<()> {
+        if ino.to_norm_u64() == ROOT_INO {
+            return Ok(());
+        }
+        let repo_id = GitFs::ino_to_repo_id(ino.into());
+
+        let direntries = self.readdirplus(ino.into())?;
+        let mut nodes: Vec<StorageNode> = vec![];
+        for e in direntries {
+            nodes.push(StorageNode {
+                parent_ino: ino.into(),
+                name: e.entry.name,
+                attr: e.attr.into(),
+            });
+        }
+
+        let writer_tx = {
+            let guard = self
+                .conn_list
+                .get(&repo_id)
+                .ok_or_else( || anyhow!("No db for repo id {repo_id}"))?;
+            guard.writer_tx.clone()
+        };
+
+        let msg = DbWriteMsg::CacheReadDir { nodes, resp: None };
+
+        writer_tx
+            .send(msg)
+            .context("writer_tx error on cache_readdir")?;
+
+        Ok(())
+    }
+
+    /// If ino is a Snap folder, it will walk the folders and add all entries to database
+    fn cache_snap_readdir(&self, ino: NormalIno) -> anyhow::Result<()> {
+        let repo_id = GitFs::ino_to_repo_id(ino.into());
+
+        let writer_tx = {
+            let guard = self
+                .conn_list
+                .get(&repo_id)
+                .ok_or_else( || anyhow!("No db for repo id {repo_id}"))?;
+            guard.writer_tx.clone()
+        };
+
+        let mut stack: Vec<u64> = vec![ino.into()];
+
+        while let Some(cur_dir) = stack.pop() {
+            let mut nodes: Vec<StorageNode> = vec![];
+            let direntries = self.readdirplus(ino.into())?;
+
+            for e in direntries {
+                if e.entry.kind == FileType::Directory {
+                    stack.push(e.entry.ino);
+                }
+
+                nodes.push(StorageNode {
+                    parent_ino: cur_dir,
+                    name: e.entry.name,
+                    attr: e.attr.into(),
+                });
+            }
+
+            writer_tx
+                .send(DbWriteMsg::CacheSnapReadDir { nodes, resp: None })
+                .context("writer_tx error on cache_snap_readdir")?;
+        }
+
+        Ok(())
+    }
+
     pub fn write_dentry(
         &self,
         parent_ino: NormalIno,
