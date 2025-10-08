@@ -289,10 +289,10 @@ impl GitFs {
                 let repo = repo.lock().map_err(|_| anyhow!("Lock poisoned"))?;
                 repo.repo_dir.clone()
             };
-            let repo_path = fs.repos_dir.join(repo_name);
+            let live_path = fs.repos_dir.join(repo_name).join(LIVE_FOLDER);
 
             // Read contents of live
-            let nodes = fs.read_dir_to_db(&repo_path, InoFlag::InsideLive, live_ino)?;
+            let nodes = fs.read_dir_to_db(&live_path, InoFlag::InsideLive, live_ino)?;
             fs.write_inodes_to_db(nodes)?;
         }
         Ok(Arc::from(Mutex::new(fs)))
@@ -468,9 +468,6 @@ impl GitFs {
         let mut nodes: Vec<StorageNode> = vec![];
         for entry in path.read_dir()? {
             let entry = entry?;
-            if IGNORE_LIST.contains(&entry.file_name().to_str().unwrap_or_default()) {
-                continue;
-            }
             if entry.file_type()?.is_dir() {
                 let ino = self.next_inode_checked(parent_ino)?;
                 let mut attr: FileAttr = dir_attr(ino_flag).into();
@@ -1452,7 +1449,7 @@ impl GitFs {
             let repo = repo.lock().map_err(|_| anyhow!("Lock poisoned"))?;
             repo.repo_dir.clone()
         };
-        let path_to_live = PathBuf::from(&self.repos_dir).join(repo_name).join("live");
+        let path_to_live = PathBuf::from(&self.repos_dir).join(repo_name).join(LIVE_FOLDER);
 
         if target.to_norm_u64() == live_ino {
             return Ok(path_to_live);
