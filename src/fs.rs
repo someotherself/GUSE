@@ -1496,7 +1496,6 @@ impl GitFs {
         }
         let db_path = &self.get_path_from_db(ino)?;
         let final_path = path.join(db_path);
-        tracing::info!("Live path: {}", final_path.display());
         Ok(final_path)
     }
 }
