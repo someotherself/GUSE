@@ -1448,7 +1448,9 @@ impl GitFs {
             let repo = repo.lock().map_err(|_| anyhow!("Lock poisoned"))?;
             repo.repo_dir.clone()
         };
-        let path_to_live = PathBuf::from(&self.repos_dir).join(repo_name).join(LIVE_FOLDER);
+        let path_to_live = PathBuf::from(&self.repos_dir)
+            .join(repo_name)
+            .join(LIVE_FOLDER);
 
         if target.to_norm_u64() == live_ino {
             return Ok(path_to_live);

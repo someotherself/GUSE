@@ -11,7 +11,7 @@ use tracing::instrument;
 
 use crate::{
     fs::{
-        FileAttr, GitFs, META_STORE,
+        FileAttr, GitFs,
         builds::BuildOperationCtx,
         fileattr::{FileType, InoFlag, ObjectAttr, StorageNode, dir_attr, file_attr},
     },
@@ -171,22 +171,12 @@ pub fn readdir_repo_dir(fs: &GitFs, parent: NormalIno) -> anyhow::Result<Vec<Dir
 // Performance is not a priority
 pub fn readdir_live_dir(fs: &GitFs, ino: NormalIno) -> anyhow::Result<Vec<DirectoryEntry>> {
     let ino = u64::from(ino);
-    let ignore_list = [
-        OsString::from("build"),
-        OsString::from(".git"),
-        OsString::from(META_STORE),
-        OsString::from("fs_meta.db-shm"),
-        OsString::from("fs_meta.db-wal"),
-    ];
     let path = fs.get_live_path(ino.into())?;
     let mut entries: Vec<DirectoryEntry> = vec![];
     let mut nodes: Vec<StorageNode> = vec![];
     for node in path.read_dir()? {
         let node = node?;
         let node_name = node.file_name();
-        if ignore_list.contains(&node_name) {
-            continue;
-        }
         let (kind, filemode) = if node.file_type()?.is_dir() {
             (FileType::Directory, libc::S_IFDIR)
         } else {
@@ -253,29 +243,6 @@ fn read_build_dir(fs: &GitFs, ino: NormalIno) -> anyhow::Result<Vec<DirectoryEnt
     Ok(out)
 }
 
-// #[instrument(level = "debug", skip(fs), err(Display))]
-// fn populate_build_entries(
-//     fs: &GitFs,
-//     ino: NormalIno,
-//     build_path: &Path,
-// ) -> anyhow::Result<Vec<DirectoryEntry>> {
-//     let mut out: Vec<DirectoryEntry> = Vec::new();
-
-//     let readdir = match build_path.read_dir() {
-//         Ok(r) => r,
-//         Err(e) => return Ok(Vec::new())
-//     };
-
-//     for ent_res in readdir {
-//         let entry = match ent_res {
-//             Ok(ent) => ent,
-//             Err(_) => continue
-//         };
-
-//     };
-
-// }
-
 #[instrument(level = "debug", skip(fs), err(Display))]
 fn populate_build_entries(
     fs: &GitFs,
@@ -295,9 +262,6 @@ fn populate_build_entries(
             Some(ino) => ino,
             None => continue,
         };
-        // let Some(entry_ino) = fs.exists_by_name(ino.into(), &node_name)? else {
-        //     bail!("Not found: {node_name_str} under parent ino {ino}")
-        // };
         let entry = DirectoryEntry::new(entry_ino, Oid::zero(), node_name, kind, filemode);
         out.push(entry);
     }
@@ -313,7 +277,7 @@ pub fn readdir_git_dir(fs: &GitFs, parent: NormalIno) -> anyhow::Result<Vec<Dire
             // The objects are Snap folders
             let Ok(DirCase::Month { year, month }) = classify_inode(fs, parent.to_norm_u64())
             else {
-                bail!("")
+                bail!("Invalid MONTH folder name")
             };
             let repo = repo.lock().map_err(|_| anyhow!("Lock poisoned"))?;
             let objects = repo.month_commits(&format!("{year:04}-{month:02}"))?;
