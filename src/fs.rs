@@ -40,6 +40,7 @@ pub mod repo;
 mod test;
 
 const META_STORE: &str = "fs_meta.db";
+const LIVE_FOLDER: &str = "live";
 pub const REPO_SHIFT: u8 = 48;
 pub const ROOT_INO: u64 = 1;
 pub const VDIR_BIT: u64 = 1u64 << 47;
@@ -311,7 +312,10 @@ impl GitFs {
         let db_conn = meta_db::new_repo_db(&db_path)?;
         self.conn_list.insert(repo_id, db_conn);
 
-        let repo = git2::Repository::init(tmpdir)?;
+        // Create the live folder on disk
+        let live_path = tmpdir.join(LIVE_FOLDER);
+        std::fs::create_dir(&live_path)?;
+        let repo = git2::Repository::init(live_path)?;
 
         let git_repo = GitRepo {
             repo_dir: repo_name.to_owned(),
@@ -346,7 +350,8 @@ impl GitFs {
         let db_conn = meta_db::new_repo_db(&db_path)?;
         self.conn_list.insert(repo_id, db_conn);
 
-        let repo = git2::Repository::init(&repo_path)?;
+        let live_path = repo_path.join(LIVE_FOLDER);
+        let repo = git2::Repository::init(live_path)?;
 
         let mut git_repo = GitRepo {
             repo_dir: repo_name.to_owned(),
@@ -578,11 +583,11 @@ impl GitFs {
         std::fs::rename(tmp_path, &final_path)?;
 
         {
+            let live_path = final_path.join(LIVE_FOLDER);
             // Refresh repo and db to new path
             let repo = self.get_repo(repo_ino)?;
             let mut repo = repo.lock().map_err(|_| anyhow!("Lock poisoned"))?;
-            repo.inner = git2::Repository::init(&final_path)?;
-            // self.init_meta_db(&final_path.join(META_STORE))?;
+            repo.inner = git2::Repository::init(&live_path)?;
             let db_conn = meta_db::new_repo_db(final_path.join(META_STORE))?;
             self.conn_list.insert(repo_id, db_conn);
         }
