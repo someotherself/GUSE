@@ -11,7 +11,7 @@ use tracing::instrument;
 
 use crate::{
     fs::{
-        FileAttr, GitFs,
+        FileAttr, GitFs, LIVE_FOLDER,
         builds::BuildOperationCtx,
         fileattr::{FileType, InoFlag, ObjectAttr, StorageNode, dir_attr, file_attr},
     },
@@ -243,6 +243,66 @@ fn read_build_dir(fs: &GitFs, ino: NormalIno) -> anyhow::Result<Vec<DirectoryEnt
     Ok(out)
 }
 
+// fn build_dot_git_path(fs: &GitFs, parent_ino: NormalIno) {
+
+// }
+
+fn read_inside_dot_git(
+    fs: &GitFs,
+    parent_ino: NormalIno,
+    _ino_flag: InoFlag,
+) -> anyhow::Result<Vec<DirectoryEntry>> {
+    let repo_path = {
+        let repo = fs.get_repo(parent_ino.into())?;
+        let repo = repo.lock().map_err(|_| anyhow!("Lock poisoned"))?;
+        let repo_dir = &repo.repo_dir;
+        fs.repos_dir.join(repo_dir)
+    };
+
+    let mut entries: Vec<DirectoryEntry> = vec![];
+    let mut nodes: Vec<StorageNode> = vec![];
+
+    let path = repo_path.join(LIVE_FOLDER).join(".git");
+    for node in path.read_dir()? {
+        let node = node?;
+        let node_name = node.file_name();
+
+        let ino_flag = if node_name == "HEAD" {
+            InoFlag::HeadFile
+        } else {
+            InoFlag::InsideDotGit
+        };
+        let (kind, filemode) = if node.file_type()?.is_dir() {
+            (FileType::Directory, libc::S_IFDIR)
+        } else {
+            (FileType::RegularFile, libc::S_IFREG)
+        };
+
+        let mut attr = fs.refresh_medata_using_path(node.path(), ino_flag)?;
+
+        match fs.get_ino_from_db(parent_ino.into(), &node_name) {
+            Ok(ino) => attr.ino = ino,
+            Err(_) => {
+                let new_ino = fs.next_inode_checked(parent_ino.into())?;
+                attr.ino = new_ino;
+                nodes.push(StorageNode {
+                    parent_ino: parent_ino.into(),
+                    name: node_name.clone(),
+                    attr: attr.into(),
+                });
+            }
+        };
+
+        // TODO: Add commit oid
+        let entry = DirectoryEntry::new(attr.ino, Oid::zero(), node_name, kind, filemode);
+        entries.push(entry);
+    }
+
+    fs.write_inodes_to_db(nodes)?;
+    entries.sort_unstable_by(|a, b| a.name.as_encoded_bytes().cmp(b.name.as_encoded_bytes()));
+    Ok(entries)
+}
+
 fn dot_git_root(fs: &GitFs, parent_ino: u64) -> anyhow::Result<DirectoryEntry> {
     let perms = 0o775;
     let st_mode = libc::S_IFDIR | perms;
@@ -250,7 +310,18 @@ fn dot_git_root(fs: &GitFs, parent_ino: u64) -> anyhow::Result<DirectoryEntry> {
     let name = OsStr::new(".git");
     let entry_ino = match fs.exists_by_name(parent_ino, name)? {
         Some(ino) => ino,
-        None => fs.next_inode_checked(parent_ino)?,
+        None => {
+            let ino = fs.next_inode_checked(parent_ino)?;
+            let mut attr: FileAttr = dir_attr(InoFlag::DotGitRoot).into();
+            attr.ino = ino;
+            let nodes: Vec<StorageNode> = vec![StorageNode {
+                parent_ino,
+                name: name.to_os_string(),
+                attr: attr.into(),
+            }];
+            fs.write_inodes_to_db(nodes)?;
+            ino
+        }
     };
     let entry: DirectoryEntry = DirectoryEntry {
         ino: entry_ino,
@@ -261,7 +332,6 @@ fn dot_git_root(fs: &GitFs, parent_ino: u64) -> anyhow::Result<DirectoryEntry> {
     };
     Ok(entry)
 }
-
 
 #[instrument(level = "debug", skip(fs), err(Display))]
 fn populate_build_entries(
@@ -338,10 +408,8 @@ pub fn readdir_git_dir(fs: &GitFs, parent: NormalIno) -> anyhow::Result<Vec<Dire
             // Only contains the build folder
             // InoFlag::BuildRoot - only happens when accessing the build folder from RepoRoot
             read_build_dir(fs, parent)?
-        },
-        InoFlag::DotGitRoot | InoFlag::InsideDotGit => {
-            todo!()
-        },
+        }
+        InoFlag::DotGitRoot | InoFlag::InsideDotGit => read_inside_dot_git(fs, parent, ino_flag)?,
         _ => {
             tracing::error!("WRONG BRANCH");
             bail!("Wrong ino_flag")
@@ -371,6 +439,7 @@ fn objects_to_dir_entries(
                     ObjectType::Tree | ObjectType::Commit => dir_attr(ino_flag).into(),
                     _ => file_attr(ino_flag).into(),
                 };
+                // TODO: Add the commit oid
                 attr.oid = entry.oid;
                 attr.ino = ino;
                 attr.size = entry.size;
