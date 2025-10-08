@@ -93,9 +93,10 @@ pub enum DbWriteMsg {
         target_name: OsString,
         resp: Resp<()>,
     },
+    /// Send and forget
     WriteInodes {
         nodes: Vec<StorageNode>,
-        resp: Resp<()>,
+        resp: Option<Resp<()>>,
     },
     UpdateMetadata {
         attr: SetStoredAttr,
@@ -120,16 +121,9 @@ pub enum DbWriteMsg {
         target_name: OsString,
         resp: Option<Resp<()>>,
     },
+    /// Send and forget
     CleanupEntry {
         target_ino: NormalIno,
-        resp: Option<Resp<()>>,
-    },
-    CacheReadDir {
-        nodes: Vec<StorageNode>,
-        resp: Option<Resp<()>>,
-    },
-    CacheSnapReadDir {
-        nodes: Vec<StorageNode>,
         resp: Option<Resp<()>>,
     },
 }
@@ -210,9 +204,19 @@ where
             Ok(())
         }
         DbWriteMsg::WriteInodes { nodes, resp } => {
-            MetaDb::write_inodes_to_db(conn, nodes)?;
-            results.push(resp);
-            Ok(())
+            let res = MetaDb::write_inodes_to_db(conn, nodes);
+            match resp {
+                Some(tx) => {
+                    results.push(tx);
+                    Ok(())
+                }
+                None => {
+                    if let Err(e) = &res {
+                        tracing::warn!("db write_inodes_to_db failed: {e}");
+                    }
+                    Ok(())
+                }
+            }
         }
         DbWriteMsg::UpdateMetadata { attr, resp } => {
             MetaDb::update_inodes_table(conn, attr)?;
@@ -233,12 +237,8 @@ where
             let res = MetaDb::update_db_record(conn, old_parent.into(), &old_name, node);
             match resp {
                 Some(tx) => {
-                    let _ = tx.try_send(
-                        res.as_ref()
-                            .map(|_| ())
-                            .map_err(|e| anyhow::anyhow!(e.to_string())),
-                    );
-                    res
+                    results.push(tx);
+                    Ok(())
                 }
                 None => {
                     if let Err(e) = &res {
@@ -256,12 +256,8 @@ where
             let res = MetaDb::remove_db_dentry(conn, parent_ino.into(), &target_name);
             match resp {
                 Some(tx) => {
-                    let _ = tx.try_send(
-                        res.as_ref()
-                            .map(|_| ())
-                            .map_err(|e| anyhow::anyhow!(e.to_string())),
-                    );
-                    res
+                    results.push(tx);
+                    Ok(())
                 }
                 None => {
                     if let Err(e) = &res {
@@ -275,12 +271,8 @@ where
             let res = MetaDb::cleanup_dentry(conn, target_ino.into());
             match resp {
                 Some(tx) => {
-                    let _ = tx.try_send(
-                        res.as_ref()
-                            .map(|_| ())
-                            .map_err(|e| anyhow::anyhow!(e.to_string())),
-                    );
-                    res
+                    results.push(tx);
+                    Ok(())
                 }
                 None => {
                     if let Err(e) = &res {
@@ -289,12 +281,6 @@ where
                     Ok(())
                 }
             }
-        }
-        DbWriteMsg::CacheReadDir { nodes: _, resp: _ } => {
-            todo!()
-        }
-        DbWriteMsg::CacheSnapReadDir { nodes: _, resp: _ } => {
-            todo!()
         }
     }
 }
