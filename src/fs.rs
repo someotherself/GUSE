@@ -40,6 +40,7 @@ pub mod repo;
 mod test;
 
 const META_STORE: &str = "fs_meta.db";
+const LIVE_FOLDER: &str = "live";
 pub const REPO_SHIFT: u8 = 48;
 pub const ROOT_INO: u64 = 1;
 pub const VDIR_BIT: u64 = 1u64 << 47;
@@ -288,10 +289,10 @@ impl GitFs {
                 let repo = repo.lock().map_err(|_| anyhow!("Lock poisoned"))?;
                 repo.repo_dir.clone()
             };
-            let repo_path = fs.repos_dir.join(repo_name);
+            let live_path = fs.repos_dir.join(repo_name).join(LIVE_FOLDER);
 
             // Read contents of live
-            let nodes = fs.read_dir_to_db(&repo_path, InoFlag::InsideLive, live_ino)?;
+            let nodes = fs.read_dir_to_db(&live_path, InoFlag::InsideLive, live_ino)?;
             fs.write_inodes_to_db(nodes)?;
         }
         Ok(Arc::from(Mutex::new(fs)))
@@ -311,7 +312,10 @@ impl GitFs {
         let db_conn = meta_db::new_repo_db(&db_path)?;
         self.conn_list.insert(repo_id, db_conn);
 
-        let repo = git2::Repository::init(tmpdir)?;
+        // Create the live folder on disk
+        let live_path = tmpdir.join(LIVE_FOLDER);
+        std::fs::create_dir(&live_path)?;
+        let repo = git2::Repository::init(live_path)?;
 
         let git_repo = GitRepo {
             repo_dir: repo_name.to_owned(),
@@ -346,7 +350,8 @@ impl GitFs {
         let db_conn = meta_db::new_repo_db(&db_path)?;
         self.conn_list.insert(repo_id, db_conn);
 
-        let repo = git2::Repository::init(&repo_path)?;
+        let live_path = repo_path.join(LIVE_FOLDER);
+        let repo = git2::Repository::init(live_path)?;
 
         let mut git_repo = GitRepo {
             repo_dir: repo_name.to_owned(),
@@ -463,9 +468,6 @@ impl GitFs {
         let mut nodes: Vec<StorageNode> = vec![];
         for entry in path.read_dir()? {
             let entry = entry?;
-            if IGNORE_LIST.contains(&entry.file_name().to_str().unwrap_or_default()) {
-                continue;
-            }
             if entry.file_type()?.is_dir() {
                 let ino = self.next_inode_checked(parent_ino)?;
                 let mut attr: FileAttr = dir_attr(ino_flag).into();
@@ -543,6 +545,9 @@ impl GitFs {
         build_attr.ino = build_ino;
         build_attr.git_mode = st_mode;
 
+        // Create build folder on disk
+        std::fs::create_dir(tmp_path.join("build"))?;
+
         let repo = self.get_repo(repo_ino)?;
         {
             let mut guard = repo.lock().map_err(|_| anyhow!("Lock poisoned"))?;
@@ -575,11 +580,11 @@ impl GitFs {
         std::fs::rename(tmp_path, &final_path)?;
 
         {
+            let live_path = final_path.join(LIVE_FOLDER);
             // Refresh repo and db to new path
             let repo = self.get_repo(repo_ino)?;
             let mut repo = repo.lock().map_err(|_| anyhow!("Lock poisoned"))?;
-            repo.inner = git2::Repository::init(&final_path)?;
-            // self.init_meta_db(&final_path.join(META_STORE))?;
+            repo.inner = git2::Repository::init(&live_path)?;
             let db_conn = meta_db::new_repo_db(final_path.join(META_STORE))?;
             self.conn_list.insert(repo_id, db_conn);
         }
@@ -1437,51 +1442,36 @@ impl GitFs {
 // gitfs_path_builders
 impl GitFs {
     /// Build path to a folder or file that exists in the live folder
-    fn get_live_path(&self, parent: NormalIno) -> anyhow::Result<PathBuf> {
-        let live_ino = self.get_live_ino(parent.to_norm_u64());
+    fn get_live_path(&self, target: NormalIno) -> anyhow::Result<PathBuf> {
+        let live_ino = self.get_live_ino(target.into());
         let repo_name = {
-            let repo = &self.get_repo(parent.to_norm_u64())?;
+            let repo = &self.get_repo(target.to_norm_u64())?;
             let repo = repo.lock().map_err(|_| anyhow!("Lock poisoned"))?;
             repo.repo_dir.clone()
         };
-        let path_to_repo = PathBuf::from(&self.repos_dir).join(repo_name);
+        let path_to_live = PathBuf::from(&self.repos_dir).join(repo_name).join(LIVE_FOLDER);
 
-        // live folder must be skipped. It doesn't exist on disk
-        if live_ino == parent.to_norm_u64() {
-            return Ok(path_to_repo);
+        if target.to_norm_u64() == live_ino {
+            return Ok(path_to_live);
         }
-
-        let repo_id = GitFs::ino_to_repo_id(parent.into());
-        let repo_db = self
-            .conn_list
-            .get(&repo_id)
-            .ok_or_else(|| anyhow::anyhow!("no db"))?;
-
-        let conn = repo_db.ro_pool.get()?;
-        let parent_name = { MetaDb::get_parent_name_from_ino(&conn, parent.into())? };
 
         let mut out: Vec<OsString> = vec![];
 
-        let mut cur_par_ino = parent.to_norm_u64();
-        let mut cur_par_name = parent_name;
-
-        out.push(cur_par_name.clone());
+        let mut cur_ino = target.to_norm_u64();
+        let mut cur_name = self.get_name_from_db(cur_ino)?;
 
         let max_loops = 1000;
         for _ in 0..max_loops {
-            (cur_par_ino, cur_par_name) =
-                MetaDb::get_parent_name_from_child(&conn, cur_par_ino, &cur_par_name)?;
-
-            // live folder must be skipped. It doesn't exist on disk
-            if live_ino == cur_par_ino {
+            out.push(cur_name);
+            cur_ino = self.get_single_parent(cur_ino)?;
+            if cur_ino == live_ino {
                 break;
             }
-
-            out.push(cur_par_name.clone());
+            cur_name = self.get_name_from_db(cur_ino)?;
         }
 
         out.reverse();
-        Ok(path_to_repo.join(out.iter().collect::<PathBuf>()))
+        Ok(path_to_live.join(out.iter().collect::<PathBuf>()))
     }
 
     fn get_path_to_build_folder(&self, ino: NormalIno) -> anyhow::Result<PathBuf> {
@@ -1494,7 +1484,6 @@ impl GitFs {
         Ok(repo_dir_path)
     }
 
-    // As "live" does not exist on disk, it will remove it from the path
     fn build_full_path(&self, ino: NormalIno) -> anyhow::Result<PathBuf> {
         let repo_ino = {
             let repo = self.get_repo(ino.into())?;
@@ -1506,14 +1495,8 @@ impl GitFs {
             return Ok(path);
         }
         let db_path = &self.get_path_from_db(ino)?;
-        let filename = db_path.file_name().ok_or_else(|| anyhow!("No filename"))?;
-        if filename == OsStr::new("live") {
-            // If path ends with the live dir, remove it.
-            Ok(path)
-        } else {
-            // Otherwise, use the path from DB, as meta_db will remove live by itself
-            Ok(path.join(db_path))
-        }
+        let final_path = path.join(db_path);
+        Ok(final_path)
     }
 }
 

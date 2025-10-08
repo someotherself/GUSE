@@ -1096,10 +1096,6 @@ impl MetaDb {
 
             match row {
                 Some((parent, name)) => {
-                    if name == "live" {
-                        curr = parent;
-                        continue;
-                    }
                     components.push(name);
                     curr = parent;
                 }
