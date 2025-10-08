@@ -243,6 +243,48 @@ fn read_build_dir(fs: &GitFs, ino: NormalIno) -> anyhow::Result<Vec<DirectoryEnt
     Ok(out)
 }
 
+fn dot_git_root(fs: &GitFs, parent_ino: u64) -> anyhow::Result<DirectoryEntry> {
+    let perms = 0o775;
+    let st_mode = libc::S_IFDIR | perms;
+
+    let name = OsStr::new(".git");
+    let entry_ino = match fs.exists_by_name(parent_ino, name)? {
+        Some(ino) => ino,
+        None => fs.next_inode_checked(parent_ino)?,
+    };
+    let entry: DirectoryEntry = DirectoryEntry {
+        ino: entry_ino,
+        oid: Oid::zero(),
+        name: name.to_os_string(),
+        kind: FileType::Directory,
+        git_mode: st_mode,
+    };
+    Ok(entry)
+}
+
+// #[instrument(level = "debug", skip(fs), err(Display))]
+// fn populate_build_entries(
+//     fs: &GitFs,
+//     ino: NormalIno,
+//     build_path: &Path,
+// ) -> anyhow::Result<Vec<DirectoryEntry>> {
+//     let mut out: Vec<DirectoryEntry> = Vec::new();
+
+//     let readdir = match build_path.read_dir() {
+//         Ok(r) => r,
+//         Err(e) => return Ok(Vec::new())
+//     };
+
+//     for ent_res in readdir {
+//         let entry = match ent_res {
+//             Ok(ent) => ent,
+//             Err(_) => continue
+//         };
+
+//     };
+
+// }
+
 #[instrument(level = "debug", skip(fs), err(Display))]
 fn populate_build_entries(
     fs: &GitFs,
@@ -291,9 +333,14 @@ pub fn readdir_git_dir(fs: &GitFs, parent: NormalIno) -> anyhow::Result<Vec<Dire
             let repo = repo.lock().map_err(|_| anyhow!("Lock poisoned"))?;
             let objects = repo.list_tree(oid, None)?;
             drop(repo);
+            // git objects
             let mut dir_entries = objects_to_dir_entries(fs, parent, objects, InoFlag::InsideSnap)?;
+            // build files/folders
             let build_objects = read_build_dir(fs, parent)?;
             dir_entries.extend(build_objects);
+            // .git folder
+            dir_entries.push(dot_git_root(fs, parent.into())?);
+
             dir_entries
         }
         InoFlag::InsideSnap => {
@@ -313,7 +360,10 @@ pub fn readdir_git_dir(fs: &GitFs, parent: NormalIno) -> anyhow::Result<Vec<Dire
             // Only contains the build folder
             // InoFlag::BuildRoot - only happens when accessing the build folder from RepoRoot
             read_build_dir(fs, parent)?
-        }
+        },
+        InoFlag::DotGitRoot | InoFlag::InsideDotGit => {
+            todo!()
+        },
         _ => {
             tracing::error!("WRONG BRANCH");
             bail!("Wrong ino_flag")
