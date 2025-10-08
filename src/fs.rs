@@ -543,6 +543,9 @@ impl GitFs {
         build_attr.ino = build_ino;
         build_attr.git_mode = st_mode;
 
+        // Create build folder on disk
+        std::fs::create_dir(tmp_path.join("build"))?;
+
         let repo = self.get_repo(repo_ino)?;
         {
             let mut guard = repo.lock().map_err(|_| anyhow!("Lock poisoned"))?;
