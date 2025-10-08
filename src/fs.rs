@@ -44,7 +44,6 @@ const LIVE_FOLDER: &str = "live";
 pub const REPO_SHIFT: u8 = 48;
 pub const ROOT_INO: u64 = 1;
 pub const VDIR_BIT: u64 = 1u64 << 47;
-const IGNORE_LIST: &[&str] = &[".git", META_STORE, "fs_meta.db-shm", "fs_meta.db-wal"];
 
 enum FsOperationContext {
     /// Is the root directory
