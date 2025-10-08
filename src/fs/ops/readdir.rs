@@ -262,28 +262,6 @@ fn dot_git_root(fs: &GitFs, parent_ino: u64) -> anyhow::Result<DirectoryEntry> {
     Ok(entry)
 }
 
-// #[instrument(level = "debug", skip(fs), err(Display))]
-// fn populate_build_entries(
-//     fs: &GitFs,
-//     ino: NormalIno,
-//     build_path: &Path,
-// ) -> anyhow::Result<Vec<DirectoryEntry>> {
-//     let mut out: Vec<DirectoryEntry> = Vec::new();
-
-//     let readdir = match build_path.read_dir() {
-//         Ok(r) => r,
-//         Err(e) => return Ok(Vec::new())
-//     };
-
-//     for ent_res in readdir {
-//         let entry = match ent_res {
-//             Ok(ent) => ent,
-//             Err(_) => continue
-//         };
-
-//     };
-
-// }
 
 #[instrument(level = "debug", skip(fs), err(Display))]
 fn populate_build_entries(
