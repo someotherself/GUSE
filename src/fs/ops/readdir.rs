@@ -1,7 +1,7 @@
 use std::{
     collections::btree_map::Entry,
     ffi::{OsStr, OsString},
-    path::Path,
+    path::{Path, PathBuf},
     sync::Arc,
 };
 
@@ -243,26 +243,47 @@ fn read_build_dir(fs: &GitFs, ino: NormalIno) -> anyhow::Result<Vec<DirectoryEnt
     Ok(out)
 }
 
-// fn build_dot_git_path(fs: &GitFs, parent_ino: NormalIno) {
+fn build_dot_git_path(fs: &GitFs, target_ino: NormalIno) -> anyhow::Result<PathBuf> {
+    let repo_path = {
+        let repo = fs.get_repo(target_ino.into())?;
+        let repo = repo.lock().map_err(|_| anyhow!("Lock poisoned"))?;
+        let repo_dir = &repo.repo_dir;
+        fs.repos_dir.join(repo_dir)
+    };
+    let dot_git_path = repo_path.join(LIVE_FOLDER).join(".git");
 
-// }
+    let mut out: Vec<OsString> = vec![];
+
+    let mut cur_ino = target_ino.to_norm_u64();
+    let mut cur_name = fs.get_name_from_db(cur_ino)?;
+
+    if cur_name == ".git" {
+        return Ok(dot_git_path);
+    }
+
+    let max_loops = 1000;
+    for _ in 0..max_loops {
+        out.push(cur_name.clone());
+        cur_ino = fs.get_single_parent(cur_ino)?;
+        cur_name = fs.get_name_from_db(cur_ino)?;
+        if cur_name == ".git" {
+            break;
+        }
+    }
+
+    out.reverse();
+    Ok(dot_git_path.join(out.iter().collect::<PathBuf>()))
+}
 
 fn read_inside_dot_git(
     fs: &GitFs,
     parent_ino: NormalIno,
     _ino_flag: InoFlag,
 ) -> anyhow::Result<Vec<DirectoryEntry>> {
-    let repo_path = {
-        let repo = fs.get_repo(parent_ino.into())?;
-        let repo = repo.lock().map_err(|_| anyhow!("Lock poisoned"))?;
-        let repo_dir = &repo.repo_dir;
-        fs.repos_dir.join(repo_dir)
-    };
-
     let mut entries: Vec<DirectoryEntry> = vec![];
     let mut nodes: Vec<StorageNode> = vec![];
 
-    let path = repo_path.join(LIVE_FOLDER).join(".git");
+    let path = build_dot_git_path(fs, parent_ino)?;
     for node in path.read_dir()? {
         let node = node?;
         let node_name = node.file_name();
