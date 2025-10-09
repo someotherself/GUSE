@@ -1,5 +1,6 @@
 use std::ffi::{OsStr, OsString};
 use std::fs::File;
+use std::ops::DerefMut;
 use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::{FileExt, MetadataExt};
 use std::path::Path;
@@ -119,7 +120,7 @@ pub struct GitFs {
     pub repos_dir: PathBuf,
     /// Use helpers `self.insert_repo` and `self.delete_repo`
     /// <repo_id, repo>
-    repos_list: BTreeMap<u16, Arc<Mutex<GitRepo>>>,
+    repos_list: DashMap<u16, Arc<Mutex<GitRepo>>>,
     /// <repo_id, connections>
     conn_list: DashMap<u16, Arc<MetaDb>>,
     /// Use helpers `self.insert_repo` and `self.delete_repo`
@@ -232,12 +233,12 @@ impl GitFs {
         repos_dir: PathBuf,
         read_only: bool,
         notifier: Arc<OnceLock<fuser::Notifier>>,
-    ) -> anyhow::Result<Arc<Mutex<Self>>> {
+    ) -> anyhow::Result<Arc<Self>> {
         let (tx, rx) = crossbeam_channel::unbounded::<InvalMsg>();
 
         let mut fs = Self {
             repos_dir,
-            repos_list: BTreeMap::new(),
+            repos_list: DashMap::new(),
             conn_list: DashMap::new(),
             repos_map: HashMap::new(),
             read_only,
@@ -281,7 +282,7 @@ impl GitFs {
             fs.load_repo(repo_name)?;
         }
 
-        for (&repo_id, repo) in &fs.repos_list {
+        for (repo_id, repo) in fs.repos_list.clone() {
             let repo_ino = GitFs::repo_id_to_ino(repo_id);
             let live_ino = fs.get_live_ino(repo_ino);
             let repo_name = {
@@ -293,7 +294,7 @@ impl GitFs {
             // Read contents of live
             fs.read_dir_to_db(&live_path, &fs, InoFlag::InsideLive, live_ino)?;
         }
-        Ok(Arc::from(Mutex::new(fs)))
+        Ok(Arc::from(fs))
     }
 
     fn new_repo_connection(&mut self, repo_name: &str, tmpdir: &Path) -> anyhow::Result<u16> {
@@ -1506,7 +1507,7 @@ impl GitFs {
         repo_name: &str,
         repo_id: u16,
     ) -> anyhow::Result<()> {
-        if let Entry::Vacant(entry) = self.repos_list.entry(repo_id) {
+        if let dashmap::Entry::Vacant(entry) = self.repos_list.entry(repo_id) {
             entry.insert(repo.clone());
             self.repos_map.insert(repo_name.to_string(), repo_id);
             info!("Repo {repo_name} added with id {repo_id}");

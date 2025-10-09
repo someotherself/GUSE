@@ -91,19 +91,18 @@ pub fn mount_fuse(opts: MountPoint) -> anyhow::Result<()> {
     let notif = Arc::new(OnceLock::new());
     let fs = GitFsAdapter::new(repos_dir.clone(), opts.read_only, notif.clone())?;
 
-    let fs_arc = Arc::new(fs.clone());
+    // let fs = Arc::new(fs.clone());
+
+    let mut session = fuser::Session::new(fs.clone(), &mountpoint, &options)?;
+    let notifier = session.notifier();
+    let _ = notif.set(notifier);
 
     let socket_path = socket_path()?;
-
     start_control_server(
-        fs_arc.clone(),
+        fs.clone(),
         socket_path,
         mountpoint.to_string_lossy().into(),
     )?;
-
-    let mut session = fuser::Session::new(fs, mountpoint, &options)?;
-    let notifier = session.notifier();
-    let _ = notif.set(notifier);
 
     session.run()?;
     Ok(())
@@ -126,7 +125,7 @@ pub enum InvalMsg {
 
 #[derive(Clone)]
 pub struct GitFsAdapter {
-    inner: Arc<Mutex<GitFs>>,
+    inner: Arc<GitFs>,
 }
 
 impl GitFsAdapter {
@@ -139,7 +138,7 @@ impl GitFsAdapter {
         Ok(GitFsAdapter { inner: fs })
     }
 
-    pub fn getfs(&self) -> Arc<Mutex<GitFs>> {
+    pub fn getfs(&self) -> Arc<GitFs> {
         self.inner.clone()
     }
 }
@@ -163,14 +162,14 @@ impl fuser::Filesystem for GitFsAdapter {
     fn destroy(&mut self) {}
 
     fn lookup(&mut self, req: &fuser::Request<'_>, parent: u64, name: &OsStr, reply: ReplyEntry) {
-        let fs_arc = self.getfs();
-        let fs = match fs_arc.lock() {
-            Ok(fs) => fs,
-            Err(e) => {
-                error!(e = %e);
-                return reply.error(EIO);
-            }
-        };
+        let fs = self.getfs();
+        // let fs = match fs.lock() {
+        //     Ok(fs) => fs,
+        //     Err(e) => {
+        //         error!(e = %e);
+        //         return reply.error(EIO);
+        //     }
+        // };
         let attr_result = fs.getattr(parent);
         match attr_result {
             Ok(parent_attrs) => {
@@ -230,14 +229,14 @@ impl fuser::Filesystem for GitFsAdapter {
     }
 
     fn getattr(&mut self, _req: &fuser::Request<'_>, ino: u64, _fh: Option<u64>, reply: ReplyAttr) {
-        let fs_arc = self.getfs();
-        let fs = match fs_arc.lock() {
-            Ok(fs) => fs,
-            Err(e) => {
-                error!(e = %e, "Getting attribute for {}", ino);
-                return reply.error(EIO);
-            }
-        };
+        let fs = self.getfs();
+        // let fs = match fs.lock() {
+        //     Ok(fs) => fs,
+        //     Err(e) => {
+        //         error!(e = %e, "Getting attribute for {}", ino);
+        //         return reply.error(EIO);
+        //     }
+        // };
 
         match fs.getattr(ino) {
             Err(err) => {
@@ -278,14 +277,7 @@ impl fuser::Filesystem for GitFsAdapter {
         umask: u32,
         reply: ReplyEntry,
     ) {
-        let fs_arc = self.getfs();
-        let mut fs = match fs_arc.lock() {
-            Ok(fs) => fs,
-            Err(e) => {
-                error!(e = %e);
-                return reply.error(EIO);
-            }
-        };
+        let fs = self.getfs();
         match fs.mkdir(parent, name) {
             Ok(attr) => reply.entry(&TTL, &attr.into(), 0),
             Err(e) => {
@@ -302,14 +294,8 @@ impl fuser::Filesystem for GitFsAdapter {
         name: &OsStr,
         reply: fuser::ReplyEmpty,
     ) {
-        let fs_arc = self.getfs();
-        let fs = match fs_arc.lock() {
-            Ok(fs) => fs,
-            Err(e) => {
-                error!(e = %e);
-                return reply.error(EIO);
-            }
-        };
+        let fs = self.getfs();
+
         let res = fs.unlink(parent, name);
         match res {
             Ok(_) => reply.ok(),
@@ -327,14 +313,8 @@ impl fuser::Filesystem for GitFsAdapter {
         name: &OsStr,
         reply: fuser::ReplyEmpty,
     ) {
-        let fs_arc = self.getfs();
-        let fs = match fs_arc.lock() {
-            Ok(fs) => fs,
-            Err(e) => {
-                error!(e = %e);
-                return reply.error(EIO);
-            }
-        };
+        let fs = self.getfs();
+
         let res = fs.rmdir(parent, name);
         match res {
             Ok(_) => reply.ok(),
@@ -355,14 +335,8 @@ impl fuser::Filesystem for GitFsAdapter {
         flags: u32,
         reply: fuser::ReplyEmpty,
     ) {
-        let fs_arc = self.getfs();
-        let fs = match fs_arc.lock() {
-            Ok(fs) => fs,
-            Err(e) => {
-                error!(e = %e);
-                return reply.error(EIO);
-            }
-        };
+        let fs = self.getfs();
+
         let res = fs.rename(parent, name, newparent, newname);
         match res {
             Ok(_) => reply.ok(),
@@ -374,14 +348,8 @@ impl fuser::Filesystem for GitFsAdapter {
     }
 
     fn open(&mut self, req: &fuser::Request<'_>, ino: u64, flags: i32, reply: ReplyOpen) {
-        let fs_arc = self.getfs();
-        let fs = match fs_arc.lock() {
-            Ok(fs) => fs,
-            Err(e) => {
-                error!(e = %e);
-                return reply.error(EIO);
-            }
-        };
+        let fs = self.getfs();
+
         if ino == ROOT_INO {
             reply.error(EISDIR);
             return;
@@ -418,14 +386,8 @@ impl fuser::Filesystem for GitFsAdapter {
         offset: i64,
         mut reply: fuser::ReplyDirectory,
     ) {
-        let fs_arc = self.getfs();
-        let fs = match fs_arc.lock() {
-            Ok(fs) => fs,
-            Err(e) => {
-                error!(e = %e);
-                return reply.error(EIO);
-            }
-        };
+        let fs = self.getfs();
+
         let parent_ino = if ino == ROOT_INO {
             ROOT_INO
         } else {
@@ -564,14 +526,7 @@ impl fuser::Filesystem for GitFsAdapter {
         offset: i64,
         mut reply: fuser::ReplyDirectoryPlus,
     ) {
-        let fs_arc = self.getfs();
-        let fs: std::sync::MutexGuard<'_, GitFs> = match fs_arc.lock() {
-            Ok(fs) => fs,
-            Err(e) => {
-                error!(e = %e);
-                return reply.error(EIO);
-            }
-        };
+        let fs = self.getfs();
         let parent_entries: Vec<DirectoryEntry> = vec![
             DirectoryEntry {
                 ino: ROOT_INO,
@@ -664,14 +619,8 @@ impl fuser::Filesystem for GitFsAdapter {
         lock_owner: Option<u64>,
         reply: ReplyData,
     ) {
-        let fs_arc = self.getfs();
-        let fs = match fs_arc.lock() {
-            Ok(fs) => fs,
-            Err(e) => {
-                error!(e = %e);
-                return reply.error(EIO);
-            }
-        };
+        let fs = self.getfs();
+
         let mut buf = vec![0u8; size as usize];
         let res = fs.read(ino, offset as u64, &mut buf, fh);
         drop(fs);
@@ -696,14 +645,8 @@ impl fuser::Filesystem for GitFsAdapter {
         lock_owner: Option<u64>,
         reply: ReplyWrite,
     ) {
-        let fs_arc = self.getfs();
-        let fs = match fs_arc.lock() {
-            Ok(fs) => fs,
-            Err(e) => {
-                error!(e = %e);
-                return reply.error(EIO);
-            }
-        };
+        let fs = self.getfs();
+
         let res = fs.write(ino, offset as u64, data, fh);
         match res {
             Ok(size) => reply.written(size as u32),
@@ -747,14 +690,8 @@ impl fuser::Filesystem for GitFsAdapter {
         let handle = fh.unwrap_or(42059);
         let mode = mode.unwrap_or(42059);
         let flgs = flags.unwrap_or(42059);
-        let fs_arc = self.getfs();
-        let fs = match fs_arc.lock() {
-            Ok(fs) => fs,
-            Err(e) => {
-                error!(e = %e);
-                return reply.error(EIO);
-            }
-        };
+        let fs = self.getfs();
+
 
         let (atime_secs_opt, atime_nsecs_opt) = match atime {
             Some(TimeOrNow::Now) => {
@@ -825,15 +762,8 @@ impl fuser::Filesystem for GitFsAdapter {
         _flags: i32,
         reply: fuser::ReplyEmpty,
     ) {
-        let fs_arc = self.getfs();
-
-        let res = match fs_arc.lock() {
-            Ok(fs) => fs.release(fh),
-            Err(e) => {
-                error!(e = %e);
-                return reply.error(EIO);
-            }
-        };
+        let fs = self.getfs();
+        let res = fs.release(fh);
         match res {
             Ok(true) => reply.ok(),
             Ok(false) => reply.error(libc::EBADF),
@@ -851,15 +781,8 @@ impl fuser::Filesystem for GitFsAdapter {
         flush: bool,
         reply: fuser::ReplyEmpty,
     ) {
-        let fs_arc = self.getfs();
-
-        let res = match fs_arc.lock() {
-            Ok(fs) => fs.release(fh),
-            Err(e) => {
-                error!(e = %e);
-                return reply.error(EIO);
-            }
-        };
+        let fs = self.getfs();
+        let res = fs.release(fh);
         match res {
             Ok(true) => reply.ok(),
             Ok(false) => reply.error(libc::EBADF),
@@ -879,15 +802,7 @@ impl fuser::Filesystem for GitFsAdapter {
     }
 
     fn opendir(&mut self, _req: &fuser::Request<'_>, ino: u64, _flags: i32, reply: ReplyOpen) {
-        let fs_arc = self.getfs();
-        let fs = match fs_arc.lock() {
-            Ok(g) => g,
-            Err(e) => {
-                error!(e = %e);
-                return reply.error(libc::EIO);
-            }
-        };
-
+        let fs = self.getfs();
         let res = fs.opendir(ino);
         match res {
             Ok(fh) => reply.opened(fh, 0),
@@ -903,14 +818,8 @@ impl fuser::Filesystem for GitFsAdapter {
         newname: &OsStr,
         reply: ReplyEntry,
     ) {
-        let fs_arc = self.getfs();
-        let fs = match fs_arc.lock() {
-            Ok(fs) => fs,
-            Err(e) => {
-                error!(e = %e);
-                return reply.error(EIO);
-            }
-        };
+        let fs = self.getfs();
+
         let res = fs.link(ino, newparent, newname);
         match res {
             Ok(attr) => reply.entry(&TTL, &attr.into(), 0),
@@ -928,14 +837,8 @@ impl fuser::Filesystem for GitFsAdapter {
         flags: i32,
         reply: fuser::ReplyCreate,
     ) {
-        let fs_arc = self.getfs();
-        let fs = match fs_arc.lock() {
-            Ok(fs) => fs,
-            Err(e) => {
-                error!(e = %e);
-                return reply.error(EIO);
-            }
-        };
+        let fs = self.getfs();
+
         let (read, write) = match flags & libc::O_ACCMODE {
             libc::O_RDONLY => (true, false),
             libc::O_WRONLY => (false, true),
