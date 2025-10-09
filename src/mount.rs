@@ -98,11 +98,7 @@ pub fn mount_fuse(opts: MountPoint) -> anyhow::Result<()> {
     let _ = notif.set(notifier);
 
     let socket_path = socket_path()?;
-    start_control_server(
-        fs.clone(),
-        socket_path,
-        mountpoint.to_string_lossy().into(),
-    )?;
+    start_control_server(fs.clone(), socket_path, mountpoint.to_string_lossy().into())?;
 
     session.run()?;
     Ok(())
@@ -152,10 +148,15 @@ impl fuser::Filesystem for GitFsAdapter {
         let capabilities = consts::FUSE_WRITEBACK_CACHE
             | consts::FUSE_BIG_WRITES
             | consts::FUSE_PARALLEL_DIROPS
+            | consts::FUSE_ASYNC_READ
+            | consts::FUSE_EXPORT_SUPPORT
             | consts::FUSE_ATOMIC_O_TRUNC;
 
-        config.add_capabilities(capabilities).unwrap();
         config.set_max_readahead(128 * 1024).unwrap();
+        config.set_max_write(1024 * 1024).unwrap();
+        config.set_max_background(64).unwrap();
+        config.set_congestion_threshold(32).unwrap();
+        config.add_capabilities(capabilities).unwrap();
         Ok(())
     }
 
@@ -357,8 +358,19 @@ impl fuser::Filesystem for GitFsAdapter {
 
         let truncate = flags as u32 & libc::O_TRUNC as u32 != 0;
 
+        let open_flag = match fs.get_ino_flag_from_db(ino.into()) {
+            Ok(flag) if flag == InoFlag::InsideSnap => consts::FOPEN_KEEP_CACHE,
+            _ => {
+                if !write && !truncate {
+                    consts::FOPEN_KEEP_CACHE
+                } else {
+                    0
+                }
+            }
+        };
+
         match fs.open(ino, read, write, truncate) {
-            Ok(fh) => reply.opened(fh, 0),
+            Ok(fh) => reply.opened(fh, open_flag),
             Err(e) => reply.error(libc::ENOENT),
         }
     }
@@ -676,7 +688,6 @@ impl fuser::Filesystem for GitFsAdapter {
         let mode = mode.unwrap_or(42059);
         let flgs = flags.unwrap_or(42059);
         let fs = self.getfs();
-
 
         let (atime_secs_opt, atime_nsecs_opt) = match atime {
             Some(TimeOrNow::Now) => {

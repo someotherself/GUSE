@@ -1757,10 +1757,7 @@ impl GitFs {
     }
 
     fn next_repo_id(&self) -> u16 {
-        let max = self.repos_list
-            .iter()
-            .map(|e| *e.key())
-            .max();
+        let max = self.repos_list.iter().map(|e| *e.key()).max();
 
         match max {
             Some(i) => {
@@ -1772,7 +1769,7 @@ impl GitFs {
             }
             None => 1,
         }
-}
+    }
 
     pub fn get_dir_parent(&self, ino: u64) -> anyhow::Result<u64> {
         if !self.is_dir(ino.into())? {
