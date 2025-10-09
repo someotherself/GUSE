@@ -1,51 +1,33 @@
 use std::collections::HashMap;
 
-use crate::fs::fileattr::FileAttr;
-
-pub struct Entry {
-    pub value: FileAttr,
+pub struct Entry<V> {
+    pub value: V,
     pub next: Option<u64>,
     pub prev: Option<u64>,
 }
 
-impl Entry {
-    pub fn new(value: FileAttr) -> Self {
+impl<V> Entry<V> {
+    pub fn new(value: V) -> Self {
         Self {
             value,
             next: None,
             prev: None,
         }
     }
-
-    pub fn get(&self, _ino: u64) -> FileAttr {
-        todo!()
-    }
-
-    pub fn insert(&self, _attr: FileAttr) {
-        todo!()
-    }
-
-    pub fn peek(&self, _ino: u64) -> FileAttr {
-        todo!()
-    }
-
-    pub fn remove(&self, _ino: u64) -> FileAttr {
-        todo!()
-    }
 }
 
-pub struct Inner {
-    map: HashMap<u64, Entry>,
+pub struct Inner<V> {
+    map: HashMap<u64, Entry<V>>,
     head: Option<u64>,
     tail: Option<u64>,
     capacity: usize,
 }
 
-struct LruCache {
-    list: Inner,
+struct LruCache<V> {
+    list: Inner<V>,
 }
 
-impl Inner {
+impl<V> Inner<V> {
     pub fn new(capacity: usize) -> Self {
         Self {
             map: HashMap::new(),
@@ -54,4 +36,26 @@ impl Inner {
             capacity,
         }
     }
+
+    /// Lookup an entry and promote it to LRU
+    pub fn get(&self, _ino: u64) -> Option<&V> {
+        todo!()
+    }
+
+    /// Insert a new entry
+    pub fn insert(&self, _attr: V) -> Option<&V>{
+        todo!()
+    }
+
+    /// Lookup an entry without promotion
+    pub fn peek(&self, _ino: u64) -> Option<&V> {
+        todo!()
+    }
+
+    /// Remove an entry if it exists
+    pub fn remove(&self, _ino: u64) -> Option<&V> {
+        todo!()
+    }
+
+    fn unlink(&self, _ino: u64) {}
 }
