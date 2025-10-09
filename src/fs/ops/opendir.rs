@@ -22,8 +22,7 @@ pub fn opendir_root(fs: &GitFs, ino: NormalIno) -> anyhow::Result<u64> {
         read: false,
         write: false,
     };
-    let fh = fs.handles.open(handle)?;
-    Ok(fh)
+    fs.handles.open(handle)
 }
 
 pub fn opendir_repo(fs: &GitFs, ino: NormalIno) -> anyhow::Result<u64> {
@@ -44,8 +43,7 @@ pub fn opendir_repo(fs: &GitFs, ino: NormalIno) -> anyhow::Result<u64> {
         read: false,
         write: false,
     };
-    let fh = fs.handles.open(handle)?;
-    Ok(fh)
+    fs.handles.open(handle)
 }
 
 pub fn opendir_live(fs: &GitFs, ino: NormalIno) -> anyhow::Result<u64> {
@@ -88,6 +86,5 @@ pub fn opendir_git(fs: &GitFs, ino: NormalIno) -> anyhow::Result<u64> {
         read: false,
         write: false,
     };
-    let fh = fs.handles.open(handle)?;
-    Ok(fh)
+    fs.handles.open(handle)
 }
