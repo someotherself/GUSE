@@ -1,6 +1,5 @@
 use std::ffi::{OsStr, OsString};
 use std::fs::File;
-use std::ops::DerefMut;
 use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::{FileExt, MetadataExt};
 use std::path::Path;
@@ -125,9 +124,9 @@ pub struct GitFs {
     conn_list: DashMap<u16, Arc<MetaDb>>,
     /// Use helpers `self.insert_repo` and `self.delete_repo`
     /// <repo_name, repo_id>
-    repos_map: HashMap<String, u16>,
+    repos_map: DashMap<String, u16>,
     /// Each Repo has a set of inodes
-    next_inode: HashMap<u16, AtomicU64>,
+    next_inode: DashMap<u16, AtomicU64>,
     pub handles: FileHandles,
     read_only: bool,
     vfile_entry: RwLock<HashMap<VirtualIno, VFileEntry>>,
@@ -236,14 +235,14 @@ impl GitFs {
     ) -> anyhow::Result<Arc<Self>> {
         let (tx, rx) = crossbeam_channel::unbounded::<InvalMsg>();
 
-        let mut fs = Self {
+        let fs = Self {
             repos_dir,
             repos_list: DashMap::new(),
             conn_list: DashMap::new(),
-            repos_map: HashMap::new(),
+            repos_map: DashMap::new(),
             read_only,
             handles: FileHandles::default(),
-            next_inode: HashMap::new(),
+            next_inode: DashMap::new(),
             vfile_entry: RwLock::new(HashMap::new()),
             notifier: tx.clone(),
         };
@@ -297,7 +296,7 @@ impl GitFs {
         Ok(Arc::from(fs))
     }
 
-    fn new_repo_connection(&mut self, repo_name: &str, tmpdir: &Path) -> anyhow::Result<u16> {
+    fn new_repo_connection(&self, repo_name: &str, tmpdir: &Path) -> anyhow::Result<u16> {
         // Assign repo id
         let repo_id = self.next_repo_id();
         let repo_ino = (repo_id as u64) << REPO_SHIFT;
@@ -333,7 +332,7 @@ impl GitFs {
     }
 
     /// Loads the repo with empty database.
-    fn load_repo_connection(&mut self, repo_name: &str) -> anyhow::Result<u16> {
+    fn load_repo_connection(&self, repo_name: &str) -> anyhow::Result<u16> {
         let repo_path = self.repos_dir.join(repo_name);
 
         // Assign repo id
@@ -451,7 +450,7 @@ impl GitFs {
         Ok(())
     }
 
-    pub fn load_repo(&mut self, repo_name: &str) -> anyhow::Result<()> {
+    pub fn load_repo(&self, repo_name: &str) -> anyhow::Result<()> {
         let repo_id = self.load_repo_connection(repo_name)?;
 
         self.populate_repo_database(repo_id, repo_name)?;
@@ -490,7 +489,7 @@ impl GitFs {
     }
 
     pub fn new_repo(
-        &mut self,
+        &self,
         repo_name: &str,
         url: Option<&str>,
     ) -> anyhow::Result<Arc<Mutex<GitRepo>>> {
@@ -502,7 +501,7 @@ impl GitFs {
     }
 
     fn fetch_repo(
-        &mut self,
+        &self,
         repo_id: u16,
         repo_name: &str,
         tmp_path: &Path,
@@ -973,7 +972,7 @@ impl GitFs {
     // website.accoount.repo_name
     // example:github.tokio.tokio-rs.git -> https://github.com/tokio-rs/tokio.git
     #[instrument(level = "debug", skip(self), fields(parent = %parent), ret(level = Level::DEBUG), err(Display))]
-    pub fn mkdir(&mut self, parent: u64, os_name: &OsStr) -> anyhow::Result<FileAttr> {
+    pub fn mkdir(&self, parent: u64, os_name: &OsStr) -> anyhow::Result<FileAttr> {
         let parent: Inodes = parent.into();
         if self.read_only {
             bail!("Filesystem is in read only");
@@ -1502,7 +1501,7 @@ impl GitFs {
 // gitfs_helpers
 impl GitFs {
     pub fn insert_repo(
-        &mut self,
+        &self,
         repo: Arc<Mutex<GitRepo>>,
         repo_name: &str,
         repo_id: u16,
@@ -1517,9 +1516,9 @@ impl GitFs {
         Ok(())
     }
 
-    pub fn delete_repo(&mut self, repo_name: &str) -> anyhow::Result<()> {
+    pub fn delete_repo(&self, repo_name: &str) -> anyhow::Result<()> {
         if let Some(repo_id) = self.repos_map.get(repo_name) {
-            self.repos_list.remove(repo_id);
+            self.repos_list.remove(&repo_id);
         } else {
             bail!("Repo does not exist");
         }
@@ -1758,8 +1757,13 @@ impl GitFs {
     }
 
     fn next_repo_id(&self) -> u16 {
-        match self.repos_list.keys().next_back() {
-            Some(&i) => {
+        let max = self.repos_list
+            .iter()
+            .map(|e| *e.key())
+            .max();
+
+        match max {
+            Some(i) => {
                 let next = i
                     .checked_add(1)
                     .expect("Congrats. Repo ids have overflowed a u16.");
@@ -1768,7 +1772,7 @@ impl GitFs {
             }
             None => 1,
         }
-    }
+}
 
     pub fn get_dir_parent(&self, ino: u64) -> anyhow::Result<u64> {
         if !self.is_dir(ino.into())? {

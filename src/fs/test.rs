@@ -22,7 +22,6 @@ fn test_mkdir_fetch() -> anyhow::Result<()> {
         },
         |_| -> anyhow::Result<()> {
             let fs = get_fs();
-            let mut fs = fs.lock().map_err(|_| anyhow!("Lock poisoned"))?;
             // let name = OsStr::new("github.tokio-rs.mio.git");
             let name = OsStr::new("github.someotherself.git_rust.git");
             fs.mkdir(ROOT_INO, name)?;
@@ -155,7 +154,6 @@ fn test_mkdir_normal() -> anyhow::Result<()> {
         },
         |_| -> anyhow::Result<()> {
             let fs = get_fs();
-            let mut fs = fs.lock().map_err(|_| anyhow!("Lock posoned"))?;
 
             let name = OsStr::new("new_repo");
             fs.mkdir(ROOT_INO, name)?;
@@ -257,8 +255,7 @@ fn test_rename_live_same_parent_dir() -> anyhow::Result<()> {
             read_only: false,
         },
         |_| -> anyhow::Result<()> {
-            let fs_arc = get_fs();
-            let mut fs = fs_arc.lock().map_err(|_| anyhow!("Lock poisoned"))?;
+            let fs = get_fs();
 
             let name = OsStr::new("new_repo");
             fs.mkdir(ROOT_INO, name)?;
@@ -295,8 +292,7 @@ fn test_rename_live_across_parents() -> anyhow::Result<()> {
             read_only: false,
         },
         |_| -> anyhow::Result<()> {
-            let fs_arc = get_fs();
-            let mut fs = fs_arc.lock().map_err(|_| anyhow!("Lock poisoned"))?;
+            let fs = get_fs();
 
             let name = OsStr::new("new_repo");
             fs.mkdir(ROOT_INO, name)?;
@@ -334,8 +330,7 @@ fn test_rename_live_noop_same_name() -> anyhow::Result<()> {
             read_only: false,
         },
         |_| -> anyhow::Result<()> {
-            let fs_arc = get_fs();
-            let mut fs = fs_arc.lock().map_err(|_| anyhow!("Lock poisoned"))?;
+            let fs = get_fs();
 
             let name = OsStr::new("new_repo");
             fs.mkdir(ROOT_INO, name)?;
@@ -368,8 +363,7 @@ fn test_rename_live_overwrite_empty_dir() -> anyhow::Result<()> {
             read_only: false,
         },
         |_| -> anyhow::Result<()> {
-            let fs_arc = get_fs();
-            let mut fs = fs_arc.lock().map_err(|_| anyhow!("Lock poisoned"))?;
+            let fs = get_fs();
 
             let name = OsStr::new("new_repo");
             fs.mkdir(ROOT_INO, name)?;
@@ -408,8 +402,7 @@ fn test_rename_live_overwrite_nonempty_dir_fails() -> anyhow::Result<()> {
             read_only: false,
         },
         |_| -> anyhow::Result<()> {
-            let fs_arc = get_fs();
-            let mut fs = fs_arc.lock().map_err(|_| anyhow!("Lock poisoned"))?;
+            let fs = get_fs();
 
             let name = OsStr::new("new_repo");
             fs.mkdir(ROOT_INO, name)?;
@@ -448,8 +441,7 @@ fn test_rename_live_invalid_name_with_slash() -> anyhow::Result<()> {
             read_only: false,
         },
         |_| -> anyhow::Result<()> {
-            let fs_arc = get_fs();
-            let mut fs = fs_arc.lock().map_err(|_| anyhow!("Lock poisoned"))?;
+            let fs = get_fs();
 
             let name = OsStr::new("new_repo");
             fs.mkdir(ROOT_INO, name)?;
@@ -482,8 +474,7 @@ fn test_rename_live_source_missing() -> anyhow::Result<()> {
             read_only: false,
         },
         |_| -> anyhow::Result<()> {
-            let fs_arc = get_fs();
-            let mut fs = fs_arc.lock().map_err(|_| anyhow!("Lock poisoned"))?;
+            let fs = get_fs();
 
             let name = OsStr::new("new_repo");
             fs.mkdir(ROOT_INO, name)?;

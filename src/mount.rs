@@ -163,13 +163,6 @@ impl fuser::Filesystem for GitFsAdapter {
 
     fn lookup(&mut self, req: &fuser::Request<'_>, parent: u64, name: &OsStr, reply: ReplyEntry) {
         let fs = self.getfs();
-        // let fs = match fs.lock() {
-        //     Ok(fs) => fs,
-        //     Err(e) => {
-        //         error!(e = %e);
-        //         return reply.error(EIO);
-        //     }
-        // };
         let attr_result = fs.getattr(parent);
         match attr_result {
             Ok(parent_attrs) => {
@@ -230,14 +223,6 @@ impl fuser::Filesystem for GitFsAdapter {
 
     fn getattr(&mut self, _req: &fuser::Request<'_>, ino: u64, _fh: Option<u64>, reply: ReplyAttr) {
         let fs = self.getfs();
-        // let fs = match fs.lock() {
-        //     Ok(fs) => fs,
-        //     Err(e) => {
-        //         error!(e = %e, "Getting attribute for {}", ino);
-        //         return reply.error(EIO);
-        //     }
-        // };
-
         match fs.getattr(ino) {
             Err(err) => {
                 error!("getattr({}) failed: {:?}", ino, err);

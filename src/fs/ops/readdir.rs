@@ -82,7 +82,7 @@ pub enum DirCase {
 
 pub fn readdir_root_dir(fs: &GitFs) -> anyhow::Result<Vec<DirectoryEntry>> {
     let mut entries: Vec<DirectoryEntry> = vec![];
-    for repo in fs.repos_list.values() {
+    for repo in fs.repos_list.iter().map(|e|e.value().clone()) {
         let (repo_dir, repo_ino) = {
             let repo = repo.lock().map_err(|_| anyhow!("Lock poisoned"))?;
             (repo.repo_dir.clone(), GitFs::repo_id_to_ino(repo.repo_id))

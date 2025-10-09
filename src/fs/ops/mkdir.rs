@@ -11,7 +11,7 @@ use crate::inodes::NormalIno;
 use crate::mount::InvalMsg;
 
 pub fn mkdir_root(
-    fs: &mut GitFs,
+    fs: &GitFs,
     _parent: u64,
     name: &str,
     _create_attr: CreateFileAttr,

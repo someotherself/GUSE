@@ -14,7 +14,7 @@ use crate::{
 
 pub fn lookup_root(fs: &GitFs, name: &OsStr) -> anyhow::Result<Option<FileAttr>> {
     // Handle a look-up for url -> github.tokio-rs.tokio.git
-    let attr = fs.repos_list.values().find_map(|repo| {
+    let attr = fs.repos_list.iter().find_map(|repo| {
         let (repo_name, repo_id) = {
             let repo = repo.lock().map_err(|_| anyhow!("Lock poisoned")).ok()?;
             (OsString::from(repo.repo_dir.clone()), repo.repo_id)

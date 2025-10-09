@@ -5,7 +5,6 @@ use std::{
         net::{UnixListener, UnixStream},
     },
     path::{Path, PathBuf},
-    sync::Arc,
     thread,
 };
 
