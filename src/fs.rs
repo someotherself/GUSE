@@ -291,8 +291,7 @@ impl GitFs {
             let live_path = fs.repos_dir.join(repo_name).join(LIVE_FOLDER);
 
             // Read contents of live
-            let nodes = fs.read_dir_to_db(&live_path, InoFlag::InsideLive, live_ino)?;
-            fs.write_inodes_to_db(nodes)?;
+            fs.read_dir_to_db(&live_path, &fs, InoFlag::InsideLive, live_ino)?;
         }
         Ok(Arc::from(Mutex::new(fs)))
     }
@@ -461,34 +460,32 @@ impl GitFs {
     fn read_dir_to_db(
         &self,
         path: &Path,
+        fs: &GitFs,
         ino_flag: InoFlag,
         parent_ino: u64,
-    ) -> anyhow::Result<Vec<StorageNode>> {
-        let mut nodes: Vec<StorageNode> = vec![];
-        for entry in path.read_dir()? {
-            let entry = entry?;
-            if entry.file_type()?.is_dir() {
+    ) -> anyhow::Result<()> {
+        let mut stack: Vec<(PathBuf, u64)> = vec![(path.into(), parent_ino)];
+        while let Some((cur_path, cur_parent)) = stack.pop() {
+            let mut nodes: Vec<StorageNode> = vec![];
+            for entry in cur_path.read_dir()? {
+                let entry = entry?;
+                let mut attr = self.refresh_medata_using_path(entry.path(), ino_flag)?;
                 let ino = self.next_inode_checked(parent_ino)?;
-                let mut attr: FileAttr = dir_attr(ino_flag).into();
+
+                if entry.file_type()?.is_dir() {
+                    stack.push((entry.path(), ino));
+                }
+
                 attr.ino = ino;
                 nodes.push(StorageNode {
-                    parent_ino,
-                    name: entry.file_name(),
-                    attr: attr.into(),
-                });
-                nodes.extend(self.read_dir_to_db(&entry.path(), ino_flag, ino)?);
-            } else {
-                let ino = self.next_inode_checked(parent_ino)?;
-                let mut attr: FileAttr = file_attr(ino_flag).into();
-                attr.ino = ino;
-                nodes.push(StorageNode {
-                    parent_ino,
+                    parent_ino: cur_parent,
                     name: entry.file_name(),
                     attr: attr.into(),
                 });
             }
+            fs.write_inodes_to_db(nodes)?;
         }
-        Ok(nodes)
+        Ok(())
     }
 
     pub fn new_repo(

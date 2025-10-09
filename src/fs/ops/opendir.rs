@@ -27,7 +27,7 @@ pub fn opendir_root(fs: &GitFs, ino: NormalIno) -> anyhow::Result<u64> {
 }
 
 pub fn opendir_repo(fs: &GitFs, ino: NormalIno) -> anyhow::Result<u64> {
-    if fs.getattr(ino.into()).is_err() {
+    if !fs.inode_exists(ino.into())? {
         bail!(std::io::Error::from_raw_os_error(libc::ENOENT))
     };
     let iter = DirectoryStreamCookie {
@@ -49,7 +49,7 @@ pub fn opendir_repo(fs: &GitFs, ino: NormalIno) -> anyhow::Result<u64> {
 }
 
 pub fn opendir_live(fs: &GitFs, ino: NormalIno) -> anyhow::Result<u64> {
-    if fs.getattr(ino.into()).is_err() {
+    if !fs.inode_exists(ino.into())? {
         bail!(std::io::Error::from_raw_os_error(libc::ENOENT))
     };
     let iter = DirectoryStreamCookie {
@@ -71,7 +71,7 @@ pub fn opendir_live(fs: &GitFs, ino: NormalIno) -> anyhow::Result<u64> {
 }
 
 pub fn opendir_git(fs: &GitFs, ino: NormalIno) -> anyhow::Result<u64> {
-    if fs.getattr(ino.into()).is_err() {
+    if !fs.inode_exists(ino.into())? {
         bail!(std::io::Error::from_raw_os_error(libc::ENOENT))
     };
     let iter = DirectoryStreamCookie {

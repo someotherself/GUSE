@@ -220,9 +220,9 @@ pub enum InoFlag {
     InsideBuild = 1 << 7,
     InsideLive = 1 << 8,
     VirtualFile = 1 << 9,
-    // .git folder recreated in each Snap folder
     DotGitRoot = 1 << 10,
     InsideDotGit = 1 << 11,
+    HeadFile = 1 << 12,
 }
 impl InoFlag {
     pub const fn as_str(&self) -> &'static str {
@@ -239,6 +239,7 @@ impl InoFlag {
             InoFlag::VirtualFile => "VirtualFile",
             InoFlag::DotGitRoot => "DotGitRoot",
             InoFlag::InsideDotGit => "InsideDotGit",
+            InoFlag::HeadFile => "HeadFile",
         }
     }
 }
@@ -261,6 +262,9 @@ impl TryFrom<u64> for InoFlag {
             x if x == InoFlag::InsideSnap as u64 => Ok(InoFlag::InsideSnap),
             x if x == InoFlag::InsideBuild as u64 => Ok(InoFlag::InsideBuild),
             x if x == InoFlag::InsideLive as u64 => Ok(InoFlag::InsideLive),
+            x if x == InoFlag::DotGitRoot as u64 => Ok(InoFlag::DotGitRoot),
+            x if x == InoFlag::InsideDotGit as u64 => Ok(InoFlag::InsideDotGit),
+            x if x == InoFlag::HeadFile as u64 => Ok(InoFlag::HeadFile),
             _ => bail!("Unknown InoFlag valueL {v:#x}"),
         }
     }
