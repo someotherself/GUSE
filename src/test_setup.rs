@@ -16,7 +16,7 @@ pub struct TestSetup {
 }
 
 pub struct SetupResult {
-    pub fs: Option<Arc<Mutex<GitFs>>>,
+    pub fs: Option<Arc<GitFs>>,
     _tmpdir: TempDir,
     setup: TestSetup,
 }
@@ -60,7 +60,7 @@ where
     Ok(())
 }
 
-pub fn get_fs() -> Arc<Mutex<GitFs>> {
+pub fn get_fs() -> Arc<GitFs> {
     let fs = SETUP_RESULT.get_or(|| Mutex::new(None));
     let mut fs = fs.lock().unwrap();
     fs.as_mut().unwrap().fs.clone().unwrap()

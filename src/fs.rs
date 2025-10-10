@@ -119,14 +119,14 @@ pub struct GitFs {
     pub repos_dir: PathBuf,
     /// Use helpers `self.insert_repo` and `self.delete_repo`
     /// <repo_id, repo>
-    repos_list: BTreeMap<u16, Arc<Mutex<GitRepo>>>,
+    repos_list: DashMap<u16, Arc<Mutex<GitRepo>>>,
     /// <repo_id, connections>
     conn_list: DashMap<u16, Arc<MetaDb>>,
     /// Use helpers `self.insert_repo` and `self.delete_repo`
     /// <repo_name, repo_id>
-    repos_map: HashMap<String, u16>,
+    repos_map: DashMap<String, u16>,
     /// Each Repo has a set of inodes
-    next_inode: HashMap<u16, AtomicU64>,
+    next_inode: DashMap<u16, AtomicU64>,
     pub handles: FileHandles,
     read_only: bool,
     vfile_entry: RwLock<HashMap<VirtualIno, VFileEntry>>,
@@ -232,17 +232,17 @@ impl GitFs {
         repos_dir: PathBuf,
         read_only: bool,
         notifier: Arc<OnceLock<fuser::Notifier>>,
-    ) -> anyhow::Result<Arc<Mutex<Self>>> {
+    ) -> anyhow::Result<Arc<Self>> {
         let (tx, rx) = crossbeam_channel::unbounded::<InvalMsg>();
 
-        let mut fs = Self {
+        let fs = Self {
             repos_dir,
-            repos_list: BTreeMap::new(),
+            repos_list: DashMap::new(),
             conn_list: DashMap::new(),
-            repos_map: HashMap::new(),
+            repos_map: DashMap::new(),
             read_only,
             handles: FileHandles::default(),
-            next_inode: HashMap::new(),
+            next_inode: DashMap::new(),
             vfile_entry: RwLock::new(HashMap::new()),
             notifier: tx.clone(),
         };
@@ -281,7 +281,7 @@ impl GitFs {
             fs.load_repo(repo_name)?;
         }
 
-        for (&repo_id, repo) in &fs.repos_list {
+        for (repo_id, repo) in fs.repos_list.clone() {
             let repo_ino = GitFs::repo_id_to_ino(repo_id);
             let live_ino = fs.get_live_ino(repo_ino);
             let repo_name = {
@@ -293,10 +293,10 @@ impl GitFs {
             // Read contents of live
             fs.read_dir_to_db(&live_path, &fs, InoFlag::InsideLive, live_ino)?;
         }
-        Ok(Arc::from(Mutex::new(fs)))
+        Ok(Arc::from(fs))
     }
 
-    fn new_repo_connection(&mut self, repo_name: &str, tmpdir: &Path) -> anyhow::Result<u16> {
+    fn new_repo_connection(&self, repo_name: &str, tmpdir: &Path) -> anyhow::Result<u16> {
         // Assign repo id
         let repo_id = self.next_repo_id();
         let repo_ino = (repo_id as u64) << REPO_SHIFT;
@@ -332,7 +332,7 @@ impl GitFs {
     }
 
     /// Loads the repo with empty database.
-    fn load_repo_connection(&mut self, repo_name: &str) -> anyhow::Result<u16> {
+    fn load_repo_connection(&self, repo_name: &str) -> anyhow::Result<u16> {
         let repo_path = self.repos_dir.join(repo_name);
 
         // Assign repo id
@@ -450,7 +450,7 @@ impl GitFs {
         Ok(())
     }
 
-    pub fn load_repo(&mut self, repo_name: &str) -> anyhow::Result<()> {
+    pub fn load_repo(&self, repo_name: &str) -> anyhow::Result<()> {
         let repo_id = self.load_repo_connection(repo_name)?;
 
         self.populate_repo_database(repo_id, repo_name)?;
@@ -489,7 +489,7 @@ impl GitFs {
     }
 
     pub fn new_repo(
-        &mut self,
+        &self,
         repo_name: &str,
         url: Option<&str>,
     ) -> anyhow::Result<Arc<Mutex<GitRepo>>> {
@@ -501,7 +501,7 @@ impl GitFs {
     }
 
     fn fetch_repo(
-        &mut self,
+        &self,
         repo_id: u16,
         repo_name: &str,
         tmp_path: &Path,
@@ -972,7 +972,7 @@ impl GitFs {
     // website.accoount.repo_name
     // example:github.tokio.tokio-rs.git -> https://github.com/tokio-rs/tokio.git
     #[instrument(level = "debug", skip(self), fields(parent = %parent), ret(level = Level::DEBUG), err(Display))]
-    pub fn mkdir(&mut self, parent: u64, os_name: &OsStr) -> anyhow::Result<FileAttr> {
+    pub fn mkdir(&self, parent: u64, os_name: &OsStr) -> anyhow::Result<FileAttr> {
         let parent: Inodes = parent.into();
         if self.read_only {
             bail!("Filesystem is in read only");
@@ -1501,12 +1501,12 @@ impl GitFs {
 // gitfs_helpers
 impl GitFs {
     pub fn insert_repo(
-        &mut self,
+        &self,
         repo: Arc<Mutex<GitRepo>>,
         repo_name: &str,
         repo_id: u16,
     ) -> anyhow::Result<()> {
-        if let Entry::Vacant(entry) = self.repos_list.entry(repo_id) {
+        if let dashmap::Entry::Vacant(entry) = self.repos_list.entry(repo_id) {
             entry.insert(repo.clone());
             self.repos_map.insert(repo_name.to_string(), repo_id);
             info!("Repo {repo_name} added with id {repo_id}");
@@ -1516,9 +1516,9 @@ impl GitFs {
         Ok(())
     }
 
-    pub fn delete_repo(&mut self, repo_name: &str) -> anyhow::Result<()> {
+    pub fn delete_repo(&self, repo_name: &str) -> anyhow::Result<()> {
         if let Some(repo_id) = self.repos_map.get(repo_name) {
-            self.repos_list.remove(repo_id);
+            self.repos_list.remove(&repo_id);
         } else {
             bail!("Repo does not exist");
         }
@@ -1757,8 +1757,10 @@ impl GitFs {
     }
 
     fn next_repo_id(&self) -> u16 {
-        match self.repos_list.keys().next_back() {
-            Some(&i) => {
+        let max = self.repos_list.iter().map(|e| *e.key()).max();
+
+        match max {
+            Some(i) => {
                 let next = i
                     .checked_add(1)
                     .expect("Congrats. Repo ids have overflowed a u16.");

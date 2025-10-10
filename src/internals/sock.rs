@@ -5,7 +5,6 @@ use std::{
         net::{UnixListener, UnixStream},
     },
     path::{Path, PathBuf},
-    sync::Arc,
     thread,
 };
 
@@ -42,7 +41,7 @@ pub enum ControlRes {
 }
 
 pub fn start_control_server(
-    fs: Arc<GitFsAdapter>,
+    fs: GitFsAdapter,
     socket_path: PathBuf,
     mountpoint: String,
 ) -> anyhow::Result<()> {
@@ -70,7 +69,7 @@ pub fn start_control_server(
 #[instrument(level = "debug", skip(inner), ret(level = Level::DEBUG), err(Display))]
 #[allow(unused_variables)]
 fn handle_client(
-    inner: Arc<GitFsAdapter>,
+    inner: GitFsAdapter,
     mut stream: UnixStream,
     mount_point: String,
 ) -> anyhow::Result<()> {
@@ -83,7 +82,6 @@ fn handle_client(
             ControlReq::RepoDelete { name } => {
                 // TODO. Make a 2 step process, with confirmation.
                 let fs = inner.getfs();
-                let mut fs = fs.lock().map_err(|_| anyhow!("Lock poisoned"))?;
                 let Ok(_) = fs.delete_repo(&name) else {
                     return Ok(ControlRes::Ok);
                 };
