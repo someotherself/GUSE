@@ -142,7 +142,7 @@ impl<V: Copy> Inner<V> {
                 if let Some(prev) = self.map.get_mut(&p) {
                     prev.next = None;
                 };
-                self.tail = None;
+                self.tail = Some(p);
             }
             None => {
                 // List is not empty
@@ -153,6 +153,11 @@ impl<V: Copy> Inner<V> {
 
         let evicted = self.map.remove(&tail_key)?;
         Some((tail_key, evicted.value))
+    }
+
+    fn peek(&self, ino: u64) -> Option<V> {
+        let entry = self.map.get(&ino)?;
+        Some(entry.value)
     }
 }
 
@@ -182,17 +187,65 @@ impl<V: Copy> LruCache<V> {
     }
 
     /// Insert a new entry
-    pub fn insert(&self, _attr: V) -> Option<V> {
-        todo!()
+    pub fn insert(&self, ino: u64, entry: V) -> Option<V> {
+        let mut guard = self.list.lock().unwrap();
+        {
+            while guard.map.len() >= guard.capacity {
+                guard.evict()?;
+            }
+        }
+        guard.insert_front(ino, entry);
+        guard.peek(ino)
     }
 
     /// Lookup an entry without promotion
-    pub fn peek(&self, _ino: u64) -> Option<V> {
-        todo!()
+    pub fn peek(&self, ino: u64) -> Option<V> {
+        let guard = self.list.lock().unwrap();
+        guard.peek(ino)
     }
 
     /// Remove an entry if it exists
     pub fn remove(&self, _ino: u64) -> Option<V> {
         todo!()
+    }
+}
+
+mod test {
+    #[allow(unused_imports)]
+    use super::*;
+    #[allow(unused_imports)]
+    use crate::fs::fileattr::{FileAttr, dir_attr};
+
+    #[test]
+    fn test_lru_cache_insert() {
+        let lru: LruCache<FileAttr> = LruCache::new(3);
+        let attr: FileAttr = dir_attr(crate::fs::fileattr::InoFlag::LiveRoot).into();
+
+        lru.insert(1, attr);
+        assert!(lru.peek(1).is_some());
+
+        lru.insert(2, attr);
+        assert!(lru.peek(1).is_some());
+        assert!(lru.peek(2).is_some());
+
+        lru.insert(3, attr);
+        assert!(lru.peek(1).is_some());
+        assert!(lru.peek(2).is_some());
+        assert!(lru.peek(3).is_some());
+
+        lru.insert(4, attr);
+        assert!(lru.peek(1).is_none());
+
+        lru.insert(5, attr);
+        assert!(lru.peek(2).is_none());
+
+        lru.insert(6, attr);
+        assert!(lru.peek(3).is_none());
+
+        lru.get(4);
+
+        lru.insert(7, attr);
+        assert!(lru.peek(4).is_some());
+        assert!(lru.peek(5).is_none());
     }
 }
