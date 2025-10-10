@@ -278,7 +278,6 @@ fn build_dot_git_path(fs: &GitFs, target_ino: NormalIno) -> anyhow::Result<PathB
 fn read_inside_dot_git(
     fs: &GitFs,
     parent_ino: NormalIno,
-    _ino_flag: InoFlag,
 ) -> anyhow::Result<Vec<DirectoryEntry>> {
     let mut entries: Vec<DirectoryEntry> = vec![];
     let mut nodes: Vec<StorageNode> = vec![];
