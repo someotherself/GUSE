@@ -429,7 +429,7 @@ pub fn readdir_git_dir(fs: &GitFs, parent: NormalIno) -> anyhow::Result<Vec<Dire
             // InoFlag::BuildRoot - only happens when accessing the build folder from RepoRoot
             read_build_dir(fs, parent)?
         }
-        InoFlag::DotGitRoot | InoFlag::InsideDotGit => read_inside_dot_git(fs, parent, ino_flag)?,
+        InoFlag::DotGitRoot | InoFlag::InsideDotGit => read_inside_dot_git(fs, parent)?,
         _ => {
             tracing::error!("WRONG BRANCH");
             bail!("Wrong ino_flag")
