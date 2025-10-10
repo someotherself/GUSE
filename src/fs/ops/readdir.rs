@@ -275,10 +275,7 @@ fn build_dot_git_path(fs: &GitFs, target_ino: NormalIno) -> anyhow::Result<PathB
     Ok(dot_git_path.join(out.iter().collect::<PathBuf>()))
 }
 
-fn read_inside_dot_git(
-    fs: &GitFs,
-    parent_ino: NormalIno,
-) -> anyhow::Result<Vec<DirectoryEntry>> {
+fn read_inside_dot_git(fs: &GitFs, parent_ino: NormalIno) -> anyhow::Result<Vec<DirectoryEntry>> {
     let mut entries: Vec<DirectoryEntry> = vec![];
     let mut nodes: Vec<StorageNode> = vec![];
 
@@ -429,7 +426,7 @@ pub fn readdir_git_dir(fs: &GitFs, parent: NormalIno) -> anyhow::Result<Vec<Dire
             // InoFlag::BuildRoot - only happens when accessing the build folder from RepoRoot
             read_build_dir(fs, parent)?
         }
-        InoFlag::DotGitRoot | InoFlag::InsideDotGit => read_inside_dot_git(fs, parent, ino_flag)?,
+        InoFlag::DotGitRoot | InoFlag::InsideDotGit => read_inside_dot_git(fs, parent)?,
         _ => {
             tracing::error!("WRONG BRANCH");
             bail!("Wrong ino_flag")
