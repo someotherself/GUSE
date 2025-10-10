@@ -194,6 +194,18 @@ impl<V: Copy> LruCache<V> {
         guard.map.get(&ino).map(|e| e.value)
     }
 
+    pub fn with_get_mut<R>(&mut self, ino: u64, f: impl FnOnce(&mut V) -> R) -> Option<R> {
+        let mut guard = self.list.lock().unwrap();
+        let existed = guard.map.contains_key(&ino);
+        if !existed {
+            return None;
+        }
+        guard.unlink(ino);
+        guard.push_front_unckecked(ino);
+        let node = guard.map.get_mut(&ino).expect("present after promote");
+        Some(f(&mut node.value))
+    }
+
     /// Lookup an entry and promote it to MRU
     pub fn get_with_mut(&self, _ino: u64) -> Option<V> {
         todo!()
