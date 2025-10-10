@@ -194,21 +194,15 @@ impl<V: Copy> LruCache<V> {
         guard.map.get(&ino).map(|e| e.value)
     }
 
-    pub fn with_get_mut<R>(&mut self, ino: u64, f: impl FnOnce(&mut V) -> R) -> Option<R> {
+    pub fn with_get_mut<R>(&self, ino: u64, f: impl FnOnce(&mut V) -> R) -> Option<R> {
         let mut guard = self.list.lock().unwrap();
-        let existed = guard.map.contains_key(&ino);
-        if !existed {
+        if !guard.map.contains_key(&ino) {
             return None;
         }
         guard.unlink(ino);
         guard.push_front_unckecked(ino);
         let node = guard.map.get_mut(&ino).expect("present after promote");
         Some(f(&mut node.value))
-    }
-
-    /// Lookup an entry and promote it to MRU
-    pub fn get_with_mut(&self, _ino: u64) -> Option<V> {
-        todo!()
     }
 
     /// Insert a new entry
@@ -413,5 +407,123 @@ mod test {
         assert!(lru.peek(2).is_some());
         assert!(lru.peek(3).is_some());
         assert!(lru.peek(4).is_some());
+    }
+
+    #[test]
+    fn test_lru_with_get_mut_updates_value_and_promotes() {
+        let lru = LruCache::new(2);
+
+        lru.insert(1, 10);
+        lru.insert(2, 20);
+
+        let out = lru.with_get_mut(1, |v| {
+            *v += 5;
+            *v
+        });
+        assert_eq!(out, Some(15));
+        assert_eq!(lru.peek(1), Some(15));
+
+        lru.insert(3, 30);
+        assert_eq!(lru.peek(2), None);
+        assert_eq!(lru.peek(1), Some(15));
+        assert_eq!(lru.peek(3), Some(30));
+    }
+
+    #[test]
+    fn test_lru_with_get_mut_miss_returns_none_and_does_not_insert() {
+        let lru = LruCache::new(2);
+
+        lru.insert(1, 1);
+        lru.insert(2, 2);
+
+        let called = lru.with_get_mut(999, |v| {
+            *v += 1;
+            *v
+        });
+        assert_eq!(called, None);
+        assert_eq!(lru.peek(999), None);
+
+        assert_eq!(lru.peek(1), Some(1));
+        assert_eq!(lru.peek(2), Some(2));
+    }
+
+    #[test]
+    fn test_lru_with_get_mut_is_idempotent_for_head() {
+        let lru = LruCache::new(2);
+
+        lru.insert(1, 100);
+        lru.insert(2, 200);
+
+        let r1 = lru.with_get_mut(2, |v| {
+            *v += 1;
+            *v
+        });
+        let r2 = lru.with_get_mut(2, |v| {
+            *v += 1;
+            *v
+        });
+        assert_eq!(r1, Some(201));
+        assert_eq!(r2, Some(202));
+        assert_eq!(lru.peek(2), Some(202));
+
+        lru.insert(3, 300);
+        assert_eq!(lru.peek(1), None);
+        assert_eq!(lru.peek(2), Some(202));
+        assert_eq!(lru.peek(3), Some(300));
+    }
+
+    #[test]
+    fn test_lru_with_get_mut_return_value_is_bubbled_up() {
+        let lru = LruCache::new(3);
+        lru.insert(42, 7);
+
+        let ret = lru.with_get_mut(42, |v| {
+            *v *= 3;
+            *v % 10
+        });
+
+        assert_eq!(ret, Some(1)); // (7*3)=21; 21 % 10 = 1
+        assert_eq!(lru.peek(42), Some(21));
+    }
+
+    #[test]
+    fn with_get_mut_on_tail_promotes_to_head_then_eviction_spares_it() {
+        let lru = LruCache::new(3);
+        lru.insert(1, 11);
+        lru.insert(2, 22);
+        lru.insert(3, 33);
+
+        assert_eq!(
+            lru.with_get_mut(1, |v| {
+                *v += 1;
+                *v
+            }),
+            Some(12)
+        );
+        assert_eq!(lru.peek(1), Some(12));
+
+        lru.insert(4, 44);
+        assert_eq!(lru.peek(2), None);
+        assert_eq!(lru.peek(1), Some(12));
+        assert_eq!(lru.peek(3), Some(33));
+        assert_eq!(lru.peek(4), Some(44));
+
+        lru.insert(5, 55);
+        assert_eq!(lru.peek(3), None);
+        assert_eq!(lru.peek(1), Some(12));
+        assert_eq!(lru.peek(4), Some(44));
+        assert_eq!(lru.peek(5), Some(55));
+    }
+
+    #[test]
+    fn test_lru_change_size_in_attr() {
+        let lru: LruCache<FileAttr> = LruCache::new(3);
+        let mut attr: FileAttr = dir_attr(crate::fs::fileattr::InoFlag::LiveRoot).into();
+        attr.size = 10;
+
+        lru.insert(1, attr);
+        lru.with_get_mut(1, |a| a.size = 12);
+        let attr = lru.get(1).unwrap();
+        assert_eq!(attr.size, 12);
     }
 }
