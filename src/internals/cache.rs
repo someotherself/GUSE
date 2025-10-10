@@ -1,4 +1,4 @@
-use std::{collections::HashMap, sync::Mutex};
+use std::{collections::{hash_map, HashMap}, sync::Mutex};
 
 struct Entry<V: Copy> {
     pub value: V,
@@ -205,8 +205,17 @@ impl<V: Copy> LruCache<V> {
     }
 
     /// Remove an entry if it exists
-    pub fn remove(&self, _ino: u64) -> Option<V> {
-        todo!()
+    pub fn remove(&self, ino: u64) -> Option<V> {
+        let mut guard = self.list.lock().unwrap();
+        match guard.map.entry(ino) {
+            hash_map::Entry::Occupied(_) => {
+                guard.unlink(ino);
+                guard.map.remove(&ino).map(|e| e.value)
+            }
+            hash_map::Entry::Vacant(_) => {
+                None
+            }
+        }
     }
 }
 
