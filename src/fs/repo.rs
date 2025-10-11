@@ -70,7 +70,6 @@ impl GitRepo {
         f(&guard)
     }
 
-    #[inline]
     pub fn with_repo_mut<R>(&self, f: impl FnOnce(&mut Repository) -> R) -> R {
         let mut guard = self.inner.lock();
         f(&mut guard)
@@ -120,7 +119,7 @@ impl GitRepo {
     pub fn months_from_cache(&self, use_offset: bool) -> BTreeMap<String, Vec<git2::Oid>> {
         let mut buckets: BTreeMap<String, Vec<git2::Oid>> = BTreeMap::new();
 
-        self.with_state_mut(|s| {
+        self.with_state(|s| {
             for (&secs, oids) in s.snapshots.iter() {
                 let adj = if use_offset {
                     let t = self.with_repo(|r| {
@@ -148,13 +147,12 @@ impl GitRepo {
     pub fn month_folders(&self) -> anyhow::Result<Vec<ObjectAttr>> {
         let mut out = Vec::new();
 
-        self.with_state_mut(|s| {
+        self.with_state(|s| {
             for secs in s.snapshots.keys() {
                 let dt = chrono::DateTime::from_timestamp(*secs, 0)
                     .unwrap_or_else(|| chrono::DateTime::from_timestamp(0, 0).unwrap());
                 let folder_name = OsString::from(format!("{:04}-{:02}", dt.year(), dt.month()));
 
-                // No duplicates
                 if out.iter().any(|attr: &ObjectAttr| attr.name == folder_name) {
                     continue;
                 }
@@ -187,7 +185,7 @@ impl GitRepo {
         let mut out: Vec<ObjectAttr> = Vec::new();
         let mut commit_num = 0;
 
-        self.with_state_mut(|s| {
+        self.with_state(|s| {
             for (&secs_utc, oids) in &s.snapshots {
                 for commit_oid in oids {
                     let dt = DateTime::from_timestamp(secs_utc, 0)

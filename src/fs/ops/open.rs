@@ -219,7 +219,7 @@ pub fn open_vdir(
 ) -> anyhow::Result<u64> {
     let name = fs.get_name_from_db(ino.into())?;
     let repo = fs.get_repo(ino.into())?;
-    let v_node_opt = repo.with_state_mut(|s| s.vdir_cache.get(&parent).cloned());
+    let v_node_opt = repo.with_state(|s| s.vdir_cache.get(&parent).cloned());
     let Some(v_node) = v_node_opt else {
         bail!("File not found!")
     };

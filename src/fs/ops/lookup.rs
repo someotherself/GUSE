@@ -97,7 +97,7 @@ pub fn lookup_vdir(
     name: &OsStr,
 ) -> anyhow::Result<Option<FileAttr>> {
     let repo = fs.get_repo(u64::from(parent))?;
-    let v_node_opt = repo.with_state_mut(|s| s.vdir_cache.get(&parent).cloned());
+    let v_node_opt = repo.with_state(|s| s.vdir_cache.get(&parent).cloned());
     let Some(v_node) = v_node_opt else {
         return Ok(None);
     };

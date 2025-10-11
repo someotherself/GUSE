@@ -1405,7 +1405,7 @@ impl GitFs {
 
         // Check if the entry is alread saved in vdir_cache
         {
-            let cached = repo.with_state_mut(|s| s.vdir_cache.get(&ino.to_virt()).cloned());
+            let cached = repo.with_state(|s| s.vdir_cache.get(&ino.to_virt()).cloned());
 
             if let Some(entry) = cached {
                 new_attr.ino = entry.ino;
