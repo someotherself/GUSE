@@ -1,6 +1,6 @@
 use std::ffi::{OsStr, OsString};
 
-use anyhow::{anyhow, bail};
+use anyhow::bail;
 
 use crate::{fs::GitFs, inodes::NormalIno, mount::InvalMsg};
 
@@ -35,7 +35,6 @@ pub fn rmdir_git(fs: &GitFs, parent: NormalIno, name: &OsStr) -> anyhow::Result<
         let parent_oid = fs.parent_commit_build_session(parent)?;
         let build_root = fs.get_path_to_build_folder(parent)?;
         let repo = fs.get_repo(parent.to_norm_u64())?;
-        let mut repo = repo.lock().map_err(|_| anyhow!("Lock poisoned"))?;
         let session = repo.get_or_init_build_session(parent_oid, &build_root)?;
         drop(repo);
         session.finish_path(fs, parent)?.join(name)

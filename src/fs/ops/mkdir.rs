@@ -1,7 +1,6 @@
 use std::ffi::OsString;
-use std::os::unix::fs::PermissionsExt;
 
-use anyhow::{anyhow, bail};
+use anyhow::bail;
 use libc::EPERM;
 
 use crate::fs::builds::BuildOperationCtx;
@@ -19,21 +18,13 @@ pub fn mkdir_root(
     match repo::parse_mkdir_url(name)? {
         Some((url, repo_name)) => {
             println!("fetching repo {}", &repo_name);
-            let repo = fs.new_repo(&repo_name, Some(&url))?;
-            let repo_id = {
-                let repo = repo.lock().map_err(|_| anyhow!("Lock poisoned"))?;
-                repo.repo_id
-            };
+            let repo_id = fs.new_repo(&repo_name, Some(&url))?.repo_id;
             let attr = fs.getattr((repo_id as u64) << REPO_SHIFT)?;
             Ok(attr)
         }
         None => {
             println!("Creating repo {name}");
-            let repo_id = {
-                let repo = fs.new_repo(name, None)?;
-                let repo = repo.lock().map_err(|_| anyhow!("Lock poisoned"))?;
-                repo.repo_id
-            };
+            let repo_id = fs.new_repo(name, None)?.repo_id;
             let attr = fs.getattr((repo_id as u64) << REPO_SHIFT)?;
 
             Ok(attr)
@@ -58,7 +49,6 @@ pub fn mkdir_live(
 ) -> anyhow::Result<FileAttr> {
     let dir_path = fs.get_live_path(parent.into())?.join(name);
     std::fs::create_dir(&dir_path)?;
-    std::fs::set_permissions(dir_path, std::fs::Permissions::from_mode(0o775))?;
     let new_ino = fs.next_inode_checked(parent)?;
 
     let mut attr: FileAttr = create_attr.into();
@@ -97,7 +87,6 @@ pub fn mkdir_git(
     let dir_path = ctx.path().join(name);
 
     std::fs::create_dir(&dir_path)?;
-    std::fs::set_permissions(dir_path, std::fs::Permissions::from_mode(0o775))?;
     let new_ino = fs.next_inode_checked(parent.to_norm_u64())?;
 
     let mut attr: FileAttr = create_attr.into();

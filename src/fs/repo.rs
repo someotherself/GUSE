@@ -1,10 +1,11 @@
 use anyhow::{Context, anyhow, bail};
 use chrono::{DateTime, Datelike};
+use fuser::FileAttr;
 use git2::{
-    Commit, Delta, DiffFindOptions, DiffOptions, Direction, ErrorClass, ErrorCode, FetchOptions,
-    FileMode, ObjectType, Oid, RemoteCallbacks, Repository, Sort, Time, Tree, TreeWalkMode,
+    Commit, Delta, Direction, FileMode, ObjectType, Oid, Repository, Sort, Time, Tree,
     TreeWalkResult,
 };
+use parking_lot::{Mutex, RwLock};
 use std::{
     collections::{BTreeMap, HashMap, HashSet, hash_map::Entry},
     ffi::OsString,
@@ -16,16 +17,19 @@ use std::{
 };
 
 use crate::{
-    fs::{ObjectAttr, builds::BuildSession},
+    fs::{ObjectAttr, builds::BuildSession, fileattr::Dentry},
     inodes::VirtualIno,
+    internals::cache::LruCache,
 };
 
 pub struct GitRepo {
-    // Caching the database connection for reads.
-    // Must be refreshed after every write.
     pub repo_dir: String,
     pub repo_id: u16,
-    pub inner: Repository,
+    pub inner: Mutex<Repository>,
+    pub state: RwLock<State>,
+}
+
+pub struct State {
     pub head: Option<Oid>,
     /// i64 -> commit_time -> seconds since EPOCH
     ///
@@ -37,11 +41,16 @@ pub struct GitRepo {
     pub vdir_cache: BTreeMap<VirtualIno, VirtualNode>,
     /// Oid = Commit Oid
     pub build_sessions: HashMap<Oid, Arc<BuildSession>>,
+    /// FileAttr Cache
+    pub attr_cache: LruCache<FileAttr>,
+    /// Direntry Cache
+    pub dentry_cache: LruCache<Dentry>,
 }
 
 /// Insert/get a node during getattr/lookup
 ///
 /// Fill log during readdir
+#[derive(Debug, Clone)]
 pub struct VirtualNode {
     /// Inode of the real file
     pub real: u64,
@@ -56,84 +65,108 @@ pub struct VirtualNode {
 }
 
 impl GitRepo {
-    pub fn refresh_snapshots(&mut self) -> anyhow::Result<()> {
-        let head = match self.inner.head() {
-            Ok(h) => h,
-            Err(_) => {
-                // empty repo
-                self.head = None;
-                self.snapshots.clear();
-                return Ok(());
+    pub fn with_repo<R>(&self, f: impl FnOnce(&Repository) -> R) -> R {
+        let guard = self.inner.lock();
+        f(&guard)
+    }
+
+    pub fn with_repo_mut<R>(&self, f: impl FnOnce(&mut Repository) -> R) -> R {
+        let mut guard = self.inner.lock();
+        f(&mut guard)
+    }
+
+    pub fn with_state<R>(&self, f: impl FnOnce(&State) -> R) -> R {
+        let guard = self.state.write();
+        f(&guard)
+    }
+
+    pub fn with_state_mut<R>(&self, f: impl FnOnce(&mut State) -> R) -> R {
+        let mut guard = self.state.write();
+        f(&mut guard)
+    }
+
+    pub fn refresh_snapshots(&self) -> anyhow::Result<()> {
+        let head_oid = self.with_repo(|r| match r.head() {
+            Ok(h) => h.target(),
+            Err(_) => None,
+        });
+
+        self.with_state_mut(|s| {
+            s.head = head_oid;
+            s.snapshots.clear();
+        });
+
+        self.with_repo(|r| -> Result<(), git2::Error> {
+            let mut walk = r.revwalk()?;
+            walk.set_sorting(git2::Sort::TOPOLOGICAL | git2::Sort::TIME)?;
+            if let Some(oid) = head_oid {
+                walk.push(oid)?;
+            };
+            for oid_res in walk {
+                let oid = oid_res?;
+                let secs = {
+                    let c = r.find_commit(oid)?;
+                    let t = c.time();
+                    t.seconds()
+                };
+                self.with_state_mut(|s| s.snapshots.entry(secs).or_default().push(oid));
             }
-        };
-
-        let head_commit = head.peel_to_commit()?;
-        self.head = Some(head_commit.id());
-
-        let mut walk = self.inner.revwalk()?;
-        walk.set_sorting(git2::Sort::TOPOLOGICAL | git2::Sort::TIME)?;
-        walk.push(head_commit.id())?;
-
-        self.snapshots.clear();
-
-        for oid_res in walk {
-            let oid = oid_res?; // keep as-is
-            let c = self.inner.find_commit(oid)?;
-            let t = c.time();
-            let secs = t.seconds();
-            self.snapshots.entry(secs).or_default().push(oid);
-        }
+            Ok(())
+        })?;
         Ok(())
     }
 
     pub fn months_from_cache(&self, use_offset: bool) -> BTreeMap<String, Vec<git2::Oid>> {
         let mut buckets: BTreeMap<String, Vec<git2::Oid>> = BTreeMap::new();
 
-        for (&secs, oids) in &self.snapshots {
-            let adj = if use_offset {
-                let t = self
-                    .inner
-                    .find_commit(oids[0])
-                    .ok()
-                    .map(|c| c.time().offset_minutes())
-                    .unwrap_or(0);
-                secs + (t as i64) * 60
-            } else {
-                secs
-            };
+        self.with_state(|s| {
+            for (&secs, oids) in s.snapshots.iter() {
+                let adj = if use_offset {
+                    let t = self.with_repo(|r| {
+                        r.find_commit(oids[0])
+                            .ok()
+                            .map(|c| c.time().offset_minutes())
+                            .unwrap_or(0)
+                    });
+                    secs + (t as i64) * 60
+                } else {
+                    secs
+                };
 
-            let dt = DateTime::from_timestamp(adj, 0)
-                .unwrap_or_else(|| DateTime::from_timestamp(0, 0).unwrap());
+                let dt = DateTime::from_timestamp(adj, 0)
+                    .unwrap_or_else(|| DateTime::from_timestamp(0, 0).unwrap());
 
-            let key = format!("{:04}-{:02}", dt.year(), dt.month());
+                let key = format!("{:04}-{:02}", dt.year(), dt.month());
 
-            buckets.entry(key).or_default().extend(oids.iter().copied());
-        }
+                buckets.entry(key).or_default().extend(oids.iter().copied());
+            }
+        });
         buckets
     }
 
     pub fn month_folders(&self) -> anyhow::Result<Vec<ObjectAttr>> {
         let mut out = Vec::new();
 
-        for secs in self.snapshots.keys() {
-            let dt = chrono::DateTime::from_timestamp(*secs, 0)
-                .unwrap_or_else(|| chrono::DateTime::from_timestamp(0, 0).unwrap());
-            let folder_name = OsString::from(format!("{:04}-{:02}", dt.year(), dt.month()));
+        self.with_state(|s| {
+            for secs in s.snapshots.keys() {
+                let dt = chrono::DateTime::from_timestamp(*secs, 0)
+                    .unwrap_or_else(|| chrono::DateTime::from_timestamp(0, 0).unwrap());
+                let folder_name = OsString::from(format!("{:04}-{:02}", dt.year(), dt.month()));
 
-            // No duplicates
-            if out.iter().any(|attr: &ObjectAttr| attr.name == folder_name) {
-                continue;
+                if out.iter().any(|attr: &ObjectAttr| attr.name == folder_name) {
+                    continue;
+                }
+
+                out.push(ObjectAttr {
+                    name: folder_name,
+                    oid: Oid::zero(),
+                    kind: ObjectType::Tree,
+                    git_mode: 0o040000,
+                    size: 0,
+                    commit_time: git2::Time::new(*secs, 0),
+                });
             }
-
-            out.push(ObjectAttr {
-                name: folder_name,
-                oid: Oid::zero(),
-                kind: ObjectType::Tree,
-                git_mode: 0o040000,
-                size: 0,
-                commit_time: git2::Time::new(*secs, 0),
-            });
-        }
+        });
 
         Ok(out)
     }
@@ -152,36 +185,39 @@ impl GitRepo {
         let mut out: Vec<ObjectAttr> = Vec::new();
         let mut commit_num = 0;
 
-        for (&secs_utc, oids) in &self.snapshots {
-            for commit_oid in oids {
-                let dt = DateTime::from_timestamp(secs_utc, 0)
-                    .unwrap_or_else(|| DateTime::from_timestamp(0, 0).unwrap());
+        self.with_state(|s| {
+            for (&secs_utc, oids) in &s.snapshots {
+                for commit_oid in oids {
+                    let dt = DateTime::from_timestamp(secs_utc, 0)
+                        .unwrap_or_else(|| DateTime::from_timestamp(0, 0).unwrap());
 
-                if dt.year() != year || dt.month() != month {
-                    continue;
+                    if dt.year() != year || dt.month() != month {
+                        continue;
+                    }
+
+                    commit_num += 1;
+                    let folder_name =
+                        OsString::from(format!("Snap{commit_num:03}_{commit_oid:.7}"));
+
+                    out.push(ObjectAttr {
+                        name: folder_name,
+                        oid: *commit_oid,
+                        kind: ObjectType::Commit,
+                        git_mode: 0o040000,
+                        size: 0,
+                        commit_time: git2::Time::new(secs_utc, 0),
+                    });
                 }
-
-                commit_num += 1;
-                let folder_name = OsString::from(format!("Snap{commit_num:03}_{commit_oid:.7}"));
-
-                out.push(ObjectAttr {
-                    name: folder_name,
-                    oid: *commit_oid,
-                    kind: ObjectType::Commit,
-                    git_mode: 0o040000,
-                    size: 0,
-                    commit_time: git2::Time::new(secs_utc, 0),
-                });
             }
-        }
+        });
         Ok(out)
     }
 
     pub fn fetch_anon(&self, url: &str) -> anyhow::Result<()> {
-        let repo = &self.inner;
         // Set up the anonymous remote and callbacks
+        let repo = self.inner.lock();
         let mut remote = repo.remote_anonymous(url)?;
-        let mut cbs = RemoteCallbacks::new();
+        let mut cbs = git2::RemoteCallbacks::new();
         cbs.sideband_progress(|d| {
             print!("remote: {}", std::str::from_utf8(d).unwrap_or(""));
             true
@@ -203,7 +239,7 @@ impl GitRepo {
             std::io::Write::flush(&mut std::io::stdout()).ok();
             true
         });
-        let mut fo = FetchOptions::new();
+        let mut fo = git2::FetchOptions::new();
         fo.remote_callbacks(cbs);
 
         remote.connect(Direction::Fetch)?;
@@ -232,7 +268,8 @@ impl GitRepo {
 
         remote.fetch(&refs_as_str, Some(&mut fo), None)?;
 
-        if repo.head().is_err() {
+        if self.with_repo(|r| r.head().is_err()) {
+            let repo = self.inner.lock();
             if let Some(ref buf) = default_branch {
                 if let Ok(src) = std::str::from_utf8(buf.as_ref()) {
                     let short = src
@@ -266,10 +303,11 @@ impl GitRepo {
     ///
     /// Called with tree_oid: None if we are at the root of the commit
     pub fn list_tree(&self, commit: Oid, tree_oid: Option<Oid>) -> anyhow::Result<Vec<ObjectAttr>> {
-        let commit = self.inner.find_commit(commit)?;
+        let repo = self.inner.lock();
+        let commit = repo.find_commit(commit)?;
         let mut entries = vec![];
         let tree = match tree_oid {
-            Some(tree_oid) => self.inner.find_tree(tree_oid)?,
+            Some(tree_oid) => repo.find_tree(tree_oid)?,
             None => commit.tree()?,
         };
         for entry in tree.iter() {
@@ -278,7 +316,7 @@ impl GitRepo {
 
             let mut size = 0;
             if kind == git2::ObjectType::Blob {
-                let blob = self.inner.find_blob(entry.id())?;
+                let blob = repo.find_blob(entry.id())?;
                 size = blob.size() as u64;
             }
             entries.push(ObjectAttr {
@@ -294,21 +332,22 @@ impl GitRepo {
     }
 
     pub fn find_by_name(&self, tree_oid: Oid, name: &str) -> anyhow::Result<ObjectAttr> {
-        let tree = self.inner.find_tree(tree_oid)?;
+        let repo = self.inner.lock();
+        let tree = repo.find_tree(tree_oid)?;
 
         let entry = tree
             .get_name(name)
             .ok_or_else(|| anyhow!(format!("{name} not found in tree {tree_oid}")))?;
         let size = match entry.kind().ok_or_else(|| anyhow!("Invalid object"))? {
             ObjectType::Blob => entry
-                .to_object(&self.inner)
+                .to_object(&repo)
                 .map_err(|_| anyhow!("Invalid object"))?
                 .into_blob()
                 .map_err(|_| anyhow!("Invalid object"))?
                 .size(),
             _ => 0,
         };
-        let commit = self.inner.head()?.peel_to_commit()?;
+        let commit = repo.head()?.peel_to_commit()?;
         let commit_time = commit.time();
         Ok(ObjectAttr {
             name: name.into(),
@@ -321,7 +360,8 @@ impl GitRepo {
     }
 
     pub fn find_in_commit(&self, commit_id: Oid, oid: Oid) -> anyhow::Result<ObjectAttr> {
-        let commit_obj = self.inner.find_commit(commit_id)?;
+        let repo = self.inner.lock();
+        let commit_obj = repo.find_commit(commit_id)?;
         let commit_time = commit_obj.time();
         let tree = commit_obj.tree()?;
 
@@ -336,7 +376,7 @@ impl GitRepo {
             });
         }
         let mut found: Option<ObjectAttr> = None;
-        let walk_res = tree.walk(TreeWalkMode::PreOrder, |root, entry| {
+        let walk_res = tree.walk(git2::TreeWalkMode::PreOrder, |root, entry| {
             if entry.id() == oid {
                 let mut name = OsString::from(root);
                 name.push(entry.name().unwrap_or("<non-utf8>"));
@@ -346,8 +386,7 @@ impl GitRepo {
                     kind: entry.kind().unwrap_or(ObjectType::Any),
                     git_mode: entry.filemode() as u32,
                     size: if entry.kind() == Some(ObjectType::Blob) {
-                        self.inner
-                            .find_blob(entry.id())
+                        repo.find_blob(entry.id())
                             .map(|b| b.size() as u64)
                             .unwrap_or(0)
                     } else {
@@ -361,7 +400,7 @@ impl GitRepo {
         });
 
         if let Err(e) = walk_res
-            && !(e.class() == ErrorClass::Callback && e.code() == ErrorCode::User)
+            && !(e.class() == git2::ErrorClass::Callback && e.code() == git2::ErrorCode::User)
         {
             return Err(e.into());
         }
@@ -375,12 +414,13 @@ impl GitRepo {
     }
 
     pub fn read_log(&self) -> anyhow::Result<Vec<ObjectAttr>> {
+        let repo = self.inner.lock();
         let limit = 20;
         let head_commit = self.head_commit()?;
 
-        let mut walk = self.inner.revwalk()?;
+        let mut walk = repo.revwalk()?;
         walk.set_sorting(Sort::TOPOLOGICAL | Sort::TIME)?;
-        walk.push(head_commit.id())?;
+        walk.push(head_commit)?;
 
         let mut out = Vec::with_capacity(limit.min(256));
         for (i, oid_res) in walk.enumerate() {
@@ -388,7 +428,7 @@ impl GitRepo {
                 break;
             }
             let oid = oid_res?;
-            let commit = self.inner.find_commit(oid)?;
+            let commit = repo.find_commit(oid)?;
 
             let mut commit_name = OsString::from("snap");
             commit_name.push((i + 1).to_string());
@@ -409,7 +449,9 @@ impl GitRepo {
 
     pub fn readdir_commit(&self) -> anyhow::Result<Vec<ObjectAttr>> {
         let mut entries: Vec<ObjectAttr> = vec![];
-        let commit = self.head_commit()?;
+        let commit_oid = self.head_commit()?;
+        let repo = self.inner.lock();
+        let commit = repo.find_commit(commit_oid)?;
         let root_tree = commit.tree()?;
         for entry in root_tree.iter() {
             let oid = entry.id();
@@ -430,11 +472,11 @@ impl GitRepo {
     }
 
     pub fn blob_history_objects(&self, target_blob: Oid) -> anyhow::Result<Vec<ObjectAttr>> {
-        let repo = &self.inner;
-
-        let mut commit = self
+        let oid = self
             .find_newest_commit_containing_blob_fp(target_blob, 50_000)
             .context("Blob not found (first-parent scan)")?;
+        let repo = self.inner.lock();
+        let mut commit = repo.find_commit(oid)?;
 
         let mut current_path = self
             .find_path_of_blob_in_tree(&commit.tree()?, target_blob)
@@ -455,7 +497,8 @@ impl GitRepo {
             }
             let tree = commit.tree()?;
             if let Some(attr) = {
-                self.object_attr_for_path_in_tree(repo, &tree, &current_path, &commit, blob_count)?
+                let repo = self.inner.lock();
+                self.object_attr_for_path_in_tree(&repo, &tree, &current_path, &commit, blob_count)?
             } {
                 if last_pushed_oid != Some(attr.oid) {
                     last_pushed_oid = Some(attr.oid);
@@ -553,16 +596,16 @@ impl GitRepo {
         tree: &Tree,
         current_path: &str,
     ) -> anyhow::Result<Option<String>> {
-        let repo = &self.inner;
+        let repo = &self.inner.lock();
 
-        let mut diff_opts = DiffOptions::new();
+        let mut diff_opts = git2::DiffOptions::new();
         diff_opts.include_typechange(true);
         // Do NOT pathspec-limit here; it can hide the "old" side needed for rename pairing.
 
         let mut diff =
             repo.diff_tree_to_tree(Some(parent_tree), Some(tree), Some(&mut diff_opts))?;
 
-        let mut find_opts = DiffFindOptions::new();
+        let mut find_opts = git2::DiffFindOptions::new();
         find_opts
             .renames(true)
             .renames_from_rewrites(true)
@@ -597,8 +640,8 @@ impl GitRepo {
         &self,
         blob_oid: Oid,
         max_steps: usize,
-    ) -> anyhow::Result<Commit<'_>> {
-        let repo = &self.inner;
+    ) -> anyhow::Result<Oid> {
+        let repo = &self.inner.lock();
         let mut commit = repo.head()?.peel_to_commit()?;
         let mut steps = 0usize;
 
@@ -617,7 +660,7 @@ impl GitRepo {
             });
 
             if contains {
-                return Ok(commit);
+                return Ok(commit.id());
             }
 
             if commit.parent_count() == 0 {
@@ -668,22 +711,27 @@ impl GitRepo {
         }
     }
 
-    fn head_commit(&self) -> anyhow::Result<Commit<'_>> {
-        let repo = &self.inner;
-        Ok(repo.head()?.peel_to_commit()?)
+    fn head_commit(&self) -> anyhow::Result<Oid> {
+        let repo = &self.inner.lock();
+        Ok(repo.head()?.peel_to_commit()?.id())
     }
 
     #[allow(dead_code)]
-    fn head_tree(&self) -> anyhow::Result<Tree<'_>> {
-        Ok(self.head_commit()?.tree()?)
+    fn head_tree(&self) -> anyhow::Result<Oid> {
+        let oid = self.head_commit()?;
+        self.with_repo(|r| -> anyhow::Result<Oid> {
+            let commit = r.find_commit(oid)?;
+            let tree = commit.tree()?.id();
+            Ok(tree)
+        })
     }
 
     pub fn get_or_init_build_session(
-        &mut self,
+        &self,
         commit_oid: Oid,
         build_folder: &Path,
     ) -> anyhow::Result<Arc<BuildSession>> {
-        match self.build_sessions.entry(commit_oid) {
+        self.with_state_mut(|s| match s.build_sessions.entry(commit_oid) {
             Entry::Occupied(entry) => {
                 let session = entry.get();
                 Ok(session.clone())
@@ -700,7 +748,7 @@ impl GitRepo {
                 slot.insert(session.clone());
                 Ok(session)
             }
-        }
+        })
     }
 }
 

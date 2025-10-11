@@ -64,9 +64,7 @@ pub fn create_git(
     let mut attr: FileAttr = file_attr(InoFlag::InsideBuild).into();
     attr.ino = ino;
 
-    let file = std::fs::File::create_new(&file_path)?;
-    std::fs::set_permissions(&file_path, std::fs::Permissions::from_mode(0o775))?;
-    drop(file);
+    std::fs::File::create_new(&file_path)?;
 
     let nodes = vec![StorageNode {
         parent_ino: parent.to_norm_u64(),

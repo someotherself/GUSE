@@ -66,7 +66,6 @@ pub fn open_git(
                 let session = {
                     let parent_oid = fs.parent_commit_build_session(parent_ino.into())?;
                     let build_root = fs.get_path_to_build_folder(ino)?;
-                    let mut repo = repo.lock().map_err(|_| anyhow!("Lock poisoned"))?;
                     repo.get_or_init_build_session(parent_oid, &build_root)?
                 };
                 let parent_path = session.finish_path(fs, parent_ino.into())?.join(&name);
@@ -110,7 +109,6 @@ pub fn open_vfile(fs: &GitFs, ino: Inodes, read: bool, write: bool) -> anyhow::R
             if contents.is_none() {
                 let entries = {
                     let repo = fs.get_repo(ino.to_u64_n())?;
-                    let repo = repo.lock().map_err(|_| anyhow!("Lock poisoned"))?;
                     repo.month_commits(&format!("{year:04}-{month:02}"))?
                 };
                 contents = Some(build_commits_text(fs, entries, ino.to_u64_n())?);
@@ -138,12 +136,12 @@ pub fn open_vfile(fs: &GitFs, ino: Inodes, read: bool, write: bool) -> anyhow::R
                 map.get(&ino.to_virt()).and_then(|e| e.data.get()).cloned()
             };
             if contents.is_none() {
-                let summary = {
-                    let repo = fs.get_repo(ino.to_u64_n())?;
-                    let repo = repo.lock().map_err(|_| anyhow!("Lock poisoned"))?;
-                    let commit = repo.inner.find_commit(oid)?;
-                    commit.summary().unwrap_or_default().to_owned()
-                };
+                let repo = fs.get_repo(ino.to_u64_n())?;
+                let summary = repo.with_repo(|r| -> anyhow::Result<String> {
+                    let commit = r.find_commit(oid)?;
+                    let summary = commit.summary().unwrap_or_default().to_owned();
+                    Ok(summary)
+                })?;
                 contents = Some(Arc::new(Vec::from(summary.as_bytes())));
             }
             let data = contents.ok_or_else(|| anyhow!("No data"))?;
@@ -170,7 +168,6 @@ pub fn create_vfile_entry(fs: &GitFs, ino: VirtualIno) -> anyhow::Result<u64> {
         DirCase::Month { year, month } => {
             let entries = {
                 let repo = fs.get_repo(ino.to_norm_u64())?;
-                let repo = repo.lock().map_err(|_| anyhow!("Lock poisoned"))?;
                 repo.month_commits(&format!("{year:04}-{month:02}"))?
             };
             let contents = build_commits_text(fs, entries, ino.to_norm_u64())?;
@@ -185,12 +182,12 @@ pub fn create_vfile_entry(fs: &GitFs, ino: VirtualIno) -> anyhow::Result<u64> {
             (entry, len)
         }
         DirCase::Commit { oid } => {
-            let summary = {
-                let repo = fs.get_repo(ino.to_norm_u64())?;
-                let repo = repo.lock().map_err(|_| anyhow!("Lock poisoned"))?;
-                let commit = repo.inner.find_commit(oid)?;
-                commit.summary().unwrap_or_default().to_owned()
-            };
+            let repo = fs.get_repo(ino.into())?;
+            let summary = repo.with_repo(|r| -> anyhow::Result<String> {
+                let commit = r.find_commit(oid)?;
+                let summary = commit.summary().unwrap_or_default().to_owned();
+                Ok(summary)
+            })?;
             let data = OnceLock::new();
             let len = summary.len() as u64;
             let entry = VFileEntry {
@@ -222,8 +219,8 @@ pub fn open_vdir(
 ) -> anyhow::Result<u64> {
     let name = fs.get_name_from_db(ino.into())?;
     let repo = fs.get_repo(ino.into())?;
-    let repo = repo.lock().map_err(|_| anyhow!("Lock poisoned"))?;
-    let Some(v_node) = repo.vdir_cache.get(&parent) else {
+    let v_node_opt = repo.with_state(|s| s.vdir_cache.get(&parent).cloned());
+    let Some(v_node) = v_node_opt else {
         bail!("File not found!")
     };
     let Some((_, object)) = v_node.log.get(&name) else {
@@ -238,9 +235,10 @@ pub fn open_vdir(
 fn open_blob(fs: &GitFs, oid: Oid, ino: u64, read: bool) -> anyhow::Result<u64> {
     let buf = {
         let repo = fs.get_repo(ino)?;
-        let repo = repo.lock().map_err(|_| anyhow!("Lock poisoned"))?;
-        let blob = repo.inner.find_blob(oid)?;
-        blob.content().to_vec()
+        repo.with_repo(|r| -> anyhow::Result<Vec<u8>> {
+            let blob = r.find_blob(oid)?;
+            Ok(blob.content().to_vec())
+        })?
     };
     let blob_file = SourceTypes::RoBlob {
         oid,
@@ -278,14 +276,14 @@ fn build_commits_text(
     for e in entries {
         let ts = git_commit_time(e.commit_time);
         let soid = short_oid(e.oid);
-        let (subject, committer) = {
-            let repo = fs.get_repo(ino)?;
-            let repo = repo.lock().map_err(|_| anyhow!("Lock poisoned"))?;
-            let commit = repo.inner.find_commit(e.oid)?;
-            let subject = commit.summary().unwrap_or_default().to_owned();
-            let committer = commit.author().name().unwrap_or_default().to_owned();
-            (subject, committer)
-        };
+        let repo = fs.get_repo(ino)?;
+        let (subject, committer) =
+            repo.with_repo(|r| -> Result<(String, String), git2::Error> {
+                let c = r.find_commit(e.oid)?;
+                let subject = c.summary().unwrap_or_default().to_owned();
+                let committer = c.author().name().unwrap_or_default().to_owned();
+                Ok((subject, committer))
+            })?;
 
         let clean_name = namespec::clean_name(&e.name);
         let clean_subject = subject.replace(['\n', '\t'], " ");
@@ -299,11 +297,3 @@ fn build_commits_text(
 
     Ok(Arc::new(contents))
 }
-
-// Succesful opening
-// Opening 1125899906852608 0000000000000000000000000000000000000000 InsideBuild exists:false name: libguse-a2f4ebba33ed46d8.rlib at
-// path /home/cristian/Rust/projects/guse/data_dir/GUSE/build/build_048a1838MN8oMf/target/debug/libguse-a2f4ebba33ed46d8.rlib
-
-// Failed opening
-// Opening 1125899906852608 0000000000000000000000000000000000000000 InsideBuild exists:true name: libguse-a2f4ebba33ed46d8.rlib at
-// path /home/cristian/Rust/projects/guse/data_dir/GUSE/build/build_048a1838MN8oMf/target/debug/deps/libguse-a2f4ebba33ed46d8.rlib

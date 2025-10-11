@@ -1,6 +1,5 @@
 use std::ffi::{OsStr, OsString};
 
-use anyhow::anyhow;
 use tracing::instrument;
 
 use crate::{
@@ -15,10 +14,7 @@ use crate::{
 pub fn lookup_root(fs: &GitFs, name: &OsStr) -> anyhow::Result<Option<FileAttr>> {
     // Handle a look-up for url -> github.tokio-rs.tokio.git
     let attr = fs.repos_list.iter().find_map(|repo| {
-        let (repo_name, repo_id) = {
-            let repo = repo.lock().map_err(|_| anyhow!("Lock poisoned")).ok()?;
-            (OsString::from(repo.repo_dir.clone()), repo.repo_id)
-        };
+        let (repo_name, repo_id) = { (OsString::from(repo.repo_dir.clone()), repo.repo_id) };
         if repo_name == name {
             let perms = 0o775;
             let st_mode = libc::S_IFDIR | perms;
@@ -46,10 +42,7 @@ pub fn lookup_repo(
     };
     let attr = if name == "live" {
         let live_ino = fs.get_ino_from_db(parent.into(), OsStr::new("live"))?;
-        let path = {
-            let repo = repo.lock().map_err(|_| anyhow!("Lock poisoned"))?;
-            fs.repos_dir.join(&repo.repo_dir)
-        };
+        let path = fs.repos_dir.join(&repo.repo_dir);
         let mut attr = fs.attr_from_path(InoFlag::LiveRoot, path)?;
         attr.ino = live_ino;
         attr
@@ -81,12 +74,6 @@ pub fn lookup_live(
     parent: NormalIno,
     name: &OsStr,
 ) -> anyhow::Result<Option<FileAttr>> {
-    let repo_id = GitFs::ino_to_repo_id(parent.to_norm_u64());
-    match fs.repos_list.get(&repo_id) {
-        Some(_) => {}
-        None => return Ok(None),
-    };
-
     let attr = match fs.get_metadata_by_name(parent, name) {
         Ok(a) => a,
         Err(_) => return Ok(None),
@@ -110,10 +97,8 @@ pub fn lookup_vdir(
     name: &OsStr,
 ) -> anyhow::Result<Option<FileAttr>> {
     let repo = fs.get_repo(u64::from(parent))?;
-    let Ok(repo) = repo.lock() else {
-        return Ok(None);
-    };
-    let Some(v_node) = repo.vdir_cache.get(&parent) else {
+    let v_node_opt = repo.with_state(|s| s.vdir_cache.get(&parent).cloned());
+    let Some(v_node) = v_node_opt else {
         return Ok(None);
     };
     let Some((entry_ino, object)) = v_node.log.get(name) else {
