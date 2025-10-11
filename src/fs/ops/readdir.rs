@@ -5,7 +5,7 @@ use std::{
     sync::Arc,
 };
 
-use anyhow::{anyhow, bail};
+use anyhow::bail;
 use git2::{FileMode, ObjectType, Oid};
 use tracing::instrument;
 
@@ -83,10 +83,7 @@ pub enum DirCase {
 pub fn readdir_root_dir(fs: &GitFs) -> anyhow::Result<Vec<DirectoryEntry>> {
     let mut entries: Vec<DirectoryEntry> = vec![];
     for repo in fs.repos_list.iter().map(|e| e.value().clone()) {
-        let (repo_dir, repo_ino) = {
-            let repo = repo.lock().map_err(|_| anyhow!("Lock poisoned"))?;
-            (repo.repo_dir.clone(), GitFs::repo_id_to_ino(repo.repo_id))
-        };
+        let (repo_dir, repo_ino) = { (repo.repo_dir.clone(), GitFs::repo_id_to_ino(repo.repo_id)) };
         let dir_entry = DirectoryEntry::new(
             repo_ino,
             Oid::zero(),
@@ -132,7 +129,6 @@ pub fn readdir_repo_dir(fs: &GitFs, parent: NormalIno) -> anyhow::Result<Vec<Dir
 
     let object_entries = {
         let repo = fs.get_repo(parent)?;
-        let repo = repo.lock().map_err(|_| anyhow!("Lock poisoned"))?;
         repo.month_folders()?
     };
 
@@ -245,9 +241,7 @@ fn read_build_dir(fs: &GitFs, ino: NormalIno) -> anyhow::Result<Vec<DirectoryEnt
 
 fn build_dot_git_path(fs: &GitFs, target_ino: NormalIno) -> anyhow::Result<PathBuf> {
     let repo_path = {
-        let repo = fs.get_repo(target_ino.into())?;
-        let repo = repo.lock().map_err(|_| anyhow!("Lock poisoned"))?;
-        let repo_dir = &repo.repo_dir;
+        let repo_dir = fs.get_repo(target_ino.into())?.repo_dir.clone();
         fs.repos_dir.join(repo_dir)
     };
     let dot_git_path = repo_path.join(LIVE_FOLDER).join(".git");
@@ -386,18 +380,14 @@ pub fn readdir_git_dir(fs: &GitFs, parent: NormalIno) -> anyhow::Result<Vec<Dire
             else {
                 bail!("Invalid MONTH folder name")
             };
-            let repo = repo.lock().map_err(|_| anyhow!("Lock poisoned"))?;
             let objects = repo.month_commits(&format!("{year:04}-{month:02}"))?;
-            drop(repo);
             objects_to_dir_entries(fs, parent, objects, InoFlag::SnapFolder)?
         }
         InoFlag::SnapFolder => {
             // The Oid will be a commit oid
             // Will also contain everything in the build folder
             let oid = fs.get_oid_from_db(parent.into())?;
-            let repo = repo.lock().map_err(|_| anyhow!("Lock poisoned"))?;
             let objects = repo.list_tree(oid, None)?;
-            drop(repo);
             // git objects
             let mut dir_entries = objects_to_dir_entries(fs, parent, objects, InoFlag::InsideSnap)?;
             // build files/folders
@@ -412,13 +402,9 @@ pub fn readdir_git_dir(fs: &GitFs, parent: NormalIno) -> anyhow::Result<Vec<Dire
             // The Oid will be a tree oid
             // Is one of the folders (Tree) inside Snap. Only list git objects in it
             let oid = fs.get_oid_from_db(parent.into())?;
-            let repo = repo.lock().map_err(|_| anyhow!("Lock poisoned"))?;
-            drop(repo);
             let commit_oid = fs.get_parent_commit(parent.into())?;
             let repo = fs.get_repo(parent.into())?;
-            let repo = repo.lock().map_err(|_| anyhow!("Lock poisoned"))?;
             let objects = repo.list_tree(commit_oid, Some(oid)).unwrap_or_default();
-            drop(repo);
             objects_to_dir_entries(fs, parent, objects, InoFlag::InsideSnap)?
         }
         InoFlag::InsideBuild | InoFlag::BuildRoot => {
@@ -478,7 +464,6 @@ fn objects_to_dir_entries(
 
 fn get_history_objects(fs: &GitFs, ino: u64, oid: Oid) -> anyhow::Result<Vec<ObjectAttr>> {
     let repo = fs.get_repo(ino)?;
-    let repo = repo.lock().map_err(|_| anyhow!("Lock poisoned"))?;
     repo.blob_history_objects(oid)
 }
 
@@ -499,14 +484,13 @@ fn log_entries(
 
 pub fn read_virtual_dir(fs: &GitFs, ino: VirtualIno) -> anyhow::Result<Vec<DirectoryEntry>> {
     let repo = fs.get_repo(u64::from(ino))?;
-    let repo = repo.lock().map_err(|_| anyhow!("Lock poisoned"))?;
-    let v_node = match repo.vdir_cache.get(&ino) {
+    let v_node_opt = repo.with_state_mut(|s| s.vdir_cache.get(&ino).cloned());
+    let v_node = match v_node_opt {
         Some(o) => o,
         None => bail!("Oid missing"),
     };
     let origin_oid = v_node.oid;
     let is_empty = v_node.log.is_empty();
-    drop(repo);
 
     let mut dir_entries = vec![];
     let parent = fs.get_path_from_db(ino.to_norm())?;
@@ -519,8 +503,8 @@ pub fn read_virtual_dir(fs: &GitFs, ino: VirtualIno) -> anyhow::Result<Vec<Direc
         let mut nodes: Vec<StorageNode> = vec![];
         let log_entries = log_entries(fs, ino.to_norm_u64(), origin_oid)?;
         let repo = fs.get_repo(u64::from(ino))?;
-        let mut repo = repo.lock().map_err(|_| anyhow!("Lock poisoned"))?;
-        let v_node = match repo.vdir_cache.get_mut(&ino) {
+        let v_node_opt = repo.with_state_mut(|s| s.vdir_cache.get(&ino).cloned());
+        let mut v_node = match v_node_opt {
             Some(o) => o,
             None => bail!("Oid missing"),
         };
@@ -548,8 +532,8 @@ pub fn read_virtual_dir(fs: &GitFs, ino: VirtualIno) -> anyhow::Result<Vec<Direc
         fs.write_inodes_to_db(nodes)?;
     } else {
         let repo = fs.get_repo(u64::from(ino))?;
-        let repo = repo.lock().map_err(|_| anyhow!("Lock poisoned"))?;
-        let v_node = match repo.vdir_cache.get(&ino) {
+        let v_node_opt = repo.with_state_mut(|s| s.vdir_cache.get(&ino).cloned());
+        let v_node = match v_node_opt {
             Some(o) => o,
             None => bail!("Oid missing"),
         };

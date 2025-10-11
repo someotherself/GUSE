@@ -125,7 +125,6 @@ pub fn rename_git_build(
         let parent_oid = fs.parent_commit_build_session(ino)?;
         let build_root = fs.get_path_to_build_folder(ino)?;
         let repo = fs.get_repo(ino.to_norm_u64())?;
-        let mut repo = repo.lock().map_err(|_| anyhow!("Lock poisoned"))?;
         let session = repo.get_or_init_build_session(parent_oid, &build_root)?;
         drop(repo);
         session.finish_path(fs, ino)?.join(old_name)
@@ -136,7 +135,6 @@ pub fn rename_git_build(
         let parent_oid = fs.parent_commit_build_session(ino)?;
         let build_root = fs.get_path_to_build_folder(ino)?;
         let repo = fs.get_repo(ino.to_norm_u64())?;
-        let mut repo = repo.lock().map_err(|_| anyhow!("Lock poisoned"))?;
         let session = repo.get_or_init_build_session(parent_oid, &build_root)?;
         drop(repo);
         session.finish_path(fs, ino)?.join(new_name)

@@ -28,6 +28,9 @@ pub struct FileAttr {
     pub flags: u32,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct Dentry {}
+
 #[derive(Clone, Debug)]
 pub struct ObjectAttr {
     pub name: OsString,

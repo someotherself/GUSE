@@ -24,8 +24,9 @@ use crate::fs::fileattr::{
 use crate::fs::handles::FileHandles;
 use crate::fs::meta_db::{DbWriteMsg, MetaDb, oneshot, set_conn_pragmas, set_wal_once};
 use crate::fs::ops::readdir::{DirectoryEntry, DirectoryEntryPlus, DirectoryStreamCookie};
-use crate::fs::repo::{GitRepo, VirtualNode};
+use crate::fs::repo::{GitRepo, State, VirtualNode};
 use crate::inodes::{Inodes, NormalIno, VirtualIno};
+use crate::internals::cache::LruCache;
 use crate::mount::InvalMsg;
 use crate::namespec::NameSpec;
 
@@ -44,6 +45,8 @@ const LIVE_FOLDER: &str = "live";
 pub const REPO_SHIFT: u8 = 48;
 pub const ROOT_INO: u64 = 1;
 pub const VDIR_BIT: u64 = 1u64 << 47;
+const ATTR_LRU: usize = 10000;
+const DENTRY_LRU: usize = 10000;
 
 enum FsOperationContext {
     /// Is the root directory
@@ -119,7 +122,7 @@ pub struct GitFs {
     pub repos_dir: PathBuf,
     /// Use helpers `self.insert_repo` and `self.delete_repo`
     /// <repo_id, repo>
-    repos_list: DashMap<u16, Arc<Mutex<GitRepo>>>,
+    repos_list: DashMap<u16, Arc<GitRepo>>,
     /// <repo_id, connections>
     conn_list: DashMap<u16, Arc<MetaDb>>,
     /// Use helpers `self.insert_repo` and `self.delete_repo`
@@ -284,10 +287,7 @@ impl GitFs {
         for (repo_id, repo) in fs.repos_list.clone() {
             let repo_ino = GitFs::repo_id_to_ino(repo_id);
             let live_ino = fs.get_live_ino(repo_ino);
-            let repo_name = {
-                let repo = repo.lock().map_err(|_| anyhow!("Lock poisoned"))?;
-                repo.repo_dir.clone()
-            };
+            let repo_name = repo.repo_dir.clone();
             let live_path = fs.repos_dir.join(repo_name).join(LIVE_FOLDER);
 
             // Read contents of live
@@ -315,18 +315,24 @@ impl GitFs {
         std::fs::create_dir(&live_path)?;
         let repo = git2::Repository::init(live_path)?;
 
-        let git_repo = GitRepo {
-            repo_dir: repo_name.to_owned(),
-            repo_id,
-            inner: repo,
+        let state: State = State {
             head: None,
             snapshots: BTreeMap::new(),
             res_inodes: HashSet::new(),
             vdir_cache: BTreeMap::new(),
             build_sessions: HashMap::new(),
+            attr_cache: LruCache::new(ATTR_LRU),
+            dentry_cache: LruCache::new(DENTRY_LRU),
         };
 
-        let repo_rc = Arc::from(Mutex::from(git_repo));
+        let git_repo = GitRepo {
+            repo_dir: repo_name.to_owned(),
+            repo_id,
+            inner: parking_lot::Mutex::new(repo),
+            state: parking_lot::RwLock::new(state),
+        };
+
+        let repo_rc = Arc::from(git_repo);
         self.insert_repo(repo_rc, repo_name, repo_id)?;
         Ok(repo_id)
     }
@@ -351,29 +357,40 @@ impl GitFs {
         let live_path = repo_path.join(LIVE_FOLDER);
         let repo = git2::Repository::init(live_path)?;
 
-        let mut git_repo = GitRepo {
-            repo_dir: repo_name.to_owned(),
-            repo_id,
-            inner: repo,
+        let state: State = State {
             head: None,
             snapshots: BTreeMap::new(),
             res_inodes: HashSet::new(),
             vdir_cache: BTreeMap::new(),
             build_sessions: HashMap::new(),
+            attr_cache: LruCache::new(ATTR_LRU),
+            dentry_cache: LruCache::new(DENTRY_LRU),
         };
+
+        let git_repo = GitRepo {
+            repo_dir: repo_name.to_owned(),
+            repo_id,
+            inner: parking_lot::Mutex::new(repo),
+            state: parking_lot::RwLock::new(state),
+        };
+        tracing::info!("6");
 
         // Find HEAD in the git repo
         {
-            let head_res = git_repo.inner.revparse_single("HEAD");
-            if head_res.is_ok() {
-                git_repo.head = Some(head_res?.id());
-            };
-        }
-        if git_repo.head.is_some() {
-            git_repo.refresh_snapshots()?;
+            let head = git_repo.with_repo_mut(|r| {
+                if let Ok(head) = r.revparse_single("HEAD") {
+                    Some(head.id())
+                } else {
+                    None
+                }
+            });
+            git_repo.with_state_mut(|s| s.head = head);
+            if head.is_some() {
+                git_repo.refresh_snapshots()?;
+            }
         }
 
-        let repo_rc = Arc::from(Mutex::from(git_repo));
+        let repo_rc = Arc::from(git_repo);
         self.insert_repo(repo_rc, repo_name, repo_id)?;
         Ok(repo_id)
     }
@@ -422,12 +439,11 @@ impl GitFs {
         build_attr.ino = build_ino;
         build_attr.git_mode = st_mode;
 
-        {
-            let repo = self.get_repo(repo_ino)?;
-            let mut guard = repo.lock().map_err(|_| anyhow!("Lock poisoned"))?;
-            guard.res_inodes.insert(live_ino);
-            guard.res_inodes.insert(build_ino);
-        }
+        let repo = self.get_repo(repo_ino)?;
+        repo.with_state_mut(|s| {
+            s.res_inodes.insert(live_ino);
+            s.res_inodes.insert(build_ino);
+        });
 
         let nodes: Vec<StorageNode> = vec![
             StorageNode {
@@ -488,11 +504,7 @@ impl GitFs {
         Ok(())
     }
 
-    pub fn new_repo(
-        &self,
-        repo_name: &str,
-        url: Option<&str>,
-    ) -> anyhow::Result<Arc<Mutex<GitRepo>>> {
+    pub fn new_repo(&self, repo_name: &str, url: Option<&str>) -> anyhow::Result<Arc<GitRepo>> {
         let tmpdir = tempfile::Builder::new()
             .rand_bytes(4)
             .tempdir_in(&self.repos_dir)?;
@@ -506,7 +518,7 @@ impl GitFs {
         repo_name: &str,
         tmp_path: &Path,
         url: Option<&str>,
-    ) -> anyhow::Result<Arc<Mutex<GitRepo>>> {
+    ) -> anyhow::Result<Arc<GitRepo>> {
         let repo_ino = GitFs::repo_id_to_ino(repo_id);
 
         // Write the ROOT_INO in db
@@ -546,9 +558,8 @@ impl GitFs {
 
         let repo = self.get_repo(repo_ino)?;
         {
-            let mut guard = repo.lock().map_err(|_| anyhow!("Lock poisoned"))?;
-            guard.res_inodes.insert(live_ino);
-            guard.res_inodes.insert(build_ino);
+            // repo.res_inodes.insert(live_ino);
+            // repo.res_inodes.insert(build_ino);
         }
 
         let nodes: Vec<StorageNode> = vec![
@@ -567,7 +578,6 @@ impl GitFs {
         self.write_inodes_to_db(nodes)?;
 
         if let Some(url) = url {
-            let mut repo = repo.lock().map_err(|_| anyhow!("Lock poisoned"))?;
             repo.fetch_anon(url)?;
             repo.refresh_snapshots()?;
         };
@@ -579,8 +589,10 @@ impl GitFs {
             let live_path = final_path.join(LIVE_FOLDER);
             // Refresh repo and db to new path
             let repo = self.get_repo(repo_ino)?;
-            let mut repo = repo.lock().map_err(|_| anyhow!("Lock poisoned"))?;
-            repo.inner = git2::Repository::init(&live_path)?;
+            repo.with_repo_mut(|r| -> anyhow::Result<()> {
+                *r = git2::Repository::init(&live_path)?;
+                Ok(())
+            })?;
             let db_conn = meta_db::new_repo_db(final_path.join(META_STORE))?;
             self.conn_list.insert(repo_id, db_conn);
         }
@@ -1386,16 +1398,17 @@ impl GitFs {
     }
 
     pub fn prepare_virtual_folder(&self, attr: FileAttr) -> anyhow::Result<FileAttr> {
-        let repo_arc = self.get_repo(attr.ino)?;
+        let repo = self.get_repo(attr.ino)?;
         let mut new_attr = attr;
         let ino: Inodes = attr.ino.into();
         let v_ino = ino.to_u64_v();
 
         // Check if the entry is alread saved in vdir_cache
         {
-            let repo = repo_arc.lock().map_err(|_| anyhow!("Lock poisoned"))?;
-            if let Some(e) = repo.vdir_cache.get(&ino.to_virt()) {
-                new_attr.ino = e.ino;
+            let cached = repo.with_state_mut(|s| s.vdir_cache.get(&ino.to_virt()).cloned());
+
+            if let Some(entry) = cached {
+                new_attr.ino = entry.ino;
                 new_attr.perm = 0o555;
                 new_attr.size = 0;
                 new_attr.kind = FileType::Directory;
@@ -1407,24 +1420,25 @@ impl GitFs {
 
         // If not, create it and save the VirtualNode in vdir_cache
         {
-            let mut repo = repo_arc.lock().map_err(|_| anyhow!("Lock poisoned"))?;
-            match repo.vdir_cache.entry(ino.to_virt()) {
-                Entry::Occupied(e) => {
-                    // Another thread alread inserted an entry
-                    let v = e.get();
-                    new_attr.ino = v.ino;
+            repo.with_state_mut(|s| {
+                match s.vdir_cache.entry(ino.to_virt()) {
+                    Entry::Occupied(e) => {
+                        // Another thread alread inserted an entry
+                        let v = e.get();
+                        new_attr.ino = v.ino;
+                    }
+                    Entry::Vacant(slot) => {
+                        let v_node = VirtualNode {
+                            real: ino.to_u64_n(),
+                            ino: v_ino,
+                            oid: attr.oid,
+                            log: BTreeMap::new(),
+                        };
+                        slot.insert(v_node);
+                        new_attr.ino = v_ino;
+                    }
                 }
-                Entry::Vacant(slot) => {
-                    let v_node = VirtualNode {
-                        real: ino.to_u64_n(),
-                        ino: v_ino,
-                        oid: attr.oid,
-                        log: BTreeMap::new(),
-                    };
-                    slot.insert(v_node);
-                    new_attr.ino = v_ino;
-                }
-            };
+            });
             new_attr.kind = FileType::Directory;
             new_attr.perm = 0o555;
             new_attr.size = 0;
@@ -1442,7 +1456,6 @@ impl GitFs {
         let live_ino = self.get_live_ino(target.into());
         let repo_name = {
             let repo = &self.get_repo(target.to_norm_u64())?;
-            let repo = repo.lock().map_err(|_| anyhow!("Lock poisoned"))?;
             repo.repo_dir.clone()
         };
         let path_to_live = PathBuf::from(&self.repos_dir)
@@ -1475,7 +1488,6 @@ impl GitFs {
     fn get_path_to_build_folder(&self, ino: NormalIno) -> anyhow::Result<PathBuf> {
         let repo_dir = {
             let repo = self.get_repo(ino.to_norm_u64())?;
-            let repo = repo.lock().map_err(|_| anyhow!("Lock poisoned"))?;
             repo.repo_dir.clone()
         };
         let repo_dir_path = self.repos_dir.join(repo_dir).join("build");
@@ -1485,7 +1497,6 @@ impl GitFs {
     fn build_full_path(&self, ino: NormalIno) -> anyhow::Result<PathBuf> {
         let repo_ino = {
             let repo = self.get_repo(ino.into())?;
-            let repo = repo.lock().map_err(|_| anyhow!("Lock poisoned"))?;
             GitFs::repo_id_to_ino(repo.repo_id)
         };
         let path = PathBuf::from(&self.repos_dir);
@@ -1502,7 +1513,7 @@ impl GitFs {
 impl GitFs {
     pub fn insert_repo(
         &self,
-        repo: Arc<Mutex<GitRepo>>,
+        repo: Arc<GitRepo>,
         repo_name: &str,
         repo_id: u16,
     ) -> anyhow::Result<()> {
@@ -1572,7 +1583,6 @@ impl GitFs {
             let parent_oid = self.get_oid_from_db(ino.into())?;
             let build_root = self.get_path_to_build_folder(ino)?;
             let repo = self.get_repo(ino.into())?;
-            let mut repo = repo.lock().map_err(|_| anyhow!("Lock poisoned"))?;
             let session = repo.get_or_init_build_session(parent_oid, &build_root)?;
             drop(repo);
             session.finish_path(self, ino)?
@@ -1681,7 +1691,7 @@ impl GitFs {
         })
     }
 
-    fn get_repo(&self, ino: u64) -> anyhow::Result<Arc<Mutex<GitRepo>>> {
+    fn get_repo(&self, ino: u64) -> anyhow::Result<Arc<GitRepo>> {
         let repo_id = (ino >> REPO_SHIFT) as u16;
         let repo = self
             .repos_list
@@ -1691,16 +1701,13 @@ impl GitFs {
     }
 
     pub fn get_parent_commit(&self, ino: u64) -> anyhow::Result<Oid> {
-        let repo_arc = self.get_repo(ino)?;
+        let repo = self.get_repo(ino)?;
 
         let mut cur = ino;
         let mut oid = self.get_oid_from_db(ino)?;
         let max_steps = 1000;
         let mut i = 0;
-        while {
-            let repo = repo_arc.lock().map_err(|_| anyhow!("Lock poisoned"))?;
-            repo.inner.find_commit(oid).is_err()
-        } {
+        while repo.with_repo(|r| r.find_commit(oid).is_err()) {
             i += 1;
             let parent_ino = self.get_single_parent(cur)?;
             oid = self.get_oid_from_db(parent_ino)?;
@@ -1721,9 +1728,8 @@ impl GitFs {
     }
 
     fn is_commit(&self, ino: NormalIno, oid: Oid) -> anyhow::Result<bool> {
-        let repo_arc = self.get_repo(ino.to_norm_u64())?;
-        let repo = repo_arc.lock().map_err(|_| anyhow!("Lock poisoned"))?;
-        Ok(repo.inner.find_commit(oid).is_ok())
+        let repo = self.get_repo(ino.to_norm_u64())?;
+        Ok(repo.with_repo(|r| r.find_commit(oid).is_ok()))
     }
 
     fn is_in_live(&self, ino: NormalIno) -> anyhow::Result<bool> {
@@ -1734,13 +1740,12 @@ impl GitFs {
     }
 
     fn next_inode_checked(&self, parent: u64) -> anyhow::Result<u64> {
-        let repo_arc = self.get_repo(parent)?;
-        let mut repo = repo_arc.lock().map_err(|_| anyhow!("Lock poisoned"))?;
+        let repo = self.get_repo(parent)?;
 
         loop {
             let ino = self.next_inode_raw(parent)?;
 
-            if repo.res_inodes.insert(ino) {
+            if repo.with_state_mut(|s| s.res_inodes.insert(ino)) {
                 return Ok(ino);
             }
         }
@@ -2250,7 +2255,6 @@ impl GitFs {
         MetaDb::get_oid_from_db(&conn, ino)
     }
 
-    #[instrument(level = "error", skip(self), fields(ino = %ino), ret(level = Level::DEBUG), err(Display))]
     fn inode_exists(&self, ino: u64) -> anyhow::Result<bool> {
         let repo_id = GitFs::ino_to_repo_id(ino);
         let repo_db = self
@@ -2352,10 +2356,7 @@ impl GitFs {
     }
 
     fn get_repo_ino(&self, ino: u64) -> anyhow::Result<u64> {
-        let repo_id = {
-            let repo = self.get_repo(ino)?;
-            repo.lock().map_err(|_| anyhow!("Lock poisoned"))?.repo_id
-        };
+        let repo_id = self.get_repo(ino)?.repo_id;
         Ok(GitFs::repo_id_to_ino(repo_id))
     }
 }

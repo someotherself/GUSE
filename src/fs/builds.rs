@@ -3,10 +3,8 @@ use std::{
     sync::atomic::{AtomicBool, AtomicUsize},
 };
 
-use anyhow::anyhow;
 use git2::Oid;
 use tempfile::TempDir;
-use tracing::instrument;
 
 use crate::{
     fs::{
@@ -69,7 +67,6 @@ pub struct BuildOperationCtx {
 }
 
 impl BuildOperationCtx {
-    #[instrument(level = "debug", skip(fs), err(Display))]
     pub fn new(fs: &GitFs, ino: NormalIno) -> anyhow::Result<Option<Self>> {
         let case = classify_inode(fs, ino.to_norm_u64())?;
 
@@ -81,12 +78,7 @@ impl BuildOperationCtx {
             let parent_oid = fs.parent_commit_build_session(ino)?;
             TargetCommit::BuildHead(parent_oid)
         } else {
-            let exists = {
-                let repo = fs.get_repo(ino.to_norm_u64())?;
-                let repo = repo.lock().map_err(|_| anyhow!("Lock poisoned"))?;
-                repo.inner.find_commit(oid).is_ok()
-            };
-            if !exists {
+            if !fs.is_commit(ino, oid)? {
                 return Ok(None);
             }
             TargetCommit::Commit(oid)
@@ -99,7 +91,6 @@ impl BuildOperationCtx {
                 TargetCommit::BuildHead(o) | TargetCommit::Commit(o) => o,
             };
             let repo = fs.get_repo(ino.to_norm_u64())?;
-            let mut repo = repo.lock().map_err(|_| anyhow!("Lock poisoned"))?;
             repo.get_or_init_build_session(oid, &build_root)?
         };
         let temp_dir = build_session.folder.path().to_path_buf();

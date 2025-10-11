@@ -1,6 +1,6 @@
 use std::ffi::{OsStr, OsString};
 
-use anyhow::{anyhow, bail};
+use anyhow::bail;
 
 use crate::{
     fs::{GitFs, fileattr::FileAttr},
@@ -22,14 +22,12 @@ pub fn link_git(
         tracing::error!("This directory is read only");
         bail!(std::io::Error::from_raw_os_error(libc::EACCES))
     }
+    let repo = fs.get_repo(source_ino.to_norm_u64())?;
 
     let original = {
         let parent_oid = fs.parent_commit_build_session(source_ino)?;
         let build_root = fs.get_path_to_build_folder(source_ino)?;
-        let repo = fs.get_repo(source_ino.to_norm_u64())?;
-        let mut repo = repo.lock().map_err(|_| anyhow!("Lock poisoned"))?;
         let session = repo.get_or_init_build_session(parent_oid, &build_root)?;
-        drop(repo);
         session.finish_path(fs, source_ino)?
     };
 
@@ -37,10 +35,7 @@ pub fn link_git(
         let ino = newparent;
         let parent_oid = fs.parent_commit_build_session(ino)?;
         let build_root = fs.get_path_to_build_folder(ino)?;
-        let repo = fs.get_repo(ino.to_norm_u64())?;
-        let mut repo = repo.lock().map_err(|_| anyhow!("Lock poisoned"))?;
         let session = repo.get_or_init_build_session(parent_oid, &build_root)?;
-        drop(repo);
         session.finish_path(fs, ino)?.join(newname)
     };
     std::fs::hard_link(&original, &link)?;

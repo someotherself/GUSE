@@ -359,7 +359,7 @@ impl fuser::Filesystem for GitFsAdapter {
         let truncate = flags as u32 & libc::O_TRUNC as u32 != 0;
 
         let open_flag = match fs.get_ino_flag_from_db(ino.into()) {
-            Ok(flag) if flag == InoFlag::InsideSnap => consts::FOPEN_KEEP_CACHE,
+            Ok(InoFlag::InsideSnap) => consts::FOPEN_KEEP_CACHE,
             _ => {
                 if !write && !truncate {
                     consts::FOPEN_KEEP_CACHE
