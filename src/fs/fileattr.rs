@@ -28,8 +28,12 @@ pub struct FileAttr {
     pub flags: u32,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct Dentry {}
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Dentry {
+    pub target_ino: u64,
+    pub parent_ino: u64,
+    pub target_name: OsString,
+}
 
 #[derive(Clone, Debug)]
 pub struct ObjectAttr {
@@ -128,6 +132,7 @@ impl From<CreateFileAttr> for FileAttr {
 }
 
 /// Used for inodes table in meta_db
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct StoredAttr {
     pub ino: u64,
     pub ino_flag: InoFlag,
@@ -182,6 +187,39 @@ pub struct StorageNode {
     pub parent_ino: u64,
     pub name: OsString,
     pub attr: StoredAttr,
+}
+
+impl From<StoredAttr> for FileAttr {
+    fn from(value: StoredAttr) -> Self {
+        let perm = 0o775;
+        let nlink = 1;
+        let kind = try_into_filetype(value.git_mode as u64).unwrap_or(FileType::RegularFile);
+        let blocks = value.size.div_ceil(512);
+        let atime = pair_to_system_time(value.atime_secs, value.atime_nsecs as i32);
+        let mtime = pair_to_system_time(value.mtime_secs, value.mtime_nsecs as i32);
+        let ctime = pair_to_system_time(value.ctime_secs, value.ctime_nsecs as i32);
+
+        Self {
+            ino: value.ino,
+            ino_flag: value.ino_flag,
+            oid: value.oid,
+            size: value.size,
+            blocks,
+            atime,
+            mtime,
+            ctime,
+            crtime: ctime,
+            kind,
+            perm,
+            git_mode: value.git_mode,
+            nlink,
+            uid: value.uid,
+            gid: value.gid,
+            rdev: value.rdev,
+            blksize: 4096,
+            flags: value.flags,
+        }
+    }
 }
 
 impl From<FileAttr> for StoredAttr {

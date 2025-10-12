@@ -481,6 +481,7 @@ fn log_entries(
 pub fn read_virtual_dir(fs: &GitFs, ino: VirtualIno) -> anyhow::Result<Vec<DirectoryEntry>> {
     let repo = fs.get_repo(u64::from(ino))?;
     let v_node_opt = repo.with_state(|s| s.vdir_cache.get(&ino).cloned());
+    drop(repo);
     let v_node = match v_node_opt {
         Some(o) => o,
         None => bail!("Oid missing"),
@@ -500,6 +501,7 @@ pub fn read_virtual_dir(fs: &GitFs, ino: VirtualIno) -> anyhow::Result<Vec<Direc
         let log_entries = log_entries(fs, ino.to_norm_u64(), origin_oid)?;
         let repo = fs.get_repo(u64::from(ino))?;
         let v_node_opt = repo.with_state(|s| s.vdir_cache.get(&ino).cloned());
+        drop(repo);
         let mut v_node = match v_node_opt {
             Some(o) => o,
             None => bail!("Oid missing"),
@@ -524,11 +526,11 @@ pub fn read_virtual_dir(fs: &GitFs, ino: VirtualIno) -> anyhow::Result<Vec<Direc
                 entry.1.git_mode,
             ));
         }
-        drop(repo);
         fs.write_inodes_to_db(nodes)?;
     } else {
         let repo = fs.get_repo(u64::from(ino))?;
         let v_node_opt = repo.with_state(|s| s.vdir_cache.get(&ino).cloned());
+        drop(repo);
         let v_node = match v_node_opt {
             Some(o) => o,
             None => bail!("Oid missing"),

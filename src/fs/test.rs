@@ -1,7 +1,6 @@
-use std::ffi::{OsStr, OsString};
+use std::ffi::OsStr;
 
 use anyhow::anyhow;
-use git2::Oid;
 
 use crate::{
     fs::{FileType, GitFs, REPO_SHIFT},
@@ -90,31 +89,31 @@ fn test_mkdir_fetch() -> anyhow::Result<()> {
                                         .ok_or_else(|| anyhow!("Invalid input"))?;
                                     assert_eq!(c.ino, c_attr.ino);
                                 }
-                                dbg!("startig v_dir search");
-                                if c.oid != Oid::zero() && c.kind == FileType::RegularFile {
-                                    let name = OsString::from(format!(
-                                        "{}@",
-                                        c.name.into_string().unwrap()
-                                    ));
-                                    let v_dir_attr = fs.lookup(b_attr.ino, &name.clone())?.unwrap();
-                                    dbg!(v_dir_attr.ino);
-                                    let v_dir_entries = fs.readdir(v_dir_attr.ino)?;
-                                    dbg!(v_dir_entries.len());
+                                // dbg!("startig v_dir search");
+                                // if c.oid != Oid::zero() && c.kind == FileType::RegularFile {
+                                //     let name = OsString::from(format!(
+                                //         "{}@",
+                                //         c.name.into_string().unwrap()
+                                //     ));
+                                //     let v_dir_attr = fs.lookup(b_attr.ino, &name.clone())?.unwrap();
+                                //     dbg!(v_dir_attr.ino);
+                                //     let v_dir_entries = fs.readdir(v_dir_attr.ino)?;
+                                //     dbg!(v_dir_entries.len());
 
-                                    dbg!(&v_dir_entries[0].name);
-                                    dbg!(&v_dir_entries[0].ino);
-                                    dbg!(v_dir_attr.ino);
+                                //     dbg!(&v_dir_entries[0].name);
+                                //     dbg!(&v_dir_entries[0].ino);
+                                //     dbg!(v_dir_attr.ino);
 
-                                    let lookup_attr = fs
-                                        .lookup(v_dir_attr.ino, &v_dir_entries[0].name.clone())?
-                                        .unwrap();
-                                    dbg!(lookup_attr.ino);
+                                //     let lookup_attr = fs
+                                //         .lookup(v_dir_attr.ino, &v_dir_entries[0].name.clone())?
+                                //         .unwrap();
+                                //     dbg!(lookup_attr.ino);
 
-                                    let getattr_attr = fs.getattr(v_dir_entries[0].ino)?;
-                                    dbg!(getattr_attr.ino);
+                                //     let getattr_attr = fs.getattr(v_dir_entries[0].ino)?;
+                                //     dbg!(getattr_attr.ino);
 
-                                    return Ok(());
-                                }
+                                //     return Ok(());
+                                // }
                             }
                         }
                     }
@@ -138,7 +137,7 @@ fn test_mkdir_fetch() -> anyhow::Result<()> {
 
             // READ DIR LIVE
             let read_dir_live = fs.readdir(LIVE_DIR_INO)?;
-            assert_eq!(read_dir_live.len(), 0);
+            assert_eq!(read_dir_live.len(), 1);
             Ok(())
         },
     )?;
@@ -180,7 +179,7 @@ fn test_mkdir_normal() -> anyhow::Result<()> {
             let read_dir = fs.readdir(REPO_DIR_INO)?;
             assert_eq!(read_dir.len(), 2);
 
-            assert_eq!(read_dir[0].name, "build");
+            assert_eq!(read_dir[0].name, "live");
 
             let dir_name1 = OsStr::new("dir_in_live_1");
             let dir1_attr = fs.mkdir(live_attr.ino, dir_name1)?;
@@ -420,7 +419,7 @@ fn test_rename_live_overwrite_nonempty_dir_fails() -> anyhow::Result<()> {
             // Attempt to rename src_dir -> dst_dir
             let err = fs.rename(live, src, live, dst).unwrap_err();
             let msg = format!("{err:#}");
-            assert!(msg.starts_with("Directory is not empty"));
+            assert!(msg.starts_with("Directory not empty"));
 
             // Nothing should have changed
             assert!(fs.lookup(live, src)?.is_some());

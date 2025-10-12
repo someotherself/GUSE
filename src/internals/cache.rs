@@ -4,13 +4,13 @@ use std::{
     sync::Mutex,
 };
 
-struct Entry<V: Copy> {
+struct Entry<V: Clone> {
     pub value: V,
     pub next: Option<u64>, // towards the LRU (tail)
     pub prev: Option<u64>, // towards the MRU (head)
 }
 
-impl<V: Copy> Entry<V> {
+impl<V: Clone> Entry<V> {
     pub fn new(value: V) -> Self {
         Self {
             value,
@@ -20,7 +20,7 @@ impl<V: Copy> Entry<V> {
     }
 }
 
-struct Inner<V: Copy> {
+struct Inner<V: Clone> {
     map: HashMap<u64, Entry<V>>,
     head: Option<u64>, // MRU
     tail: Option<u64>, // LRU
@@ -28,11 +28,11 @@ struct Inner<V: Copy> {
 }
 
 #[allow(private_interfaces)]
-pub struct LruCache<V: Copy> {
+pub struct LruCache<V: Clone> {
     pub list: Mutex<Inner<V>>,
 }
 
-impl<V: Copy> Inner<V> {
+impl<V: Clone> Inner<V> {
     pub fn new(capacity: NonZeroUsize) -> Self {
         Self {
             map: HashMap::new(),
@@ -166,11 +166,11 @@ impl<V: Copy> Inner<V> {
 
     fn peek(&self, ino: u64) -> Option<V> {
         let entry = self.map.get(&ino)?;
-        Some(entry.value)
+        Some(entry.value.clone())
     }
 }
 
-impl<V: Copy> LruCache<V> {
+impl<V: Clone> LruCache<V> {
     pub fn new(capacity: usize) -> Self {
         if capacity == 0 {
             tracing::error!("Cache capacity must be greater than 0!")
@@ -191,7 +191,7 @@ impl<V: Copy> LruCache<V> {
         };
         guard.unlink(ino);
         guard.push_front_unckecked(ino);
-        guard.map.get(&ino).map(|e| e.value)
+        guard.map.get(&ino).map(|e| e.value.clone())
     }
 
     pub fn with_get_mut<R>(&self, ino: u64, f: impl FnOnce(&mut V) -> R) -> Option<R> {
@@ -215,6 +215,21 @@ impl<V: Copy> LruCache<V> {
         }
         guard.insert_front(ino, entry);
         guard.peek(ino)
+    }
+
+    pub fn insert_many(&self, items: Vec<(u64, V)>) -> Option<()> {
+        let mut guard = self.list.lock().unwrap();
+        for item in items {
+            let ino = item.0;
+            let e = item.1;
+            guard.insert_front(ino, e);
+        }
+        {
+            while guard.map.len() >= guard.capacity.into() {
+                guard.evict()?;
+            }
+        }
+        Some(())
     }
 
     /// Lookup an entry without promotion

@@ -1,6 +1,5 @@
 use anyhow::{Context, anyhow, bail};
 use chrono::{DateTime, Datelike};
-use fuser::FileAttr;
 use git2::{
     Commit, Delta, Direction, FileMode, ObjectType, Oid, Repository, Sort, Time, Tree,
     TreeWalkResult,
@@ -17,7 +16,11 @@ use std::{
 };
 
 use crate::{
-    fs::{ObjectAttr, builds::BuildSession, fileattr::Dentry},
+    fs::{
+        ObjectAttr,
+        builds::BuildSession,
+        fileattr::{Dentry, StoredAttr},
+    },
     inodes::VirtualIno,
     internals::cache::LruCache,
 };
@@ -27,6 +30,10 @@ pub struct GitRepo {
     pub repo_id: u16,
     pub inner: Mutex<Repository>,
     pub state: RwLock<State>,
+    /// FileAttr Cache
+    pub attr_cache: LruCache<StoredAttr>,
+    /// Direntry Cache
+    pub dentry_cache: LruCache<Dentry>,
 }
 
 pub struct State {
@@ -41,10 +48,6 @@ pub struct State {
     pub vdir_cache: BTreeMap<VirtualIno, VirtualNode>,
     /// Oid = Commit Oid
     pub build_sessions: HashMap<Oid, Arc<BuildSession>>,
-    /// FileAttr Cache
-    pub attr_cache: LruCache<FileAttr>,
-    /// Direntry Cache
-    pub dentry_cache: LruCache<Dentry>,
 }
 
 /// Insert/get a node during getattr/lookup
@@ -214,7 +217,7 @@ impl GitRepo {
     }
 
     pub fn fetch_anon(&self, url: &str) -> anyhow::Result<()> {
-        // Set up the anonymous remote and callbacks
+        // Set up the anonymous remote and callbacks self
         let repo = self.inner.lock();
         let mut remote = repo.remote_anonymous(url)?;
         let mut cbs = git2::RemoteCallbacks::new();
@@ -268,8 +271,7 @@ impl GitRepo {
 
         remote.fetch(&refs_as_str, Some(&mut fo), None)?;
 
-        if self.with_repo(|r| r.head().is_err()) {
-            let repo = self.inner.lock();
+        if repo.head().is_err() {
             if let Some(ref buf) = default_branch {
                 if let Ok(src) = std::str::from_utf8(buf.as_ref()) {
                     let short = src
@@ -288,12 +290,12 @@ impl GitRepo {
                         }
                     }
                 }
-            } else if let Ok(r) = repo.find_reference("refs/remotes/anon/HEAD") {
-                if let Some(sym) = r.symbolic_target() {
-                    repo.set_head(sym)?;
-                } else if let Some(oid) = r.target() {
-                    repo.set_head_detached(oid)?;
-                }
+            }
+        } else if let Ok(r) = repo.find_reference("refs/remotes/anon/HEAD") {
+            if let Some(sym) = r.symbolic_target() {
+                repo.set_head(sym)?;
+            } else if let Some(oid) = r.target() {
+                repo.set_head_detached(oid)?;
             }
         }
         Ok(())
@@ -497,7 +499,6 @@ impl GitRepo {
             }
             let tree = commit.tree()?;
             if let Some(attr) = {
-                let repo = self.inner.lock();
                 self.object_attr_for_path_in_tree(&repo, &tree, &current_path, &commit, blob_count)?
             } {
                 if last_pushed_oid != Some(attr.oid) {
