@@ -7,7 +7,6 @@ use std::{
 
 use anyhow::{anyhow, bail};
 use git2::{Oid, Time};
-use tracing::{Level, instrument};
 
 use crate::{
     fs::{
@@ -19,7 +18,6 @@ use crate::{
     namespec,
 };
 
-#[instrument(level = "debug", skip(fs), fields(ino = %ino), ret(level = Level::DEBUG), err(Display))]
 pub fn open_live(
     fs: &GitFs,
     ino: NormalIno,
@@ -44,7 +42,6 @@ pub fn open_live(
     Ok(fh)
 }
 
-#[instrument(level = "debug", skip(fs), fields(ino = %ino), ret(level = Level::DEBUG), err(Display))]
 pub fn open_git(
     fs: &GitFs,
     ino: NormalIno,
@@ -94,7 +91,6 @@ pub fn open_git(
     open_blob(fs, oid, ino.to_norm_u64(), read)
 }
 
-#[instrument(level = "debug", skip(fs), fields(ino = %ino), ret(level = Level::DEBUG), err(Display))]
 pub fn open_vfile(fs: &GitFs, ino: Inodes, read: bool, write: bool) -> anyhow::Result<u64> {
     let res = classify_inode(fs, ino.to_u64_v())?;
     match res {
@@ -208,7 +204,6 @@ pub fn create_vfile_entry(fs: &GitFs, ino: VirtualIno) -> anyhow::Result<u64> {
     Ok(len)
 }
 
-#[instrument(level = "debug", skip(fs), fields(ino = %ino), ret(level = Level::DEBUG), err(Display))]
 pub fn open_vdir(
     fs: &GitFs,
     ino: NormalIno,
@@ -231,7 +226,6 @@ pub fn open_vdir(
     open_blob(fs, oid, ino.into(), read)
 }
 
-#[instrument(level = "debug", skip(fs), fields(ino = %ino), ret(level = Level::DEBUG), err(Display))]
 fn open_blob(fs: &GitFs, oid: Oid, ino: u64, read: bool) -> anyhow::Result<u64> {
     let buf = {
         let repo = fs.get_repo(ino)?;

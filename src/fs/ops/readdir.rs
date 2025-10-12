@@ -7,7 +7,6 @@ use std::{
 
 use anyhow::bail;
 use git2::{FileMode, ObjectType, Oid};
-use tracing::instrument;
 
 use crate::{
     fs::{
@@ -226,7 +225,6 @@ pub fn classify_inode(fs: &GitFs, ino: u64) -> anyhow::Result<DirCase> {
 // Performance is a priority
 // Build folder does not persist on disk
 // Get metadata from DB, do not check files on disk for metadata
-#[instrument(level = "debug", skip(fs), fields(ino = %ino), err(Display))]
 fn read_build_dir(fs: &GitFs, ino: NormalIno) -> anyhow::Result<Vec<DirectoryEntry>> {
     let mut out = Vec::new();
 
@@ -344,7 +342,6 @@ fn dot_git_root(fs: &GitFs, parent_ino: u64) -> anyhow::Result<DirectoryEntry> {
     Ok(entry)
 }
 
-#[instrument(level = "debug", skip(fs), err(Display))]
 fn populate_build_entries(
     fs: &GitFs,
     ino: NormalIno,
@@ -369,7 +366,6 @@ fn populate_build_entries(
     Ok(out)
 }
 
-#[instrument(level = "debug", skip(fs), err(Display))]
 pub fn readdir_git_dir(fs: &GitFs, parent: NormalIno) -> anyhow::Result<Vec<DirectoryEntry>> {
     let ino_flag = fs.get_ino_flag_from_db(parent)?;
     let repo = fs.get_repo(parent.into())?;

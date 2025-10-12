@@ -1,7 +1,5 @@
 use std::ffi::{OsStr, OsString};
 
-use tracing::instrument;
-
 use crate::{
     fs::{
         FileAttr, GitFs,
@@ -82,7 +80,6 @@ pub fn lookup_live(
     Ok(Some(attr))
 }
 
-#[instrument(level = "debug", skip(fs), fields(parent = %parent), err(Display))]
 pub fn lookup_git(fs: &GitFs, parent: NormalIno, name: &OsStr) -> anyhow::Result<Option<FileAttr>> {
     let Ok(attr) = fs.get_metadata_by_name(parent, name) else {
         return Ok(None);
@@ -90,7 +87,6 @@ pub fn lookup_git(fs: &GitFs, parent: NormalIno, name: &OsStr) -> anyhow::Result
     Ok(Some(attr))
 }
 
-#[instrument(level = "debug", skip(fs), fields(parent = %parent), err(Display))]
 pub fn lookup_vdir(
     fs: &GitFs,
     parent: VirtualIno,
