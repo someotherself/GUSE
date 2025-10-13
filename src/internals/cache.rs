@@ -4,7 +4,7 @@ type NodeId = u32;
 
 struct Entry<K: Debug, V> {
     key: K,
-    value: V,
+    value: Option<V>,
     next: Option<NodeId>, // towards the LRU (tail)
     prev: Option<NodeId>, // towards the MRU (head)
 }
@@ -13,7 +13,7 @@ impl<K: Debug, V> Entry<K, V> {
     pub fn new(key: K, value: V) -> Self {
         Self {
             key,
-            value,
+            value: Some(value),
             next: None,
             prev: None,
         }
@@ -64,8 +64,7 @@ where
 
         // Fix the head
         self.head = Some(id);
-        let entry = self.nodes[id as usize].value.clone();
-        Some(entry)
+        self.nodes[id as usize].value.clone()
     }
 
     fn unlink(&mut self, id: NodeId) {
@@ -115,7 +114,7 @@ where
         let old_key = &self.nodes[tail as usize].key;
         self.map.remove_entry(old_key)?;
         let out = &mut self.nodes[tail as usize];
-        Some((out.key.clone(), out.value.clone()))
+        Some((out.key.clone(), out.value.clone().unwrap()))
     }
 
     fn insert_front(&mut self, key: K, value: V) -> NodeId {
@@ -145,8 +144,7 @@ where
     }
 
     fn peek(&self, id: NodeId) -> Option<V> {
-        let entry = self.nodes[id as usize].value.clone();
-        Some(entry)
+        self.nodes[id as usize].value.clone()
     }
 }
 
@@ -182,7 +180,7 @@ where
         guard.unlink(id);
         guard.push_front(id);
         let entry = &mut guard.nodes[id as usize];
-        Some(f(&mut entry.value))
+        Some(f(entry.value.as_mut().unwrap()))
     }
 
     // Returns the old value if it already exists
@@ -195,21 +193,31 @@ where
         }
         if let Some(&id) = guard.map.get(&key) {
             // Entry already exists
-            let old = std::mem::replace(&mut guard.nodes[id as usize].value, value);
+            let old = guard.nodes[id as usize].value.replace(value);
             guard.unlink(id);
             guard.push_front(id);
-            Some(old)
+            old
         } else {
             guard.insert_front(key, value);
             None
         }
     }
 
+    pub fn remove(&self, key: K) -> Option<V> {
+        let mut guard = self.list.lock().unwrap();
+        if let Some(&p) = guard.map.get(&key) {
+            guard.unlink(p);
+            guard.map.remove(&key);
+            return std::mem::take(&mut guard.nodes[p as usize].value);
+        }
+        None
+    }
+
     pub fn peek(&self, key: K) -> Option<V> {
         let guard = self.list.lock().unwrap();
         if let Some(&id) = guard.map.get(&key) {
             let entry = guard.nodes.get(id as usize)?;
-            Some(entry.value.clone())
+            entry.value.clone()
         } else {
             None
         }
