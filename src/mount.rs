@@ -25,7 +25,7 @@ use std::time::{Duration, SystemTime};
 use std::{num::NonZeroU32, path::PathBuf};
 
 use crate::fs::fileattr::{
-    FileAttr, FileType, InoFlag, SetStoredAttr, dir_attr, pair_to_system_time, system_time_to_pair,
+    FileAttr, FileType, InoFlag, SetFileAttr, dir_attr, pair_to_system_time, system_time_to_pair,
 };
 use crate::fs::ops::readdir::{DirectoryEntry, DirectoryEntryPlus};
 use crate::fs::{GitFs, REPO_SHIFT, ROOT_INO, SourceTypes, repo};
@@ -681,47 +681,38 @@ impl fuser::Filesystem for GitFsAdapter {
         flags: Option<u32>,
         reply: ReplyAttr,
     ) {
-        let ud = uid.unwrap_or(42059);
-        let gd = gid.unwrap_or(42059);
-        let sz = size.unwrap_or(42059);
-        let handle = fh.unwrap_or(42059);
-        let mode = mode.unwrap_or(42059);
-        let flgs = flags.unwrap_or(42059);
         let fs = self.getfs();
 
-        let (atime_secs_opt, atime_nsecs_opt) = match atime {
-            Some(TimeOrNow::Now) => {
-                let (secs, nsecs) = system_time_to_pair(SystemTime::now());
-                (Some(secs), Some(nsecs))
-            }
-            Some(TimeOrNow::SpecificTime(t)) => {
-                let (secs, nsecs) = system_time_to_pair(t);
-                (Some(secs), Some(nsecs))
-            }
-            _ => (None, None),
+        let atime_opt = match atime {
+            Some(TimeOrNow::Now) => Some(SystemTime::now()),
+            Some(TimeOrNow::SpecificTime(t)) => Some(t),
+            None => None,
         };
-        let (mtime_secs_opt, mtime_nsecs_opt) = match mtime {
-            Some(TimeOrNow::Now) => {
-                let (secs, nsecs) = system_time_to_pair(SystemTime::now());
-                (Some(secs), Some(nsecs))
-            }
-            Some(TimeOrNow::SpecificTime(t)) => {
-                let (secs, nsecs) = system_time_to_pair(t);
-                (Some(secs), Some(nsecs))
-            }
-            _ => (None, None),
+        let mtime_opt = match mtime {
+            Some(TimeOrNow::Now) => Some(SystemTime::now()),
+            Some(TimeOrNow::SpecificTime(t)) => Some(t),
+            None => None,
         };
 
-        let set_stored_attr = SetStoredAttr {
+        let set_stored_attr: SetFileAttr = SetFileAttr {
             ino,
+            ino_flag: None,
+            oid: None,
             size,
+            blocks: None,
+            atime: atime_opt,
+            mtime: mtime_opt,
+            ctime,
+            crtime: None,
+            kind: None,
+            perm: None,
+            git_mode: None,
+            nlink: None,
             uid,
             gid,
+            rdev: None,
+            blksize: None,
             flags,
-            atime_secs: atime_secs_opt,
-            atime_nsecs: atime_nsecs_opt,
-            mtime_secs: mtime_secs_opt,
-            mtime_nsecs: mtime_nsecs_opt,
         };
 
         let mut attr = match fs.update_db_metadata(set_stored_attr) {
@@ -729,15 +720,11 @@ impl fuser::Filesystem for GitFsAdapter {
             Err(e) => return reply.error(errno_from_anyhow(&e)),
         };
 
-        if let Some(atime_secs) = atime_secs_opt
-            && let Some(atime_nsecs) = atime_nsecs_opt
-        {
-            attr.atime = pair_to_system_time(atime_secs, atime_nsecs);
+        if let Some(atime) = atime_opt {
+            attr.atime = atime;
         };
-        if let Some(mtime_secs) = mtime_secs_opt
-            && let Some(mtime_nsecs) = mtime_nsecs_opt
-        {
-            attr.mtime = pair_to_system_time(mtime_secs, mtime_nsecs);
+        if let Some(mtime) = mtime_opt {
+            attr.mtime = mtime;
         };
 
         if let Some(size) = size

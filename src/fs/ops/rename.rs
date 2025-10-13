@@ -89,7 +89,7 @@ pub fn rename_live(
     let nodes = vec![StorageNode {
         parent_ino: new_parent.to_norm_u64(),
         name: new_name.into(),
-        attr: new_attr.into(),
+        attr: new_attr,
     }];
     fs.write_inodes_to_db(nodes)?;
     Ok(())
@@ -158,7 +158,7 @@ pub fn rename_git_build(
     let node = StorageNode {
         parent_ino: new_parent.to_norm_u64(),
         name: new_name.into(),
-        attr: new_attr.into(),
+        attr: new_attr,
     };
     fs.update_db_record(old_parent, old_name, node)?;
 

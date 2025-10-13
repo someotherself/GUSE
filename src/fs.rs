@@ -18,7 +18,7 @@ use git2::{FileMode, ObjectType, Oid};
 use tracing::{Level, field, info, instrument};
 
 use crate::fs::fileattr::{
-    CreateFileAttr, FileAttr, FileType, InoFlag, ObjectAttr, SetStoredAttr, StorageNode, dir_attr,
+    CreateFileAttr, FileAttr, FileType, InoFlag, ObjectAttr, SetFileAttr, StorageNode, dir_attr,
     file_attr,
 };
 use crate::fs::handles::FileHandles;
@@ -409,7 +409,7 @@ impl GitFs {
         let nodes: Vec<StorageNode> = vec![StorageNode {
             parent_ino: ROOT_INO,
             name: repo_name.into(),
-            attr: repo_attr.into(),
+            attr: repo_attr,
         }];
         self.write_inodes_to_db(nodes)?;
 
@@ -447,12 +447,12 @@ impl GitFs {
             StorageNode {
                 parent_ino: repo_ino,
                 name: live_name,
-                attr: live_attr.into(),
+                attr: live_attr,
             },
             StorageNode {
                 parent_ino: repo_ino,
                 name: build_name,
-                attr: build_attr.into(),
+                attr: build_attr,
             },
         ];
 
@@ -494,7 +494,7 @@ impl GitFs {
                 nodes.push(StorageNode {
                     parent_ino: cur_parent,
                     name: entry.file_name(),
-                    attr: attr.into(),
+                    attr,
                 });
             }
             fs.write_inodes_to_db(nodes)?;
@@ -528,7 +528,7 @@ impl GitFs {
         let nodes: Vec<StorageNode> = vec![StorageNode {
             parent_ino: ROOT_INO,
             name: repo_name.into(),
-            attr: repo_attr.into(),
+            attr: repo_attr,
         }];
         self.write_inodes_to_db(nodes)?;
 
@@ -564,12 +564,12 @@ impl GitFs {
             StorageNode {
                 parent_ino: repo_ino,
                 name: live_name,
-                attr: live_attr.into(),
+                attr: live_attr,
             },
             StorageNode {
                 parent_ino: repo_ino,
                 name: build_name,
-                attr: build_attr.into(),
+                attr: build_attr,
             },
         ];
 
@@ -1611,7 +1611,7 @@ impl GitFs {
     }
 
     #[instrument(level = "debug", skip(self, stored_attr), fields(ino = %stored_attr.ino), err(Display))]
-    pub fn update_db_metadata(&self, stored_attr: SetStoredAttr) -> anyhow::Result<FileAttr> {
+    pub fn update_db_metadata(&self, stored_attr: SetFileAttr) -> anyhow::Result<FileAttr> {
         let target_ino = stored_attr.ino;
 
         // Update the DB
@@ -2157,7 +2157,7 @@ impl GitFs {
                 nodes.push(StorageNode {
                     parent_ino: cur_dir,
                     name: e.entry.name,
-                    attr: e.attr.into(),
+                    attr: e.attr,
                 });
             }
 
