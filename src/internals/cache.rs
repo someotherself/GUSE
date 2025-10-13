@@ -173,6 +173,18 @@ where
         guard.push_front(id)
     }
 
+    pub fn with_get_mut<R>(&self, key: K, f: impl FnOnce(&mut V) -> R) -> Option<R> {
+        let mut guard = self.list.lock().unwrap();
+        if !guard.map.contains_key(&key) {
+            return None;
+        }
+        let id = *guard.map.get(&key)?;
+        guard.unlink(id);
+        guard.push_front(id);
+        let entry = &mut guard.nodes[id as usize];
+        Some(f(&mut entry.value))
+    }
+
     // Returns the old value if it already exists
     fn insert(&self, key: K, value: V) -> Option<V> {
         let mut guard = self.list.lock().unwrap();
