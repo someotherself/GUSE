@@ -16,8 +16,8 @@ use crate::{
     fs::{
         ROOT_INO,
         fileattr::{
-            FileAttr, FileType, InoFlag, SetStoredAttr, StorageNode, pair_to_system_time,
-            try_into_filetype,
+            FileAttr, FileType, InoFlag, SetFileAttr, StorageNode, pair_to_system_time,
+            system_time_to_pair, try_into_filetype,
         },
         ops::readdir::DirectoryEntry,
     },
@@ -99,7 +99,7 @@ pub enum DbWriteMsg {
         resp: Option<Resp<()>>,
     },
     UpdateMetadata {
-        attr: SetStoredAttr,
+        attr: SetFileAttr,
         resp: Resp<()>,
     },
     /// Send and forget
@@ -338,6 +338,9 @@ impl MetaDb {
 
         for node in nodes {
             let a = &node.attr;
+            let (atime_secs, atime_nsecs) = system_time_to_pair(a.atime);
+            let (mtime_secs, mtime_nsecs) = system_time_to_pair(a.mtime);
+            let (ctime_secs, ctime_nsecs) = system_time_to_pair(a.ctime);
 
             upsert_inode.execute(params![
                 a.ino as i64,
@@ -347,12 +350,12 @@ impl MetaDb {
                 a.ino_flag as i64,
                 a.uid as i64,
                 a.gid as i64,
-                a.atime_secs,
-                a.atime_nsecs as i64,
-                a.mtime_secs,
-                a.mtime_nsecs as i64,
-                a.ctime_secs,
-                a.ctime_nsecs as i64,
+                atime_secs,
+                atime_nsecs,
+                mtime_secs,
+                mtime_nsecs,
+                ctime_secs,
+                ctime_nsecs,
                 a.rdev as i64,
                 a.flags as i64,
             ])?;
@@ -401,10 +404,24 @@ impl MetaDb {
         Ok(())
     }
 
-    pub fn update_inodes_table<C>(tx: &C, attr: SetStoredAttr) -> anyhow::Result<()>
+    pub fn update_inodes_table<C>(tx: &C, attr: SetFileAttr) -> anyhow::Result<()>
     where
         C: std::ops::Deref<Target = rusqlite::Connection>,
     {
+        let (atime_secs, atime_nsecs) = match attr.atime {
+            Some(atime) => {
+                let (s, n) = system_time_to_pair(atime);
+                (Some(s), Some(n))
+            }
+            None => (None, None),
+        };
+        let (mtime_secs, mtime_nsecs) = match attr.mtime {
+            Some(mtime) => {
+                let (s, n) = system_time_to_pair(mtime);
+                (Some(s), Some(n))
+            }
+            None => (None, None),
+        };
         tx.execute(
             r#"
             UPDATE inode_map SET
@@ -424,10 +441,10 @@ impl MetaDb {
                 ":uid":       attr.uid.map(|v| v as i64),
                 ":gid":       attr.gid.map(|v| v as i64),
                 ":flags":     attr.flags.map(|v| v as i64),
-                ":atime_s":   attr.atime_secs,
-                ":atime_ns":  attr.atime_nsecs.map(|v| v as i64),
-                ":mtime_s":   attr.mtime_secs,
-                ":mtime_ns":  attr.mtime_nsecs.map(|v| v as i64),
+                ":atime_s":   atime_secs,
+                ":atime_ns":  atime_nsecs.map(|v| v as i64),
+                ":mtime_s":   mtime_secs,
+                ":mtime_ns":  mtime_nsecs.map(|v| v as i64),
             },
         )?;
         Ok(())
@@ -917,6 +934,9 @@ impl MetaDb {
     {
         {
             let a = &node.attr;
+            let (atime_secs, atime_nsecs) = system_time_to_pair(a.atime);
+            let (mtime_secs, mtime_nsecs) = system_time_to_pair(a.mtime);
+            let (ctime_secs, ctime_nsecs) = system_time_to_pair(a.ctime);
             tx.execute(
                 r#"
                 INSERT INTO inode_map
@@ -948,12 +968,12 @@ impl MetaDb {
                     a.ino_flag as i64,
                     a.uid as i64,
                     a.gid as i64,
-                    a.atime_secs,
-                    a.atime_nsecs as i64,
-                    a.mtime_secs,
-                    a.mtime_nsecs as i64,
-                    a.ctime_secs,
-                    a.ctime_nsecs as i64,
+                    atime_secs,
+                    atime_nsecs,
+                    mtime_secs,
+                    mtime_nsecs,
+                    ctime_secs,
+                    ctime_nsecs,
                     a.rdev as i64,
                     a.flags as i64,
                 ],

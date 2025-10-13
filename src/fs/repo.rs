@@ -26,7 +26,7 @@ pub struct GitRepo {
     pub inner: Mutex<Repository>,
     pub state: RwLock<State>,
     // / FileAttr Cache
-    // pub attr_cache: LruCache<u64, StoredAttr>,
+    // pub attr_cache: LruCache<u64, FileAttr>,
     // / Direntry Cache
     // pub dentry_cache: LruCache<u64, Dentry>,
 }

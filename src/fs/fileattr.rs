@@ -131,26 +131,6 @@ impl From<CreateFileAttr> for FileAttr {
     }
 }
 
-/// Used for inodes table in meta_db
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct StoredAttr {
-    pub ino: u64,
-    pub ino_flag: InoFlag,
-    pub oid: Oid,
-    pub size: u64,
-    pub git_mode: u32,
-    pub uid: u32,
-    pub gid: u32,
-    pub atime_secs: i64,
-    pub atime_nsecs: i32,
-    pub mtime_secs: i64,
-    pub mtime_nsecs: i32,
-    pub ctime_secs: i64,
-    pub ctime_nsecs: i32,
-    pub rdev: u32,
-    pub flags: u32,
-}
-
 pub fn system_time_to_pair(t: SystemTime) -> (i64, i32) {
     match t.duration_since(UNIX_EPOCH) {
         Ok(dur) => (dur.as_secs() as i64, dur.subsec_nanos() as i32),
@@ -170,15 +150,24 @@ pub fn pair_to_system_time(secs: i64, nsecs: i32) -> SystemTime {
     }
 }
 
-pub struct SetStoredAttr {
+pub struct SetFileAttr {
     pub ino: u64,
+    pub ino_flag: Option<InoFlag>,
+    pub oid: Option<Oid>,
     pub size: Option<u64>,
+    pub blocks: Option<u64>,
+    pub atime: Option<SystemTime>,
+    pub mtime: Option<SystemTime>,
+    pub ctime: Option<SystemTime>,
+    pub crtime: Option<SystemTime>,
+    pub kind: Option<FileType>,
+    pub perm: Option<u16>,
+    pub git_mode: Option<u32>,
+    pub nlink: Option<u32>,
     pub uid: Option<u32>,
     pub gid: Option<u32>,
-    pub atime_secs: Option<i64>,
-    pub atime_nsecs: Option<i32>,
-    pub mtime_secs: Option<i64>,
-    pub mtime_nsecs: Option<i32>,
+    pub rdev: Option<u32>,
+    pub blksize: Option<u32>,
     pub flags: Option<u32>,
 }
 
@@ -186,66 +175,7 @@ pub struct SetStoredAttr {
 pub struct StorageNode {
     pub parent_ino: u64,
     pub name: OsString,
-    pub attr: StoredAttr,
-}
-
-impl From<StoredAttr> for FileAttr {
-    fn from(value: StoredAttr) -> Self {
-        let perm = 0o775;
-        let nlink = 1;
-        let kind = try_into_filetype(value.git_mode as u64).unwrap_or(FileType::RegularFile);
-        let blocks = value.size.div_ceil(512);
-        let atime = pair_to_system_time(value.atime_secs, value.atime_nsecs);
-        let mtime = pair_to_system_time(value.mtime_secs, value.mtime_nsecs);
-        let ctime = pair_to_system_time(value.ctime_secs, value.ctime_nsecs);
-
-        Self {
-            ino: value.ino,
-            ino_flag: value.ino_flag,
-            oid: value.oid,
-            size: value.size,
-            blocks,
-            atime,
-            mtime,
-            ctime,
-            crtime: ctime,
-            kind,
-            perm,
-            git_mode: value.git_mode,
-            nlink,
-            uid: value.uid,
-            gid: value.gid,
-            rdev: value.rdev,
-            blksize: 4096,
-            flags: value.flags,
-        }
-    }
-}
-
-impl From<FileAttr> for StoredAttr {
-    fn from(value: FileAttr) -> Self {
-        let (atime_secs, atime_nsecs) = system_time_to_pair(value.atime);
-        let (mtime_secs, mtime_nsecs) = system_time_to_pair(value.mtime);
-        let (ctime_secs, ctime_nsecs) = system_time_to_pair(value.ctime);
-
-        Self {
-            ino: value.ino,
-            ino_flag: value.ino_flag,
-            oid: value.oid,
-            size: value.size,
-            git_mode: value.git_mode,
-            uid: value.uid,
-            gid: value.gid,
-            atime_secs,
-            atime_nsecs,
-            mtime_secs,
-            mtime_nsecs,
-            ctime_secs,
-            ctime_nsecs,
-            rdev: value.rdev,
-            flags: value.flags,
-        }
-    }
+    pub attr: FileAttr,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]

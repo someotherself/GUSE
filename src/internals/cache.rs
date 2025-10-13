@@ -4,7 +4,7 @@ type NodeId = u32;
 
 struct Entry<K: Debug, V> {
     key: K,
-    value: V,
+    value: Option<V>,
     next: Option<NodeId>, // towards the LRU (tail)
     prev: Option<NodeId>, // towards the MRU (head)
 }
@@ -13,7 +13,7 @@ impl<K: Debug, V> Entry<K, V> {
     pub fn new(key: K, value: V) -> Self {
         Self {
             key,
-            value,
+            value: Some(value),
             next: None,
             prev: None,
         }
@@ -64,8 +64,7 @@ where
 
         // Fix the head
         self.head = Some(id);
-        let entry = self.nodes[id as usize].value.clone();
-        Some(entry)
+        self.nodes[id as usize].value.clone()
     }
 
     fn unlink(&mut self, id: NodeId) {
@@ -115,7 +114,7 @@ where
         let old_key = &self.nodes[tail as usize].key;
         self.map.remove_entry(old_key)?;
         let out = &mut self.nodes[tail as usize];
-        Some((out.key.clone(), out.value.clone()))
+        Some((out.key.clone(), out.value.clone().unwrap()))
     }
 
     fn insert_front(&mut self, key: K, value: V) -> NodeId {
@@ -145,8 +144,7 @@ where
     }
 
     fn peek(&self, id: NodeId) -> Option<V> {
-        let entry = self.nodes[id as usize].value.clone();
-        Some(entry)
+        self.nodes[id as usize].value.clone()
     }
 }
 
@@ -173,6 +171,18 @@ where
         guard.push_front(id)
     }
 
+    pub fn with_get_mut<R>(&self, key: K, f: impl FnOnce(&mut V) -> R) -> Option<R> {
+        let mut guard = self.list.lock().unwrap();
+        if !guard.map.contains_key(&key) {
+            return None;
+        }
+        let id = *guard.map.get(&key)?;
+        guard.unlink(id);
+        guard.push_front(id);
+        let entry = &mut guard.nodes[id as usize];
+        Some(f(entry.value.as_mut().unwrap()))
+    }
+
     // Returns the old value if it already exists
     fn insert(&self, key: K, value: V) -> Option<V> {
         let mut guard = self.list.lock().unwrap();
@@ -183,21 +193,31 @@ where
         }
         if let Some(&id) = guard.map.get(&key) {
             // Entry already exists
-            let old = std::mem::replace(&mut guard.nodes[id as usize].value, value);
+            let old = guard.nodes[id as usize].value.replace(value);
             guard.unlink(id);
             guard.push_front(id);
-            Some(old)
+            old
         } else {
             guard.insert_front(key, value);
             None
         }
     }
 
+    pub fn remove(&self, key: K) -> Option<V> {
+        let mut guard = self.list.lock().unwrap();
+        if let Some(&p) = guard.map.get(&key) {
+            guard.unlink(p);
+            guard.map.remove(&key);
+            return std::mem::take(&mut guard.nodes[p as usize].value);
+        }
+        None
+    }
+
     pub fn peek(&self, key: K) -> Option<V> {
         let guard = self.list.lock().unwrap();
         if let Some(&id) = guard.map.get(&key) {
             let entry = guard.nodes.get(id as usize)?;
-            Some(entry.value.clone())
+            entry.value.clone()
         } else {
             None
         }
@@ -297,201 +317,201 @@ mod test {
         assert!(lru.peek(30).is_some());
     }
 
-    // #[test]
-    // fn test_lru_remove_unlinks_and_deletes() {
-    //     let lru: LruCache<u64, FileAttr> = LruCache::new(3);
-    //     let attr: FileAttr = dir_attr(crate::fs::fileattr::InoFlag::LiveRoot).into();
+    #[test]
+    fn test_lru_remove_unlinks_and_deletes() {
+        let lru: LruCache<u64, FileAttr> = LruCache::new(3);
+        let attr: FileAttr = dir_attr(crate::fs::fileattr::InoFlag::LiveRoot).into();
 
-    //     lru.insert(1, attr);
-    //     lru.insert(2, attr);
-    //     lru.insert(3, attr);
+        lru.insert(1, attr);
+        lru.insert(2, attr);
+        lru.insert(3, attr);
 
-    //     assert!(lru.remove(2).is_some());
-    //     assert!(lru.peek(2).is_none());
+        assert!(lru.remove(2).is_some());
+        assert!(lru.peek(2).is_none());
 
-    //     lru.insert(4, attr);
-    //     lru.insert(5, attr);
-    //     let survivors = (lru.peek(1).is_some() as u8) + (lru.peek(3).is_some() as u8);
-    //     assert_eq!(survivors, 1);
-    //     assert!(lru.peek(4).is_some());
-    // }
+        lru.insert(4, attr);
+        lru.insert(5, attr);
+        let survivors = (lru.peek(1).is_some() as u8) + (lru.peek(3).is_some() as u8);
+        assert_eq!(survivors, 1);
+        assert!(lru.peek(4).is_some());
+    }
 
-    // #[test]
-    // fn test_lru_get_miss_returns_none() {
-    //     let lru: LruCache<u64, FileAttr> = LruCache::new(2);
-    //     assert!(lru.get(9999).is_none());
-    //     assert!(lru.peek(9999).is_none());
-    //     assert!(lru.remove(9999).is_none());
-    // }
+    #[test]
+    fn test_lru_get_miss_returns_none() {
+        let lru: LruCache<u64, FileAttr> = LruCache::new(2);
+        assert!(lru.get(9999).is_none());
+        assert!(lru.peek(9999).is_none());
+        assert!(lru.remove(9999).is_none());
+    }
 
-    // #[test]
-    // fn test_lru_single_element_behaviour() {
-    //     let lru: LruCache<u64, FileAttr> = LruCache::new(1);
-    //     let attr: FileAttr = dir_attr(crate::fs::fileattr::InoFlag::LiveRoot).into();
+    #[test]
+    fn test_lru_single_element_behaviour() {
+        let lru: LruCache<u64, FileAttr> = LruCache::new(1);
+        let attr: FileAttr = dir_attr(crate::fs::fileattr::InoFlag::LiveRoot).into();
 
-    //     lru.insert(1, attr);
-    //     assert!(lru.peek(1).is_some());
+        lru.insert(1, attr);
+        assert!(lru.peek(1).is_some());
 
-    //     assert!(lru.get(1).is_some());
+        assert!(lru.get(1).is_some());
 
-    //     lru.insert(2, attr);
-    //     assert!(lru.peek(1).is_none());
-    //     assert!(lru.peek(2).is_some());
-    // }
+        lru.insert(2, attr);
+        assert!(lru.peek(1).is_none());
+        assert!(lru.peek(2).is_some());
+    }
 
-    // #[test]
-    // fn test_lru_promote_then_evict_correct_tail() {
-    //     let lru: LruCache<u64, FileAttr> = LruCache::new(3);
-    //     let attr: FileAttr = dir_attr(crate::fs::fileattr::InoFlag::LiveRoot).into();
+    #[test]
+    fn test_lru_promote_then_evict_correct_tail() {
+        let lru: LruCache<u64, FileAttr> = LruCache::new(3);
+        let attr: FileAttr = dir_attr(crate::fs::fileattr::InoFlag::LiveRoot).into();
 
-    //     lru.insert(1, attr);
-    //     lru.insert(2, attr);
-    //     lru.insert(3, attr);
+        lru.insert(1, attr);
+        lru.insert(2, attr);
+        lru.insert(3, attr);
 
-    //     assert!(lru.get(2).is_some());
+        assert!(lru.get(2).is_some());
 
-    //     lru.insert(4, attr);
-    //     assert!(lru.peek(1).is_none());
-    //     assert!(lru.peek(2).is_some());
-    //     assert!(lru.peek(3).is_some());
-    //     assert!(lru.peek(4).is_some());
-    // }
+        lru.insert(4, attr);
+        assert!(lru.peek(1).is_none());
+        assert!(lru.peek(2).is_some());
+        assert!(lru.peek(3).is_some());
+        assert!(lru.peek(4).is_some());
+    }
 
-    // #[test]
-    // fn test_lru_repeated_get_is_idempotent_for_head() {
-    //     let lru: LruCache<u64, FileAttr> = LruCache::new(3);
-    //     let attr: FileAttr = dir_attr(crate::fs::fileattr::InoFlag::LiveRoot).into();
+    #[test]
+    fn test_lru_repeated_get_is_idempotent_for_head() {
+        let lru: LruCache<u64, FileAttr> = LruCache::new(3);
+        let attr: FileAttr = dir_attr(crate::fs::fileattr::InoFlag::LiveRoot).into();
 
-    //     lru.insert(1, attr);
-    //     lru.insert(2, attr);
-    //     lru.insert(3, attr);
+        lru.insert(1, attr);
+        lru.insert(2, attr);
+        lru.insert(3, attr);
 
-    //     assert!(lru.get(3).is_some());
-    //     assert!(lru.get(3).is_some());
-    //     assert!(lru.get(3).is_some());
+        assert!(lru.get(3).is_some());
+        assert!(lru.get(3).is_some());
+        assert!(lru.get(3).is_some());
 
-    //     lru.insert(4, attr);
-    //     assert!(lru.peek(1).is_none());
-    //     assert!(lru.peek(2).is_some());
-    //     assert!(lru.peek(3).is_some());
-    //     assert!(lru.peek(4).is_some());
-    // }
+        lru.insert(4, attr);
+        assert!(lru.peek(1).is_none());
+        assert!(lru.peek(2).is_some());
+        assert!(lru.peek(3).is_some());
+        assert!(lru.peek(4).is_some());
+    }
 
-    // #[test]
-    // fn test_lru_with_get_mut_updates_value_and_promotes() {
-    //     let lru: LruCache<i32, i32> = LruCache::new(2);
+    #[test]
+    fn test_lru_with_get_mut_updates_value_and_promotes() {
+        let lru: LruCache<i32, i32> = LruCache::new(2);
 
-    //     lru.insert(1, 10);
-    //     lru.insert(2, 20);
+        lru.insert(1, 10);
+        lru.insert(2, 20);
 
-    //     let out = lru.with_get_mut(1, |v| {
-    //         *v += 5;
-    //         *v
-    //     });
-    //     assert_eq!(out, Some(15));
-    //     assert_eq!(lru.peek(1), Some(15));
+        let out = lru.with_get_mut(1, |v| {
+            *v += 5;
+            *v
+        });
+        assert_eq!(out, Some(15));
+        assert_eq!(lru.peek(1), Some(15));
 
-    //     lru.insert(3, 30);
-    //     assert_eq!(lru.peek(2), None);
-    //     assert_eq!(lru.peek(1), Some(15));
-    //     assert_eq!(lru.peek(3), Some(30));
-    // }
+        lru.insert(3, 30);
+        assert_eq!(lru.peek(2), None);
+        assert_eq!(lru.peek(1), Some(15));
+        assert_eq!(lru.peek(3), Some(30));
+    }
 
-    // #[test]
-    // fn test_lru_with_get_mut_miss_returns_none_and_does_not_insert() {
-    //     let lru = LruCache::new(2);
+    #[test]
+    fn test_lru_with_get_mut_miss_returns_none_and_does_not_insert() {
+        let lru: LruCache<i32, i32> = LruCache::new(2);
 
-    //     lru.insert(1, 1);
-    //     lru.insert(2, 2);
+        lru.insert(1, 1);
+        lru.insert(2, 2);
 
-    //     let called = lru.with_get_mut(999, |v| {
-    //         *v += 1;
-    //         *v
-    //     });
-    //     assert_eq!(called, None);
-    //     assert_eq!(lru.peek(999), None);
+        let called = lru.with_get_mut(999, |v| {
+            *v += 1;
+            *v
+        });
+        assert_eq!(called, None);
+        assert_eq!(lru.peek(999), None);
 
-    //     assert_eq!(lru.peek(1), Some(1));
-    //     assert_eq!(lru.peek(2), Some(2));
-    // }
+        assert_eq!(lru.peek(1), Some(1));
+        assert_eq!(lru.peek(2), Some(2));
+    }
 
-    // #[test]
-    // fn test_lru_with_get_mut_is_idempotent_for_head() {
-    //     let lru = LruCache::new(2);
+    #[test]
+    fn test_lru_with_get_mut_is_idempotent_for_head() {
+        let lru: LruCache<i32, i32> = LruCache::new(2);
 
-    //     lru.insert(1, 100);
-    //     lru.insert(2, 200);
+        lru.insert(1, 100);
+        lru.insert(2, 200);
 
-    //     let r1 = lru.with_get_mut(2, |v| {
-    //         *v += 1;
-    //         *v
-    //     });
-    //     let r2 = lru.with_get_mut(2, |v| {
-    //         *v += 1;
-    //         *v
-    //     });
-    //     assert_eq!(r1, Some(201));
-    //     assert_eq!(r2, Some(202));
-    //     assert_eq!(lru.peek(2), Some(202));
+        let r1 = lru.with_get_mut(2, |v| {
+            *v += 1;
+            *v
+        });
+        let r2 = lru.with_get_mut(2, |v| {
+            *v += 1;
+            *v
+        });
+        assert_eq!(r1, Some(201));
+        assert_eq!(r2, Some(202));
+        assert_eq!(lru.peek(2), Some(202));
 
-    //     lru.insert(3, 300);
-    //     assert_eq!(lru.peek(1), None);
-    //     assert_eq!(lru.peek(2), Some(202));
-    //     assert_eq!(lru.peek(3), Some(300));
-    // }
+        lru.insert(3, 300);
+        assert_eq!(lru.peek(1), None);
+        assert_eq!(lru.peek(2), Some(202));
+        assert_eq!(lru.peek(3), Some(300));
+    }
 
-    // #[test]
-    // fn test_lru_with_get_mut_return_value_is_bubbled_up() {
-    //     let lru = LruCache::new(3);
-    //     lru.insert(42, 7);
+    #[test]
+    fn test_lru_with_get_mut_return_value_is_bubbled_up() {
+        let lru: LruCache<i32, i32> = LruCache::new(3);
+        lru.insert(42, 7);
 
-    //     let ret = lru.with_get_mut(42, |v| {
-    //         *v *= 3;
-    //         *v % 10
-    //     });
+        let ret = lru.with_get_mut(42, |v| {
+            *v *= 3;
+            *v % 10
+        });
 
-    //     assert_eq!(ret, Some(1)); // (7*3)=21; 21 % 10 = 1
-    //     assert_eq!(lru.peek(42), Some(21));
-    // }
+        assert_eq!(ret, Some(1)); // (7*3)=21; 21 % 10 = 1
+        assert_eq!(lru.peek(42), Some(21));
+    }
 
-    // #[test]
-    // fn with_get_mut_on_tail_promotes_to_head_then_eviction_spares_it() {
-    //     let lru = LruCache::new(3);
-    //     lru.insert(1, 11);
-    //     lru.insert(2, 22);
-    //     lru.insert(3, 33);
+    #[test]
+    fn with_get_mut_on_tail_promotes_to_head_then_eviction_spares_it() {
+        let lru: LruCache<i32, i32> = LruCache::new(3);
+        lru.insert(1, 11);
+        lru.insert(2, 22);
+        lru.insert(3, 33);
 
-    //     assert_eq!(
-    //         lru.with_get_mut(1, |v| {
-    //             *v += 1;
-    //             *v
-    //         }),
-    //         Some(12)
-    //     );
-    //     assert_eq!(lru.peek(1), Some(12));
+        assert_eq!(
+            lru.with_get_mut(1, |v| {
+                *v += 1;
+                *v
+            }),
+            Some(12)
+        );
+        assert_eq!(lru.peek(1), Some(12));
 
-    //     lru.insert(4, 44);
-    //     assert_eq!(lru.peek(2), None);
-    //     assert_eq!(lru.peek(1), Some(12));
-    //     assert_eq!(lru.peek(3), Some(33));
-    //     assert_eq!(lru.peek(4), Some(44));
+        lru.insert(4, 44);
+        assert_eq!(lru.peek(2), None);
+        assert_eq!(lru.peek(1), Some(12));
+        assert_eq!(lru.peek(3), Some(33));
+        assert_eq!(lru.peek(4), Some(44));
 
-    //     lru.insert(5, 55);
-    //     assert_eq!(lru.peek(3), None);
-    //     assert_eq!(lru.peek(1), Some(12));
-    //     assert_eq!(lru.peek(4), Some(44));
-    //     assert_eq!(lru.peek(5), Some(55));
-    // }
+        lru.insert(5, 55);
+        assert_eq!(lru.peek(3), None);
+        assert_eq!(lru.peek(1), Some(12));
+        assert_eq!(lru.peek(4), Some(44));
+        assert_eq!(lru.peek(5), Some(55));
+    }
 
-    // #[test]
-    // fn test_lru_change_size_in_attr() {
-    //     let lru: LruCache<u64, FileAttr> = LruCache::new(3);
-    //     let mut attr: FileAttr = dir_attr(crate::fs::fileattr::InoFlag::LiveRoot).into();
-    //     attr.size = 10;
+    #[test]
+    fn test_lru_change_size_in_attr() {
+        let lru: LruCache<u64, FileAttr> = LruCache::new(3);
+        let mut attr: FileAttr = dir_attr(crate::fs::fileattr::InoFlag::LiveRoot).into();
+        attr.size = 10;
 
-    //     lru.insert(1, attr);
-    //     lru.with_get_mut(1, |a| a.size = 12);
-    //     let attr = lru.get(1).unwrap();
-    //     assert_eq!(attr.size, 12);
-    // }
+        lru.insert(1, attr);
+        lru.with_get_mut(1, |a| a.size = 12);
+        let attr = lru.get(1).unwrap();
+        assert_eq!(attr.size, 12);
+    }
 }

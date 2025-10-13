@@ -58,7 +58,7 @@ pub fn mkdir_live(
     let nodes = vec![StorageNode {
         parent_ino: parent,
         name: name.into(),
-        attr: attr.into(),
+        attr,
     }];
     fs.write_inodes_to_db(nodes)?;
 
@@ -96,7 +96,7 @@ pub fn mkdir_git(
     let nodes = vec![StorageNode {
         parent_ino: parent.to_norm_u64(),
         name: name.into(),
-        attr: attr.into(),
+        attr,
     }];
     fs.write_inodes_to_db(nodes)?;
 

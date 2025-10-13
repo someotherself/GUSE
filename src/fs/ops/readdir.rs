@@ -149,7 +149,7 @@ pub fn readdir_repo_dir(fs: &GitFs, parent: NormalIno) -> anyhow::Result<Vec<Dir
                     nodes.push(StorageNode {
                         parent_ino: parent,
                         name: month.name.clone(),
-                        attr: attr.into(),
+                        attr,
                     });
                     DirectoryEntry::new(entry_ino, attr.oid, month.name, attr.kind, attr.git_mode)
                 }
@@ -187,7 +187,7 @@ pub fn readdir_live_dir(fs: &GitFs, ino: NormalIno) -> anyhow::Result<Vec<Direct
                 nodes.push(StorageNode {
                     parent_ino: ino,
                     name: node_name.clone(),
-                    attr: attr.into(),
+                    attr,
                 });
             }
         };
@@ -297,7 +297,7 @@ fn read_inside_dot_git(fs: &GitFs, parent_ino: NormalIno) -> anyhow::Result<Vec<
                 nodes.push(StorageNode {
                     parent_ino: parent_ino.into(),
                     name: node_name.clone(),
-                    attr: attr.into(),
+                    attr,
                 });
             }
         };
@@ -326,7 +326,7 @@ fn dot_git_root(fs: &GitFs, parent_ino: u64) -> anyhow::Result<DirectoryEntry> {
             let nodes: Vec<StorageNode> = vec![StorageNode {
                 parent_ino,
                 name: name.to_os_string(),
-                attr: attr.into(),
+                attr,
             }];
             fs.write_inodes_to_db(nodes)?;
             ino
@@ -445,7 +445,7 @@ fn objects_to_dir_entries(
                 nodes.push(StorageNode {
                     parent_ino: parent.to_norm_u64(),
                     name: entry.name.clone(),
-                    attr: attr.into(),
+                    attr,
                 });
                 ino
             }
@@ -515,7 +515,7 @@ pub fn read_virtual_dir(fs: &GitFs, ino: VirtualIno) -> anyhow::Result<Vec<Direc
                 nodes.push(StorageNode {
                     parent_ino: ino.to_norm_u64(),
                     name: name.clone(),
-                    attr: attr.into(),
+                    attr,
                 });
             }
             dir_entries.push(DirectoryEntry::new(

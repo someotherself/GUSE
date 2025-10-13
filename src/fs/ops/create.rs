@@ -31,7 +31,7 @@ pub fn create_live(
     let nodes = vec![StorageNode {
         parent_ino: parent,
         name: name.into(),
-        attr: attr.into(),
+        attr,
     }];
     fs.write_inodes_to_db(nodes)?;
     {
@@ -69,7 +69,7 @@ pub fn create_git(
     let nodes = vec![StorageNode {
         parent_ino: parent.to_norm_u64(),
         name: name.into(),
-        attr: attr.into(),
+        attr,
     }];
     fs.write_inodes_to_db(nodes)?;
     let _ = fs.notifier.try_send(InvalMsg::Entry {
