@@ -16,13 +16,8 @@ use std::{
 };
 
 use crate::{
-    fs::{
-        ObjectAttr,
-        builds::BuildSession,
-        fileattr::{Dentry, StoredAttr},
-    },
+    fs::{ObjectAttr, builds::BuildSession},
     inodes::VirtualIno,
-    internals::cache::LruCache,
 };
 
 pub struct GitRepo {
@@ -30,10 +25,10 @@ pub struct GitRepo {
     pub repo_id: u16,
     pub inner: Mutex<Repository>,
     pub state: RwLock<State>,
-    /// FileAttr Cache
-    pub attr_cache: LruCache<StoredAttr>,
-    /// Direntry Cache
-    pub dentry_cache: LruCache<Dentry>,
+    // / FileAttr Cache
+    // pub attr_cache: LruCache<u64, StoredAttr>,
+    // / Direntry Cache
+    // pub dentry_cache: LruCache<u64, Dentry>,
 }
 
 pub struct State {
@@ -272,22 +267,22 @@ impl GitRepo {
         remote.fetch(&refs_as_str, Some(&mut fo), None)?;
 
         if repo.head().is_err() {
-            if let Some(ref buf) = default_branch {
-                if let Ok(src) = std::str::from_utf8(buf.as_ref()) {
-                    let short = src
-                        .rsplit('/')
-                        .next()
-                        .ok_or_else(|| anyhow!("Invalid ref"))?;
-                    let target = format!("refs/remotes/anon/{short}");
-                    // If that ref exists, point HEAD to it; else fall back to anon/HEAD
-                    if repo.refname_to_id(&target).is_ok() {
-                        repo.set_head(&target)?;
-                    } else if let Ok(r) = repo.find_reference("refs/remotes/anon/HEAD") {
-                        if let Some(sym) = r.symbolic_target() {
-                            repo.set_head(sym)?;
-                        } else if let Some(oid) = r.target() {
-                            repo.set_head_detached(oid)?;
-                        }
+            if let Some(ref buf) = default_branch
+                && let Ok(src) = std::str::from_utf8(buf.as_ref())
+            {
+                let short = src
+                    .rsplit('/')
+                    .next()
+                    .ok_or_else(|| anyhow!("Invalid ref"))?;
+                let target = format!("refs/remotes/anon/{short}");
+                // If that ref exists, point HEAD to it; else fall back to anon/HEAD
+                if repo.refname_to_id(&target).is_ok() {
+                    repo.set_head(&target)?;
+                } else if let Ok(r) = repo.find_reference("refs/remotes/anon/HEAD") {
+                    if let Some(sym) = r.symbolic_target() {
+                        repo.set_head(sym)?;
+                    } else if let Some(oid) = r.target() {
+                        repo.set_head_detached(oid)?;
                     }
                 }
             }

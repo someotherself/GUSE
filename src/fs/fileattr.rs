@@ -195,9 +195,9 @@ impl From<StoredAttr> for FileAttr {
         let nlink = 1;
         let kind = try_into_filetype(value.git_mode as u64).unwrap_or(FileType::RegularFile);
         let blocks = value.size.div_ceil(512);
-        let atime = pair_to_system_time(value.atime_secs, value.atime_nsecs as i32);
-        let mtime = pair_to_system_time(value.mtime_secs, value.mtime_nsecs as i32);
-        let ctime = pair_to_system_time(value.ctime_secs, value.ctime_nsecs as i32);
+        let atime = pair_to_system_time(value.atime_secs, value.atime_nsecs);
+        let mtime = pair_to_system_time(value.mtime_secs, value.mtime_nsecs);
+        let ctime = pair_to_system_time(value.ctime_secs, value.ctime_nsecs);
 
         Self {
             ino: value.ino,

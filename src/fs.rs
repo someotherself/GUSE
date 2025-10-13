@@ -18,15 +18,14 @@ use git2::{FileMode, ObjectType, Oid};
 use tracing::{Level, field, info, instrument};
 
 use crate::fs::fileattr::{
-    CreateFileAttr, Dentry, FileAttr, FileType, InoFlag, ObjectAttr, SetStoredAttr, StorageNode,
-    StoredAttr, dir_attr, file_attr,
+    CreateFileAttr, FileAttr, FileType, InoFlag, ObjectAttr, SetStoredAttr, StorageNode, dir_attr,
+    file_attr,
 };
 use crate::fs::handles::FileHandles;
 use crate::fs::meta_db::{DbWriteMsg, MetaDb, oneshot, set_conn_pragmas, set_wal_once};
 use crate::fs::ops::readdir::{DirectoryEntry, DirectoryEntryPlus, DirectoryStreamCookie};
 use crate::fs::repo::{GitRepo, State, VirtualNode};
 use crate::inodes::{Inodes, NormalIno, VirtualIno};
-use crate::internals::cache::LruCache;
 use crate::mount::InvalMsg;
 use crate::namespec::NameSpec;
 
@@ -328,8 +327,8 @@ impl GitFs {
             repo_id,
             inner: parking_lot::Mutex::new(repo),
             state: parking_lot::RwLock::new(state),
-            attr_cache: LruCache::new(ATTR_LRU),
-            dentry_cache: LruCache::new(DENTRY_LRU),
+            // attr_cache: LruCache::new(ATTR_LRU),
+            // dentry_cache: LruCache::new(DENTRY_LRU),
         };
 
         let repo_rc = Arc::from(git_repo);
@@ -370,8 +369,8 @@ impl GitFs {
             repo_id,
             inner: parking_lot::Mutex::new(repo),
             state: parking_lot::RwLock::new(state),
-            attr_cache: LruCache::new(ATTR_LRU),
-            dentry_cache: LruCache::new(DENTRY_LRU),
+            // attr_cache: LruCache::new(ATTR_LRU),
+            // dentry_cache: LruCache::new(DENTRY_LRU),
         };
 
         // Find HEAD in the git repo
@@ -1913,10 +1912,6 @@ impl GitFs {
     }
 
     pub fn get_metadata(&self, target_ino: u64) -> anyhow::Result<FileAttr> {
-        if let Ok(attr) = self.get_attr_from_cache(target_ino) {
-            return Ok(attr.into());
-        }
-
         let repo_id = GitFs::ino_to_repo_id(target_ino);
         let repo_db = self
             .conn_list
@@ -1996,7 +1991,6 @@ impl GitFs {
 
     /// Send and forget but will log errors as tracing::error!
     pub fn update_size_in_db(&self, ino: NormalIno, size: u64) -> anyhow::Result<()> {
-        let _ = self.update_size_in_cache(ino.into(), size);
         let repo_id = GitFs::ino_to_repo_id(ino.into());
         let writer_tx = {
             let guard = self
@@ -2333,7 +2327,6 @@ impl GitFs {
         if nodes.is_empty() {
             return Ok(());
         }
-        self.cache_ino(&nodes)?;
 
         let repo_id = GitFs::ino_to_repo_id(nodes[0].attr.ino);
         let writer_tx = {
@@ -2362,69 +2355,5 @@ impl GitFs {
     fn get_repo_ino(&self, ino: u64) -> anyhow::Result<u64> {
         let repo_id = self.get_repo(ino)?.repo_id;
         Ok(GitFs::repo_id_to_ino(repo_id))
-    }
-
-    pub fn cache_ino(&self, nodes: &[StorageNode]) -> anyhow::Result<()> {
-        let repo_ino = nodes[0].attr.ino;
-        let repo = self.get_repo(repo_ino)?;
-
-        let mut dentries = Vec::with_capacity(nodes.len());
-        let mut attrs = Vec::with_capacity(nodes.len());
-
-        for n in nodes {
-            attrs.push((n.attr.ino, n.attr.clone()));
-            dentries.push((
-                n.attr.ino,
-                Dentry {
-                    parent_ino: n.parent_ino,
-                    target_ino: n.attr.ino,
-                    target_name: n.name.clone(),
-                },
-            ));
-        }
-
-        repo.attr_cache.insert_many(attrs);
-        repo.dentry_cache.insert_many(dentries);
-        Ok(())
-    }
-
-    fn update_size_in_cache(&self, ino: u64, size: u64) -> anyhow::Result<()> {
-        let repo = self.get_repo(ino)?;
-        repo.attr_cache.with_get_mut(ino, |a| a.size = size);
-        Ok(())
-    }
-
-    // pub fn cache_attr(&self, attrs: Vec<(u64, StoredAttr)>) -> Option<()> {
-    //     let ino = attrs[0].0;
-    //     let repo = self.get_repo(ino).ok()?;
-    //     repo.attr_cache.insert_many(attrs)
-    // }
-
-    // pub fn cache_dentry(&self, attrs: Vec<(u64, Dentry)>) -> Option<()> {
-    //     let ino = attrs[0].0;
-    //     let repo = self.get_repo(ino).ok()?;
-    //     repo.dentry_cache.insert_many(attrs)
-    // }
-
-    pub fn get_attr_from_cache(&self, ino: u64) -> anyhow::Result<StoredAttr> {
-        let repo = self.get_repo(ino)?;
-        repo.attr_cache
-            .get(ino)
-            .ok_or(anyhow!("Error getting attr from Cache"))
-    }
-
-    pub fn get_dentry_from_cache(&self, ino: u64) -> Option<Dentry> {
-        let repo = self.get_repo(ino).ok()?;
-        repo.dentry_cache.get(ino)
-    }
-
-    pub fn remove_cache_attr(&self, ino: u64) -> Option<StoredAttr> {
-        let repo = self.get_repo(ino).ok()?;
-        repo.attr_cache.remove(ino)
-    }
-
-    pub fn remove_cache_dentry(&self, ino: u64) -> Option<Dentry> {
-        let repo = self.get_repo(ino).ok()?;
-        repo.dentry_cache.remove(ino)
     }
 }
