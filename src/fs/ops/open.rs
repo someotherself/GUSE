@@ -53,7 +53,6 @@ pub fn open_git(
     let flag = fs.get_ino_flag_from_db(ino)?;
     if oid == Oid::zero() {
         // Check the cache first
-        // TODO: Create helper function for self for take_and_promote
         let file = match fs.take_file_from_cache(ino.into()) {
             Ok(file) => file,
             Err(_) => {
