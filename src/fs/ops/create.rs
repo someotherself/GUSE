@@ -1,11 +1,11 @@
-use std::{ffi::OsString, os::unix::fs::PermissionsExt};
+use std::{ffi::OsString, sync::Arc};
 
 use anyhow::bail;
 use libc::EPERM;
 
 use crate::{
     fs::{
-        GitFs,
+        GitFs, SourceTypes,
         builds::BuildOperationCtx,
         fileattr::{FileAttr, InoFlag, StorageNode, file_attr},
     },
@@ -23,10 +23,7 @@ pub fn create_live(
     let mut attr: FileAttr = file_attr(InoFlag::InsideLive).into();
     attr.ino = ino;
     let file_path = fs.get_live_path(parent.into())?.join(name);
-
-    let file = std::fs::File::create_new(&file_path)?;
-    std::fs::set_permissions(&file_path, std::fs::Permissions::from_mode(0o775))?;
-    drop(file);
+    std::fs::File::create_new(&file_path)?;
 
     let nodes = vec![StorageNode {
         parent_ino: parent,
@@ -64,7 +61,12 @@ pub fn create_git(
     let mut attr: FileAttr = file_attr(InoFlag::InsideBuild).into();
     attr.ino = ino;
 
-    std::fs::File::create_new(&file_path)?;
+    let file = std::fs::File::create_new(&file_path)?;
+    {
+        let repo = fs.get_repo(parent.into())?;
+        let real_file = SourceTypes::RealFile(Arc::new(file));
+        repo.file_cache.insert(ino, real_file);
+    }
 
     let nodes = vec![StorageNode {
         parent_ino: parent.to_norm_u64(),

@@ -150,6 +150,7 @@ pub fn pair_to_system_time(secs: i64, nsecs: i32) -> SystemTime {
     }
 }
 
+#[derive(Clone)]
 pub struct SetFileAttr {
     pub ino: u64,
     pub ino_flag: Option<InoFlag>,
@@ -172,6 +173,7 @@ pub struct SetFileAttr {
 }
 
 /// Used for passing to Gitfs::write_inodes_to_db()
+#[derive(Debug, Clone)]
 pub struct StorageNode {
     pub parent_ino: u64,
     pub name: OsString,

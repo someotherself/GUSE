@@ -16,8 +16,13 @@ use std::{
 };
 
 use crate::{
-    fs::{ObjectAttr, builds::BuildSession},
+    fs::{
+        ObjectAttr, SourceTypes,
+        builds::BuildSession,
+        fileattr::{Dentry, FileAttr},
+    },
     inodes::VirtualIno,
+    internals::cache::LruCache,
 };
 
 pub struct GitRepo {
@@ -25,10 +30,12 @@ pub struct GitRepo {
     pub repo_id: u16,
     pub inner: Mutex<Repository>,
     pub state: RwLock<State>,
-    // / FileAttr Cache
-    // pub attr_cache: LruCache<u64, FileAttr>,
-    // / Direntry Cache
-    // pub dentry_cache: LruCache<u64, Dentry>,
+    /// LruCache<target_ino, FileAttr>
+    pub attr_cache: LruCache<u64, FileAttr>,
+    /// LruCache<(parent, target_name), Dentry>
+    pub dentry_cache: LruCache<(u64, OsString), Dentry>,
+    /// LruCache<ino, >
+    pub file_cache: LruCache<u64, SourceTypes>,
 }
 
 pub struct State {

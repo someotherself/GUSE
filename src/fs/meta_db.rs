@@ -16,7 +16,7 @@ use crate::{
     fs::{
         ROOT_INO,
         fileattr::{
-            FileAttr, FileType, InoFlag, SetFileAttr, StorageNode, pair_to_system_time,
+            Dentry, FileAttr, FileType, InoFlag, SetFileAttr, StorageNode, pair_to_system_time,
             system_time_to_pair, try_into_filetype,
         },
         ops::readdir::DirectoryEntry,
@@ -88,40 +88,33 @@ pub enum DbWriteMsg {
         resp: Resp<()>,
     },
     WriteDentry {
-        parent_ino: NormalIno,
-        target_ino: NormalIno,
-        target_name: OsString,
-        resp: Resp<()>,
+        dentry: Dentry,
+        resp: Option<Resp<()>>,
     },
-    /// Send and forget
     WriteInodes {
         nodes: Vec<StorageNode>,
         resp: Option<Resp<()>>,
     },
     UpdateMetadata {
         attr: SetFileAttr,
-        resp: Resp<()>,
+        resp: Option<Resp<()>>,
     },
-    /// Send and forget
     UpdateSize {
         ino: NormalIno,
         size: u64,
-        resp: Resp<()>,
+        resp: Option<Resp<()>>,
     },
-    /// Send and forget
     UpdateRecord {
         old_parent: NormalIno,
         old_name: OsString,
         node: StorageNode,
         resp: Option<Resp<()>>,
     },
-    /// Send and forget
     RemoveDentry {
         parent_ino: NormalIno,
         target_name: OsString,
         resp: Option<Resp<()>>,
     },
-    /// Send and forget
     CleanupEntry {
         target_ino: NormalIno,
         resp: Option<Resp<()>>,
@@ -193,15 +186,20 @@ where
             results.push(resp);
             Ok(())
         }
-        DbWriteMsg::WriteDentry {
-            parent_ino,
-            target_ino,
-            target_name,
-            resp,
-        } => {
-            MetaDb::write_dentry(conn, parent_ino.into(), target_ino.into(), &target_name)?;
-            results.push(resp);
-            Ok(())
+        DbWriteMsg::WriteDentry { dentry, resp } => {
+            let res = MetaDb::write_dentry(conn, dentry);
+            match resp {
+                Some(tx) => {
+                    results.push(tx);
+                    Ok(())
+                }
+                None => {
+                    if let Err(e) = &res {
+                        tracing::warn!("db write_dentry failed: {e}");
+                    }
+                    Ok(())
+                }
+            }
         }
         DbWriteMsg::WriteInodes { nodes, resp } => {
             let res = MetaDb::write_inodes_to_db(conn, nodes);
@@ -219,14 +217,34 @@ where
             }
         }
         DbWriteMsg::UpdateMetadata { attr, resp } => {
-            MetaDb::update_inodes_table(conn, attr)?;
-            results.push(resp);
-            Ok(())
+            let res = MetaDb::update_inodes_table(conn, attr);
+            match resp {
+                Some(tx) => {
+                    results.push(tx);
+                    Ok(())
+                }
+                None => {
+                    if let Err(e) = &res {
+                        tracing::warn!("db write_inodes_to_db failed: {e}");
+                    }
+                    Ok(())
+                }
+            }
         }
         DbWriteMsg::UpdateSize { ino, size, resp } => {
-            MetaDb::update_size_in_db(conn, ino.into(), size)?;
-            results.push(resp);
-            Ok(())
+            let res = MetaDb::update_size_in_db(conn, ino.into(), size);
+            match resp {
+                Some(tx) => {
+                    results.push(tx);
+                    Ok(())
+                }
+                None => {
+                    if let Err(e) = &res {
+                        tracing::warn!("db update_size_in_db failed: {e}");
+                    }
+                    Ok(())
+                }
+            }
         }
         DbWriteMsg::UpdateRecord {
             old_parent,
@@ -467,77 +485,77 @@ impl MetaDb {
         Ok(())
     }
 
-    pub fn get_parent_ino(conn: &rusqlite::Connection, ino: u64) -> anyhow::Result<u64> {
-        let mut stmt = conn.prepare(
-            "SELECT parent_inode
-                   FROM dentries
-                  WHERE target_inode = ?1",
-        )?;
+    // pub fn get_parent_ino(conn: &rusqlite::Connection, ino: u64) -> anyhow::Result<u64> {
+    //     let mut stmt = conn.prepare(
+    //         "SELECT parent_inode
+    //                FROM dentries
+    //               WHERE target_inode = ?1",
+    //     )?;
 
-        // Execute it; fail if the row is missing
-        let parent_i64: i64 = stmt.query_row(params![ino as i64], |row| row.get(0))?;
+    //     // Execute it; fail if the row is missing
+    //     let parent_i64: i64 = stmt.query_row(params![ino as i64], |row| row.get(0))?;
 
-        Ok(parent_i64 as u64)
-    }
+    //     Ok(parent_i64 as u64)
+    // }
 
-    pub fn get_parent_name_from_ino(
-        conn: &rusqlite::Connection,
-        parent_ino: u64,
-    ) -> anyhow::Result<OsString> {
-        let mut stmt = conn.prepare(
-            "
-            SELECT name
-            FROM dentries
-            WHERE target_inode = ?1
-            LIMIT 2
-        ",
-        )?;
+    // pub fn get_parent_name_from_ino(
+    //     conn: &rusqlite::Connection,
+    //     parent_ino: u64,
+    // ) -> anyhow::Result<OsString> {
+    //     let mut stmt = conn.prepare(
+    //         "
+    //         SELECT name
+    //         FROM dentries
+    //         WHERE target_inode = ?1
+    //         LIMIT 2
+    //     ",
+    //     )?;
 
-        let name_opt: Option<Vec<u8>> = stmt.query_row(params![parent_ino], |row| row.get(0))?;
+    //     let name_opt: Option<Vec<u8>> = stmt.query_row(params![parent_ino], |row| row.get(0))?;
 
-        match name_opt {
-            Some(n) => Ok(OsString::from_vec(n)),
-            None => bail!("Parent ino {parent_ino} not found"),
-        }
-    }
+    //     match name_opt {
+    //         Some(n) => Ok(OsString::from_vec(n)),
+    //         None => bail!("Parent ino {parent_ino} not found"),
+    //     }
+    // }
 
-    pub fn get_parent_name_from_child(
-        conn: &rusqlite::Connection,
-        child_ino: u64,
-        child_name: &OsStr,
-    ) -> anyhow::Result<(u64, OsString)> {
-        let mut stmt = conn.prepare(
-            "
-            SELECT parent_inode
-            FROM dentries
-            WHERE target_inode = ?1 AND name = ?2
-            LIMIT 2
-        ",
-        )?;
+    // pub fn get_parent_name_from_child(
+    //     conn: &rusqlite::Connection,
+    //     child_ino: u64,
+    //     child_name: &OsStr,
+    // ) -> anyhow::Result<(u64, OsString)> {
+    //     let mut stmt = conn.prepare(
+    //         "
+    //         SELECT parent_inode
+    //         FROM dentries
+    //         WHERE target_inode = ?1 AND name = ?2
+    //         LIMIT 2
+    //     ",
+    //     )?;
 
-        let mut rows = stmt.query((child_ino as i64, child_name.as_bytes()))?;
-        let Some(row) = rows.next()? else {
-            anyhow::bail!(
-                "No parent found for inode {child_ino} with name {}",
-                child_name.display()
-            );
-        };
+    //     let mut rows = stmt.query((child_ino as i64, child_name.as_bytes()))?;
+    //     let Some(row) = rows.next()? else {
+    //         anyhow::bail!(
+    //             "No parent found for inode {child_ino} with name {}",
+    //             child_name.display()
+    //         );
+    //     };
 
-        let parent_ino: i64 = row.get(0)?;
+    //     let parent_ino: i64 = row.get(0)?;
 
-        let mut stmt2 = conn.prepare(
-            "
-            SELECT name
-            FROM dentries
-            WHERE target_inode = ?1
-            LIMIT 1
-            ",
-        )?;
+    //     let mut stmt2 = conn.prepare(
+    //         "
+    //         SELECT name
+    //         FROM dentries
+    //         WHERE target_inode = ?1
+    //         LIMIT 1
+    //         ",
+    //     )?;
 
-        let parent_name: Vec<u8> = stmt2.query_row([parent_ino], |row| row.get(0))?;
+    //     let parent_name: Vec<u8> = stmt2.query_row([parent_ino], |row| row.get(0))?;
 
-        Ok((parent_ino as u64, OsString::from_vec(parent_name)))
-    }
+    //     Ok((parent_ino as u64, OsString::from_vec(parent_name)))
+    // }
 
     pub fn get_dir_parent(conn: &rusqlite::Connection, ino: NormalIno) -> anyhow::Result<u64> {
         let ino = ino.to_norm_u64();
@@ -863,24 +881,22 @@ impl MetaDb {
         }
     }
 
-    pub fn write_dentry<C>(
-        tx: &C,
-        parent_ino: u64,
-        source_ino: u64,
-        target_name: &OsStr,
-    ) -> anyhow::Result<()>
+    pub fn write_dentry<C>(tx: &C, dentry: Dentry) -> anyhow::Result<()>
     where
         C: std::ops::Deref<Target = rusqlite::Connection>,
     {
-        let parent_i64 = i64::try_from(parent_ino)?;
-        let source_i64 = i64::try_from(source_ino)?;
+        let parent_i64 = i64::try_from(dentry.parent_ino)?;
+        let source_i64 = i64::try_from(dentry.target_ino)?;
 
         let parent_exists: Option<i64> = tx
             .prepare("SELECT 1 FROM inode_map WHERE inode = ?1")?
             .query_row(params![parent_i64], |r| r.get(0))
             .optional()?;
         if parent_exists.is_none() {
-            bail!("write_dentry: parent inode {} does not exist", parent_ino);
+            bail!(
+                "write_dentry: parent inode {} does not exist",
+                dentry.parent_ino
+            );
         }
 
         let target_exists: Option<i64> = tx
@@ -888,7 +904,10 @@ impl MetaDb {
             .query_row(params![source_i64], |r| r.get(0))
             .optional()?;
         if target_exists.is_none() {
-            bail!("write_dentry: Source inode {} does not exist", source_ino);
+            bail!(
+                "write_dentry: Source inode {} does not exist",
+                dentry.target_ino
+            );
         }
 
         let inserted = tx.execute(
@@ -896,7 +915,7 @@ impl MetaDb {
             INSERT INTO dentries (parent_inode, target_inode, name)
             VALUES (?1, ?2, ?3)
             "#,
-            params![parent_i64, source_i64, target_name.as_bytes()],
+            params![parent_i64, source_i64, dentry.target_name.as_bytes()],
         )?;
         if inserted != 1 {
             bail!(
@@ -916,7 +935,7 @@ impl MetaDb {
         if updated != 1 {
             bail!(
                 "write_dentry: failed to update nlink for inode {}",
-                source_ino
+                dentry.target_ino
             );
         }
 

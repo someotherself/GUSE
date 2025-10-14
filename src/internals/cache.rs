@@ -1,4 +1,7 @@
-use std::{collections::HashMap, fmt::Debug, num::NonZeroUsize, sync::Mutex};
+use std::{collections::HashMap, fmt::Debug, num::NonZeroUsize};
+
+use anyhow::bail;
+use parking_lot::RwLock;
 
 type NodeId = u32;
 
@@ -96,7 +99,7 @@ where
         }
     }
 
-    fn evict(&mut self) -> Option<(K, V)> {
+    fn evict(&mut self) -> Option<()> {
         let tail = self.tail?;
 
         let prev = self.nodes[tail as usize].prev;
@@ -113,8 +116,7 @@ where
 
         let old_key = &self.nodes[tail as usize].key;
         self.map.remove_entry(old_key)?;
-        let out = &mut self.nodes[tail as usize];
-        Some((out.key.clone(), out.value.clone().unwrap()))
+        Some(())
     }
 
     fn insert_front(&mut self, key: K, value: V) -> NodeId {
@@ -149,7 +151,7 @@ where
 }
 
 pub struct LruCache<K: Debug, V: Clone, S = ahash::RandomState> {
-    list: Mutex<Inner<K, V, S>>,
+    list: RwLock<Inner<K, V, S>>,
 }
 
 impl<K: Debug, V: Clone, S> LruCache<K, V, S>
@@ -157,22 +159,22 @@ where
     K: Eq + std::hash::Hash + Clone,
     S: core::hash::BuildHasher + Default,
 {
-    fn new(capacity: usize) -> Self {
+    pub fn new(capacity: usize) -> Self {
         let capacity = NonZeroUsize::new(capacity).expect("Non-zero capacity");
         Self {
-            list: Mutex::new(Inner::new(capacity)),
+            list: RwLock::new(Inner::new(capacity)),
         }
     }
 
-    fn get(&self, key: K) -> Option<V> {
-        let mut guard = self.list.lock().unwrap();
+    pub fn get(&self, key: K) -> Option<V> {
+        let mut guard = self.list.write();
         let id = *guard.map.get(&key)?;
         guard.unlink(id);
         guard.push_front(id)
     }
 
     pub fn with_get_mut<R>(&self, key: K, f: impl FnOnce(&mut V) -> R) -> Option<R> {
-        let mut guard = self.list.lock().unwrap();
+        let mut guard = self.list.write();
         if !guard.map.contains_key(&key) {
             return None;
         }
@@ -184,8 +186,8 @@ where
     }
 
     // Returns the old value if it already exists
-    fn insert(&self, key: K, value: V) -> Option<V> {
-        let mut guard = self.list.lock().unwrap();
+    pub fn insert(&self, key: K, value: V) -> Option<V> {
+        let mut guard = self.list.write();
         {
             while guard.map.len() >= guard.capacity.into() {
                 guard.evict();
@@ -203,8 +205,31 @@ where
         }
     }
 
+    pub fn insert_many<I>(&self, entries: I)
+    where
+        I: IntoIterator<Item = (K, V)>,
+    {
+        let mut guard = self.list.write();
+
+        for (key, value) in entries {
+            while guard.map.len() >= guard.capacity.into() {
+                guard.evict();
+            }
+
+            if let Some(&id) = guard.map.get(&key) {
+                guard.nodes[id as usize].value.replace(value.clone());
+                guard.unlink(id);
+                guard.push_front(id);
+            } else {
+                guard.insert_front(key, value);
+            }
+        }
+
+        drop(guard);
+    }
+
     pub fn remove(&self, key: K) -> Option<V> {
-        let mut guard = self.list.lock().unwrap();
+        let mut guard = self.list.write();
         if let Some(&p) = guard.map.get(&key) {
             guard.unlink(p);
             guard.map.remove(&key);
@@ -214,7 +239,7 @@ where
     }
 
     pub fn peek(&self, key: K) -> Option<V> {
-        let guard = self.list.lock().unwrap();
+        let guard = self.list.read();
         if let Some(&id) = guard.map.get(&key) {
             let entry = guard.nodes.get(id as usize)?;
             entry.value.clone()
@@ -222,12 +247,37 @@ where
             None
         }
     }
+
+    /// Takes the value out of the cache, without removing the entry
+    ///
+    /// Promotes the entry
+    pub fn take_and_promote(&self, key: K) -> Option<V> {
+        let mut guard = self.list.write();
+        if let Some(&id) = guard.map.get(&key) {
+            guard.push_front(id);
+            return std::mem::take(&mut guard.nodes[id as usize].value);
+        }
+        None
+    }
+
+    /// Puts the value back
+    ///
+    /// Only called when value was take out with take_and_promote
+    pub fn put_back(&self, key: K, value: V) -> anyhow::Result<()> {
+        let mut guard = self.list.write();
+        if let Some(&id) = guard.map.get(&key)
+            && guard.nodes[id as usize].value.is_none()
+        {
+            guard.nodes[id as usize].value.replace(value);
+            return Ok(());
+        }
+        bail!("Could not find entry in cache")
+    }
 }
 
+#[cfg(test)]
 mod test {
-    #[allow(unused_imports)]
     use super::*;
-    #[allow(unused_imports)]
     use crate::fs::fileattr::{FileAttr, dir_attr};
 
     #[test]

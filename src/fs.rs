@@ -18,14 +18,15 @@ use git2::{FileMode, ObjectType, Oid};
 use tracing::{Level, field, info, instrument};
 
 use crate::fs::fileattr::{
-    CreateFileAttr, FileAttr, FileType, InoFlag, ObjectAttr, SetFileAttr, StorageNode, dir_attr,
-    file_attr,
+    CreateFileAttr, Dentry, FileAttr, FileType, InoFlag, ObjectAttr, SetFileAttr, StorageNode,
+    dir_attr, file_attr,
 };
 use crate::fs::handles::FileHandles;
 use crate::fs::meta_db::{DbWriteMsg, MetaDb, oneshot, set_conn_pragmas, set_wal_once};
 use crate::fs::ops::readdir::{DirectoryEntry, DirectoryEntryPlus, DirectoryStreamCookie};
 use crate::fs::repo::{GitRepo, State, VirtualNode};
 use crate::inodes::{Inodes, NormalIno, VirtualIno};
+use crate::internals::cache::LruCache;
 use crate::mount::InvalMsg;
 use crate::namespec::NameSpec;
 
@@ -46,6 +47,7 @@ pub const ROOT_INO: u64 = 1;
 pub const VDIR_BIT: u64 = 1u64 << 47;
 const ATTR_LRU: usize = 10000;
 const DENTRY_LRU: usize = 10000;
+const FILE_LRU: usize = 300;
 
 enum FsOperationContext {
     /// Is the root directory
@@ -142,8 +144,9 @@ pub struct Handle {
     write: bool,
 }
 
+#[derive(Clone)]
 pub enum SourceTypes {
-    RealFile(File),
+    RealFile(Arc<File>),
     RoBlob {
         oid: Oid,
         data: Arc<Vec<u8>>,
@@ -151,6 +154,7 @@ pub enum SourceTypes {
     DirSnapshot {
         entries: Arc<Mutex<DirectoryStreamCookie>>,
     },
+    Closed,
 }
 
 /// Used for creating virtual files.
@@ -197,6 +201,9 @@ impl SourceTypes {
             Self::DirSnapshot { entries: _ } => {
                 bail!(std::io::Error::from_raw_os_error(libc::EROFS))
             }
+            Self::Closed => {
+                bail!(std::io::Error::from_raw_os_error(libc::EROFS))
+            }
         }
     }
 }
@@ -216,6 +223,7 @@ impl FileExt for SourceTypes {
                 Ok(src.len())
             }
             Self::DirSnapshot { entries: _ } => Err(std::io::Error::from_raw_os_error(libc::EROFS)),
+            Self::Closed => Err(std::io::Error::from_raw_os_error(libc::EROFS)),
         }
     }
 
@@ -224,6 +232,7 @@ impl FileExt for SourceTypes {
             Self::RealFile(file) => file.write_at(buf, offset),
             Self::RoBlob { oid: _, data: _ } => Err(std::io::Error::from_raw_os_error(libc::EROFS)),
             Self::DirSnapshot { entries: _ } => Err(std::io::Error::from_raw_os_error(libc::EROFS)),
+            Self::Closed => Err(std::io::Error::from_raw_os_error(libc::EROFS)),
         }
     }
 }
@@ -327,8 +336,9 @@ impl GitFs {
             repo_id,
             inner: parking_lot::Mutex::new(repo),
             state: parking_lot::RwLock::new(state),
-            // attr_cache: LruCache::new(ATTR_LRU),
-            // dentry_cache: LruCache::new(DENTRY_LRU),
+            attr_cache: LruCache::new(ATTR_LRU),
+            dentry_cache: LruCache::new(DENTRY_LRU),
+            file_cache: LruCache::new(FILE_LRU),
         };
 
         let repo_rc = Arc::from(git_repo);
@@ -369,8 +379,9 @@ impl GitFs {
             repo_id,
             inner: parking_lot::Mutex::new(repo),
             state: parking_lot::RwLock::new(state),
-            // attr_cache: LruCache::new(ATTR_LRU),
-            // dentry_cache: LruCache::new(DENTRY_LRU),
+            attr_cache: LruCache::new(ATTR_LRU),
+            dentry_cache: LruCache::new(DENTRY_LRU),
+            file_cache: LruCache::new(FILE_LRU),
         };
 
         // Find HEAD in the git repo
@@ -853,7 +864,13 @@ impl GitFs {
         } else {
             Some(self.prepare_writemsg(ino.into())?)
         };
-        self.handles.close(fh, writer_tx)?;
+        match self.handles.close(fh, writer_tx) {
+            Ok(Some(file)) => {
+                let _ = self.put_file_in_cache(ino, file);
+            }
+            Ok(None) => {}
+            Err(_) => return Ok(false),
+        };
         {
             let mut guard = self
                 .vfile_entry
@@ -915,6 +932,7 @@ impl GitFs {
         })
     }
 
+    #[instrument(level = "debug", skip(self), fields(target = %target), ret(level = Level::DEBUG), err(Display))]
     pub fn getattr(&self, target: u64) -> anyhow::Result<FileAttr> {
         let perms = 0o775;
         let st_mode = libc::S_IFDIR | perms;
@@ -1274,6 +1292,7 @@ impl GitFs {
         Ok(entries_plus)
     }
 
+    #[instrument(level = "debug", skip(self), fields(parent = %parent), ret(level = Level::DEBUG), err(Display))]
     pub fn lookup(&self, parent: u64, name: &OsStr) -> anyhow::Result<Option<FileAttr>> {
         // Check if name if a virtual dir
         // If not, check if the parent is a virtual dir
@@ -1613,7 +1632,7 @@ impl GitFs {
     #[instrument(level = "debug", skip(self, stored_attr), fields(ino = %stored_attr.ino), err(Display))]
     pub fn update_db_metadata(&self, stored_attr: SetFileAttr) -> anyhow::Result<FileAttr> {
         let target_ino = stored_attr.ino;
-
+        let cache_res = self.update_attr_in_cache(stored_attr.clone());
         // Update the DB
         let repo_id = GitFs::ino_to_repo_id(target_ino);
         let writer_tx = {
@@ -1625,6 +1644,7 @@ impl GitFs {
         };
 
         let (tx, rx) = oneshot::<()>();
+        let tx = if cache_res.is_ok() { None } else { Some(tx) };
 
         let msg = DbWriteMsg::UpdateMetadata {
             attr: stored_attr,
@@ -1634,12 +1654,16 @@ impl GitFs {
             .send(msg)
             .context("writer_tx error on update_db_metadata")?;
 
-        rx.recv()
-            .context("writer_rx disc on update_db_metadata")??;
+        if cache_res.is_err() {
+            rx.recv()
+                .context("writer_rx disc on update_db_metadata")??;
+        }
 
         // Fetch the new metadata
-        let stored_attr = self.get_metadata(target_ino)?;
-        Ok(stored_attr)
+        match cache_res {
+            Ok(attr) => Ok(attr),
+            Err(_) => self.get_metadata(target_ino),
+        }
     }
 
     fn attr_from_path(&self, ino_flag: InoFlag, path: PathBuf) -> anyhow::Result<FileAttr> {
@@ -1812,6 +1836,7 @@ impl GitFs {
         MetaDb::read_children(&conn, parent_ino.to_norm_u64())
     }
 
+    /// Returns (parent_ino, target_name)
     pub fn list_dentries_for_inode(&self, ino: NormalIno) -> anyhow::Result<Vec<(u64, OsString)>> {
         let repo_id = GitFs::ino_to_repo_id(ino.into());
         let repo_db = self
@@ -1902,6 +1927,11 @@ impl GitFs {
         parent_ino: NormalIno,
         child_name: &OsStr,
     ) -> anyhow::Result<FileAttr> {
+        if let Ok(ino) = self.get_ino_by_parent_cache(parent_ino.into(), child_name.to_os_string())
+            && let Ok(attr) = self.get_attr_from_cache(ino)
+        {
+            return Ok(attr);
+        };
         let repo_id = GitFs::ino_to_repo_id(parent_ino.into());
         let repo_db = self
             .conn_list
@@ -1912,6 +1942,9 @@ impl GitFs {
     }
 
     pub fn get_metadata(&self, target_ino: u64) -> anyhow::Result<FileAttr> {
+        if let Ok(attr) = self.get_attr_from_cache(target_ino) {
+            return Ok(attr);
+        }
         let repo_id = GitFs::ino_to_repo_id(target_ino);
         let repo_db = self
             .conn_list
@@ -1992,6 +2025,7 @@ impl GitFs {
     /// Send and forget but will log errors as tracing::error!
     pub fn update_size_in_db(&self, ino: NormalIno, size: u64) -> anyhow::Result<()> {
         let repo_id = GitFs::ino_to_repo_id(ino.into());
+        let size_res = self.update_size_in_cache(ino.into(), size);
         let writer_tx = {
             let guard = self
                 .conn_list
@@ -2001,6 +2035,7 @@ impl GitFs {
         };
 
         let (tx, rx) = oneshot::<()>();
+        let tx = if size_res.is_ok() { None } else { Some(tx) };
 
         let msg = DbWriteMsg::UpdateSize {
             ino,
@@ -2011,8 +2046,10 @@ impl GitFs {
             .send(msg)
             .context("writer_tx error on update_size_in_db")?;
 
-        rx.recv()
-            .context("writer_rx disc on update_size_in_db for target")??;
+        if size_res.is_err() {
+            rx.recv()
+                .context("writer_rx disc on update_size_in_db for target")??;
+        }
 
         Ok(())
     }
@@ -2108,6 +2145,7 @@ impl GitFs {
         node: StorageNode,
     ) -> anyhow::Result<()> {
         let repo_id = GitFs::ino_to_repo_id(old_parent.into());
+        self.update_cache_record(old_parent.into(), old_name, node.clone())?;
         let writer_tx = {
             let guard = self
                 .conn_list
@@ -2177,13 +2215,10 @@ impl GitFs {
         Ok(())
     }
 
-    pub fn write_dentry(
-        &self,
-        parent_ino: NormalIno,
-        target_ino: NormalIno,
-        target_name: &OsStr,
-    ) -> anyhow::Result<()> {
-        let repo_id = GitFs::ino_to_repo_id(parent_ino.into());
+    pub fn write_dentry(&self, dentry: Dentry) -> anyhow::Result<()> {
+        let repo_id = GitFs::ino_to_repo_id(dentry.parent_ino);
+        let write_res = self.write_dentry_to_cache(dentry.clone());
+
         let writer_tx = {
             let guard = self
                 .conn_list
@@ -2193,21 +2228,16 @@ impl GitFs {
         };
 
         let (tx, rx) = oneshot::<()>();
+        let tx = if write_res.is_ok() { None } else { Some(tx) };
 
-        let msg = DbWriteMsg::WriteDentry {
-            parent_ino,
-            target_ino,
-            target_name: target_name.to_os_string(),
-            resp: tx,
-        };
+        let msg = DbWriteMsg::WriteDentry { dentry, resp: tx };
         writer_tx
             .send(msg)
             .context("writer_tx error on write_dentry")?;
 
-        rx.recv().context(format!(
-            "writer_rx disc on write_dentry for target {}",
-            target_name.display()
-        ))??;
+        if write_res.is_err() {
+            rx.recv().context("writer_rx disc on write_dentry")??;
+        }
 
         Ok(())
     }
@@ -2327,8 +2357,10 @@ impl GitFs {
         if nodes.is_empty() {
             return Ok(());
         }
+        let ino = nodes[0].attr.ino;
+        let _ = self.write_inodes_to_cache(ino, nodes.clone());
 
-        let repo_id = GitFs::ino_to_repo_id(nodes[0].attr.ino);
+        let repo_id = GitFs::ino_to_repo_id(ino);
         let writer_tx = {
             let guard = self
                 .conn_list
@@ -2355,5 +2387,162 @@ impl GitFs {
     fn get_repo_ino(&self, ino: u64) -> anyhow::Result<u64> {
         let repo_id = self.get_repo(ino)?.repo_id;
         Ok(GitFs::repo_id_to_ino(repo_id))
+    }
+
+    fn write_inodes_to_cache(&self, ino: u64, entries: Vec<StorageNode>) -> anyhow::Result<()> {
+        let repo = self.get_repo(ino)?;
+        let mut attrs: Vec<(u64, FileAttr)> = Vec::new();
+        let mut dentries: Vec<((u64, OsString), Dentry)> = Vec::new();
+        #[allow(clippy::let_unit_value)]
+        let _ = entries
+            .into_iter()
+            .map(|e| {
+                let dentry = Dentry {
+                    target_ino: e.attr.ino,
+                    parent_ino: e.parent_ino,
+                    target_name: e.name.clone(),
+                };
+                dentries.push(((e.parent_ino, e.name.clone()), dentry));
+                attrs.push((e.attr.ino, e.attr));
+            })
+            .collect::<()>();
+        repo.attr_cache.insert_many(attrs);
+        repo.dentry_cache.insert_many(dentries);
+        Ok(())
+    }
+
+    fn remove_dentry_from_cache(&self, taget_ino: u64, target_name: &OsStr) -> anyhow::Result<()> {
+        let repo = self.get_repo(taget_ino)?;
+        repo.dentry_cache
+            .remove((taget_ino, target_name.to_os_string()));
+        Ok(())
+    }
+
+    pub fn update_attr_in_cache(&self, attr: SetFileAttr) -> anyhow::Result<FileAttr> {
+        let ino = attr.ino;
+        let repo = self.get_repo(ino)?;
+        repo.attr_cache.with_get_mut(ino, |a| {
+            if let Some(ino_flag) = attr.ino_flag {
+                a.ino_flag = ino_flag
+            }
+            if let Some(oid) = attr.oid {
+                a.oid = oid
+            }
+            if let Some(size) = attr.size {
+                a.size = size
+            }
+            if let Some(blocks) = attr.blocks {
+                a.blocks = blocks
+            }
+            if let Some(atime) = attr.atime {
+                a.atime = atime
+            }
+            if let Some(mtime) = attr.mtime {
+                a.mtime = mtime
+            }
+            if let Some(ctime) = attr.ctime {
+                a.ctime = ctime
+            }
+            if let Some(perm) = attr.perm {
+                a.perm = perm
+            }
+            if let Some(uid) = attr.uid {
+                a.uid = uid
+            }
+            if let Some(gid) = attr.gid {
+                a.gid = gid
+            }
+            if let Some(rdev) = attr.rdev {
+                a.rdev = rdev
+            }
+            if let Some(flags) = attr.flags {
+                a.flags = flags
+            }
+        });
+        repo.attr_cache
+            .get(ino)
+            .ok_or(anyhow!("Cannot get attr from cache"))
+    }
+
+    fn update_size_in_cache(&self, ino: u64, size: u64) -> anyhow::Result<u64> {
+        let repo = self.get_repo(ino)?;
+        let final_size = repo.attr_cache.with_get_mut(ino, |a| {
+            a.size = size;
+            a.size
+        });
+        if let Some(s) = final_size {
+            Ok(s)
+        } else {
+            bail!("Could not set size in cache")
+        }
+    }
+
+    fn write_dentry_to_cache(&self, dentry: Dentry) -> anyhow::Result<()> {
+        let ino = dentry.parent_ino;
+        let name = dentry.target_name.clone();
+        let repo = self.get_repo(ino)?;
+        repo.dentry_cache.insert((ino, name), dentry);
+        Ok(())
+    }
+
+    fn get_attr_from_cache(&self, ino: u64) -> anyhow::Result<FileAttr> {
+        let repo = self.get_repo(ino)?;
+        repo.attr_cache
+            .get(ino)
+            .ok_or(anyhow!("Could not get attr from cache"))
+    }
+
+    fn get_ino_by_parent_cache(
+        &self,
+        parent_ino: u64,
+        target_name: OsString,
+    ) -> anyhow::Result<u64> {
+        let repo = self.get_repo(parent_ino)?;
+        let dentry = repo.dentry_cache.get((parent_ino, target_name));
+        if let Some(dentry) = dentry {
+            Ok(dentry.target_ino)
+        } else {
+            bail!("Could not find dentry in cache")
+        }
+    }
+
+    fn update_cache_record(
+        &self,
+        old_parent: u64,
+        old_name: &OsStr,
+        node: StorageNode,
+    ) -> anyhow::Result<()> {
+        let new_ino = node.attr.ino;
+        let repo = self.get_repo(new_ino)?;
+
+        let old_ino = repo
+            .dentry_cache
+            .get((old_parent, old_name.to_os_string()))
+            .ok_or(anyhow!("Could not find dentry"))?
+            .target_ino;
+        repo.dentry_cache
+            .remove((old_parent, old_name.to_os_string()));
+        repo.attr_cache.remove(old_ino);
+
+        self.write_inodes_to_cache(new_ino, vec![node])?;
+        Ok(())
+    }
+
+    /// Take file in cache when opening it
+    ///
+    /// Only called during open()
+    fn take_file_from_cache(&self, ino: u64) -> anyhow::Result<SourceTypes> {
+        let repo = self.get_repo(ino)?;
+        repo.file_cache
+            .take_and_promote(ino)
+            .ok_or(anyhow!("Failed to find file in cache"))
+    }
+
+    /// Store file in cache after taking it out
+    ///
+    /// Only called during release()
+    fn put_file_in_cache(&self, ino: u64, file: SourceTypes) -> anyhow::Result<()> {
+        let repo = self.get_repo(ino)?;
+        repo.file_cache.put_back(ino, file)
     }
 }

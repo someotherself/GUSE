@@ -3,9 +3,10 @@ use std::sync::{
     atomic::{AtomicU64, Ordering},
 };
 
+use anyhow::bail;
 use dashmap::DashMap;
 
-use crate::fs::{GitFs, Handle, meta_db::DbWriteMsg};
+use crate::fs::{GitFs, Handle, SourceTypes, meta_db::DbWriteMsg};
 
 pub struct FileHandles {
     current_handle: AtomicU64,
@@ -46,18 +47,30 @@ impl FileHandles {
         &self,
         fh: u64,
         writer_tx: Option<crossbeam_channel::Sender<DbWriteMsg>>,
-    ) -> anyhow::Result<bool> {
-        if let Some((_, handle)) = self.handles.remove(&fh) {
-            let ino = handle.ino;
+    ) -> anyhow::Result<Option<SourceTypes>> {
+        if let Some((_, handle_arc)) = self.handles.remove(&fh) {
+            let ino = handle_arc.ino;
             if self.register_close(ino).is_some()
                 && let Some(writer_tx) = writer_tx
                 && let Err(e) = GitFs::cleanup_entry_with_writemsg(ino.into(), writer_tx)
             {
                 tracing::error!("cleanup_entry_with_writemsg failed for ino {ino}: {e}");
             }
-            Ok(true)
+            let file_opt = match Arc::try_unwrap(handle_arc) {
+                Ok(handle) => Some(handle.source),
+                Err(_) => {
+                    // There are still references to it. Can't move(cache) it
+                    None
+                }
+            };
+            if let Some(mut file) = file_opt {
+                let file = std::mem::replace(&mut file, SourceTypes::Closed);
+                Ok(Some(file))
+            } else {
+                Ok(None)
+            }
         } else {
-            Ok(false)
+            bail!("Failed to find file handle")
         }
     }
 

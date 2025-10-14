@@ -34,7 +34,7 @@ pub fn open_live(
         .open(path)?;
     let handle = Handle {
         ino,
-        source: SourceTypes::RealFile(file),
+        source: SourceTypes::RealFile(Arc::new(file)),
         read: true,
         write,
     };
@@ -52,36 +52,45 @@ pub fn open_git(
     let oid = fs.get_oid_from_db(ino.to_norm_u64())?;
     let flag = fs.get_ino_flag_from_db(ino)?;
     if oid == Oid::zero() {
-        let parent_oid = fs.parent_commit_build_session(ino)?;
-        let build_root = fs.get_path_to_build_folder(ino)?;
+        // Check the cache first
+        // TODO: Create helper function for self for take_and_promote
+        let file = match fs.take_file_from_cache(ino.into()) {
+            Ok(file) => file,
+            Err(_) => {
+                let parent_oid = fs.parent_commit_build_session(ino)?;
+                let build_root = fs.get_path_to_build_folder(ino)?;
 
-        let path = {
-            let mut found = None;
-            let dentries = fs.list_dentries_for_inode(ino)?;
-            for (parent_ino, name) in dentries {
-                let repo = fs.get_repo(ino.to_norm_u64())?;
-                let session = {
-                    let parent_oid = fs.parent_commit_build_session(parent_ino.into())?;
-                    let build_root = fs.get_path_to_build_folder(ino)?;
-                    repo.get_or_init_build_session(parent_oid, &build_root)?
+                let path = {
+                    let mut found = None;
+                    let dentries = fs.list_dentries_for_inode(ino)?;
+                    for (parent_ino, name) in dentries {
+                        let repo = fs.get_repo(ino.to_norm_u64())?;
+                        let session = {
+                            let parent_oid = fs.parent_commit_build_session(parent_ino.into())?;
+                            let build_root = fs.get_path_to_build_folder(ino)?;
+                            repo.get_or_init_build_session(parent_oid, &build_root)?
+                        };
+                        let parent_path = session.finish_path(fs, parent_ino.into())?.join(&name);
+                        if parent_path.exists() {
+                            found = Some(parent_path);
+                            break;
+                        }
+                    }
+                    found.ok_or_else(|| anyhow!("No existing path for inode {}", ino))?
                 };
-                let parent_path = session.finish_path(fs, parent_ino.into())?.join(&name);
-                if parent_path.exists() {
-                    found = Some(parent_path);
-                    break;
-                }
+
+                let open_file = OpenOptions::new()
+                    .read(true)
+                    .write(write)
+                    .truncate(write && truncate)
+                    .open(path)?;
+                SourceTypes::RealFile(Arc::new(open_file))
             }
-            found.ok_or_else(|| anyhow!("No existing path for inode {}", ino))?
         };
 
-        let file = OpenOptions::new()
-            .read(true)
-            .write(write)
-            .truncate(write && truncate)
-            .open(path)?;
         let handle = Handle {
             ino: ino.to_norm_u64(),
-            source: SourceTypes::RealFile(file),
+            source: file,
             read: true,
             write,
         };

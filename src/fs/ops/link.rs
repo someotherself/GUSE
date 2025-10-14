@@ -3,7 +3,10 @@ use std::ffi::{OsStr, OsString};
 use anyhow::bail;
 
 use crate::{
-    fs::{GitFs, fileattr::FileAttr},
+    fs::{
+        GitFs,
+        fileattr::{Dentry, FileAttr},
+    },
     inodes::NormalIno,
     mount::InvalMsg,
 };
@@ -39,7 +42,11 @@ pub fn link_git(
         session.finish_path(fs, ino)?.join(newname)
     };
     std::fs::hard_link(&original, &link)?;
-    fs.write_dentry(newparent, source_ino, newname)?;
+    fs.write_dentry(Dentry {
+        target_ino: source_ino.into(),
+        parent_ino: newparent.into(),
+        target_name: newname.to_os_string(),
+    })?;
     {
         let _ = fs.notifier.try_send(InvalMsg::Entry {
             parent: newparent.to_norm_u64(),
