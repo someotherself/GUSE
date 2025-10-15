@@ -7,8 +7,8 @@ use clap::{Arg, ArgAction, ArgMatches, Command, command, crate_authors, crate_ve
 
 use guse::{
     internals::sock::{ControlReq, send_req, socket_path},
-    logging,
 };
+use tracing_subscriber::EnvFilter;
 
 fn main() -> anyhow::Result<()> {
     let matches = handle_cli_args();
@@ -16,7 +16,7 @@ fn main() -> anyhow::Result<()> {
     match matches.subcommand() {
         Some(("run", m)) => {
             let log_level = m.get_count("verbose");
-            logging::init_logging(log_level);
+            init_logging(log_level);
 
             start_app(m)?;
         }
@@ -132,4 +132,23 @@ fn run_mount(matches: &ArgMatches) -> anyhow::Result<()> {
         guse::mount::MountPoint::new(mountpoint, repos_dir, read_only, allow_root, allow_other);
     guse::mount::mount_fuse(mount_point)?;
     Ok(())
+}
+
+pub fn init_logging(verbosity: u8) {
+    let my_level = match verbosity {
+        0 => "info",
+        1 => "debug",
+        _ => "trace",
+    };
+    let my_crate = "guse";
+
+    let mut filter =
+        EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("warn,fuser=warn"));
+
+    filter = filter.add_directive(format!("{my_crate}={my_level}").parse().unwrap());
+
+    tracing_subscriber::fmt::Subscriber::builder()
+        .with_env_filter(filter)
+        .with_writer(std::io::stderr)
+        .init();
 }
