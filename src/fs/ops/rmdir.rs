@@ -32,10 +32,10 @@ pub fn rmdir_live(fs: &GitFs, parent: NormalIno, name: &OsStr) -> anyhow::Result
 
 pub fn rmdir_git(fs: &GitFs, parent: NormalIno, name: &OsStr) -> anyhow::Result<()> {
     let path = {
-        let parent_oid = fs.parent_commit_build_session(parent)?;
+        let commit_oid = fs.get_oid_from_db(parent.into())?;
         let build_root = fs.get_path_to_build_folder(parent)?;
         let repo = fs.get_repo(parent.to_norm_u64())?;
-        let session = repo.get_or_init_build_session(parent_oid, &build_root)?;
+        let session = repo.get_or_init_build_session(commit_oid, &build_root)?;
         drop(repo);
         session.finish_path(fs, parent)?.join(name)
     };

@@ -60,6 +60,9 @@ pub fn create_git(
     let ino = fs.next_inode_checked(parent.to_norm_u64())?;
     let mut attr: FileAttr = file_attr(InoFlag::InsideBuild).into();
     attr.ino = ino;
+    // Add the commit_oid to the attr
+    let parent_oid = fs.get_oid_from_db(parent.into())?;
+    attr.oid = parent_oid;
 
     let file = std::fs::File::create_new(&file_path)?;
     {

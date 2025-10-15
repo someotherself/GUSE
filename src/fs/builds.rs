@@ -9,6 +9,7 @@ use tempfile::TempDir;
 use crate::{
     fs::{
         GitFs,
+        fileattr::InoFlag,
         ops::readdir::{DirCase, classify_inode},
     },
     inodes::NormalIno,
@@ -29,17 +30,17 @@ impl BuildSession {
         let mut components = vec![];
 
         let mut cur_ino = ino.to_norm_u64();
-        let mut cur_oid = fs.get_oid_from_db(cur_ino)?;
+        let mut ino_flag = fs.get_ino_flag_from_db(cur_ino.into())?;
 
         let max_loops = 1000;
 
         for _ in 0..max_loops {
-            if cur_oid != Oid::zero() {
+            if ino_flag == InoFlag::SnapFolder {
                 break;
             }
             components.push(fs.get_name_from_db(cur_ino)?);
             cur_ino = fs.get_single_parent(cur_ino)?;
-            cur_oid = fs.get_oid_from_db(cur_ino)?;
+            ino_flag = fs.get_ino_flag_from_db(cur_ino.into())?;
         }
 
         components.reverse();
@@ -53,15 +54,10 @@ impl BuildSession {
     }
 }
 
-enum TargetCommit {
-    BuildHead(Oid),
-    Commit(Oid),
-}
-
 /// Used by readdir, create and mkdir
 pub struct BuildOperationCtx {
     ino: NormalIno,
-    target: TargetCommit,
+    target: Oid,
     temp_dir: PathBuf,
     full_path: PathBuf,
 }
@@ -74,22 +70,16 @@ impl BuildOperationCtx {
             return Ok(None);
         };
 
-        let target = if oid == Oid::zero() {
-            let parent_oid = fs.parent_commit_build_session(ino)?;
-            TargetCommit::BuildHead(parent_oid)
+        let ino_flag = fs.get_ino_flag_from_db(ino)?;
+        let target = if ino_flag == InoFlag::SnapFolder || ino_flag == InoFlag::InsideBuild {
+            oid
         } else {
-            if !fs.is_commit(ino, oid)? {
-                return Ok(None);
-            }
-            TargetCommit::Commit(oid)
+            return Ok(None);
         };
 
         let build_root = fs.get_path_to_build_folder(ino)?;
 
         let build_session = {
-            let oid = match target {
-                TargetCommit::BuildHead(o) | TargetCommit::Commit(o) => o,
-            };
             let repo = fs.get_repo(ino.to_norm_u64())?;
             repo.get_or_init_build_session(oid, &build_root)?
         };
@@ -109,9 +99,6 @@ impl BuildOperationCtx {
     }
 
     pub fn commit_oid(&self) -> Oid {
-        match self.target {
-            TargetCommit::Commit(oid) => oid,
-            TargetCommit::BuildHead(oid) => oid,
-        }
+        self.target
     }
 }
