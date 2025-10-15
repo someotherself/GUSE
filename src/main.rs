@@ -1,13 +1,13 @@
 #![allow(dead_code)]
 
-use std::{path::PathBuf, thread};
+use std::path::PathBuf;
 
 use anyhow::anyhow;
 use clap::{Arg, ArgAction, ArgMatches, Command, command, crate_authors, crate_version};
 
 use guse::{
     internals::sock::{ControlReq, send_req, socket_path},
-    logging, tui,
+    logging,
 };
 
 fn main() -> anyhow::Result<()> {
@@ -131,29 +131,5 @@ fn run_mount(matches: &ArgMatches) -> anyhow::Result<()> {
     let mount_point =
         guse::mount::MountPoint::new(mountpoint, repos_dir, read_only, allow_root, allow_other);
     guse::mount::mount_fuse(mount_point)?;
-    Ok(())
-}
-
-fn setup_tui(matches: &ArgMatches) -> anyhow::Result<()> {
-    let mountpoint = matches
-        .get_one::<String>("mount-point")
-        .ok_or_else(|| anyhow!("Cannot parse argument"))?;
-    let mountpoint = PathBuf::from(mountpoint);
-    let repos_dir = matches
-        .get_one::<String>("repos-dir")
-        .ok_or_else(|| anyhow!("Cannot parse argument"))?;
-    let repos_dir = PathBuf::from(repos_dir);
-    let read_only = matches.get_flag("read-only");
-    let allow_other = matches.get_flag("allow-other");
-    let allow_root = matches.get_flag("allow-root");
-    let mount_point =
-        guse::mount::MountPoint::new(mountpoint, repos_dir, read_only, allow_root, allow_other);
-    let handle = thread::spawn(move || -> anyhow::Result<()> {
-        tui::run_tui_app()?;
-        Ok(())
-    });
-    guse::mount::mount_fuse(mount_point)?;
-
-    handle.join().unwrap()?;
     Ok(())
 }
