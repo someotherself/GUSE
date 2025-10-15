@@ -117,6 +117,14 @@ impl FsOperationContext {
 // ino for repo_2 build dir:0000000000000010000000000....0010
 // ino for repo_2 folder1:  0000000000000010000000000....0011
 
+// Virtual inodes
+// The 48th bit is reserved for virtual inoded. 
+// A normal (Inodes::NormalIno) ino will have it set to 0
+// If inode 0000000000000001000000000....0111 is a real file
+// Inode    0000000000000001100000000....0111 will be a virtual directory
+// The virtual directory can be accessed by adding @ at the end of the name
+// and it is used for example, when trying to use cat on a file (or cd on a folder)
+
 // ino for repo folder  = (repo_id as u64) << 48 (see REPO_SHIFT)
 // repo_id from ino     = (ino >> REPO_SHIFT) as u16
 pub struct GitFs {
