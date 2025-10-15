@@ -185,6 +185,9 @@ where
     pub fn get(&self, key: K) -> Option<V> {
         let mut guard = self.list.write();
         let id = *guard.map.get(&key)?;
+        if guard.nodes[id].value.is_none() {
+            return None
+        };
         guard.unlink(id);
         guard.push_front(id)
     }
@@ -195,6 +198,9 @@ where
             return None;
         }
         let id = *guard.map.get(&key)?;
+        if guard.nodes[id].value.is_none() {
+            return None
+        };
         guard.unlink(id);
         guard.push_front(id);
         let entry = &mut guard.nodes[id];
