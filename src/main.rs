@@ -5,9 +5,7 @@ use std::path::PathBuf;
 use anyhow::anyhow;
 use clap::{Arg, ArgAction, ArgMatches, Command, command, crate_authors, crate_version};
 
-use guse::{
-    internals::sock::{ControlReq, send_req, socket_path},
-};
+use guse::internals::sock::{ControlReq, send_req, socket_path};
 use tracing_subscriber::EnvFilter;
 
 fn main() -> anyhow::Result<()> {

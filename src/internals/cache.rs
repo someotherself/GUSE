@@ -3,7 +3,7 @@ use std::{collections::HashMap, fmt::Debug, num::NonZeroUsize};
 use anyhow::bail;
 use parking_lot::RwLock;
 
-type NodeId = u32;
+type NodeId = usize;
 
 struct Entry<K: Debug, V> {
     key: K,
@@ -26,6 +26,7 @@ impl<K: Debug, V> Entry<K, V> {
 pub struct Inner<K: Debug, V: Clone, S = ahash::RandomState> {
     map: HashMap<K, NodeId, S>,
     nodes: Vec<Entry<K, V>>,
+    free: Vec<NodeId>,
     head: Option<NodeId>, // MRU
     tail: Option<NodeId>, // LRU
     capacity: NonZeroUsize,
@@ -40,6 +41,7 @@ where
         Self {
             map: HashMap::with_hasher(S::default()),
             nodes: Vec::new(),
+            free: Vec::new(),
             head: None,
             tail: None,
             capacity,
@@ -52,14 +54,14 @@ where
 
         {
             // Fix the prev and next of the new entry
-            let n = &mut self.nodes[id as usize];
+            let n = &mut self.nodes[id];
             n.prev = None;
             n.next = old_head;
         }
 
         // Fix the old_head entry
         if let Some(h) = old_head {
-            self.nodes[h as usize].prev = Some(id)
+            self.nodes[h].prev = Some(id)
         } else {
             // List was empty
             self.tail = Some(id)
@@ -67,25 +69,25 @@ where
 
         // Fix the head
         self.head = Some(id);
-        self.nodes[id as usize].value.clone()
+        self.nodes[id].value.clone()
     }
 
     fn unlink(&mut self, id: NodeId) {
         let (prev, next) = {
-            let n = &self.nodes[id as usize];
+            let n = &self.nodes[id];
             (n.prev, n.next)
         };
 
         // Fix prev neighbor
         if let Some(p) = prev {
-            self.nodes[p as usize].next = next;
+            self.nodes[p].next = next;
         } else {
             // was head
             self.head = next;
         }
         // Fix next neighbor
         if let Some(n) = next {
-            self.nodes[n as usize].prev = prev;
+            self.nodes[n].prev = prev;
         } else {
             // was tail
             self.tail = prev;
@@ -93,7 +95,7 @@ where
 
         {
             // Fix the prev and next of the unlinked entry
-            let n = &mut self.nodes[id as usize];
+            let n = &mut self.nodes[id];
             n.next = None;
             n.prev = None;
         }
@@ -102,10 +104,10 @@ where
     fn evict(&mut self) -> Option<()> {
         let tail = self.tail?;
 
-        let prev = self.nodes[tail as usize].prev;
+        let prev = self.nodes[tail].prev;
 
         if let Some(p) = prev {
-            let prev_entry = &mut self.nodes[p as usize];
+            let prev_entry = &mut self.nodes[p];
             prev_entry.next = None;
             self.tail = Some(p)
         } else {
@@ -114,8 +116,12 @@ where
             self.tail = None;
         }
 
-        let old_key = &self.nodes[tail as usize].key;
+        let old_key = &self.nodes[tail].key;
         self.map.remove_entry(old_key)?;
+        // Mark the entry as free
+        self.free.push(tail);
+        // Remove the value from the entry
+        std::mem::take(&mut self.nodes[tail].value);
         Some(())
     }
 
@@ -128,13 +134,23 @@ where
 
         // Get the index of the new entry.
         // Insert into nodes
-        let index = self.nodes.len() as NodeId;
-        self.nodes.push(entry);
-        self.map.insert(key, index);
+        let index = match self.free.pop() {
+            Some(i) => {
+                let _ = std::mem::replace(&mut self.nodes[i], entry);
+                self.map.insert(key, i);
+                i
+            }
+            None => {
+                let index = self.nodes.len() as NodeId;
+                self.nodes.push(entry);
+                self.map.insert(key, index);
+                index
+            }
+        };
 
         // Handle old head, or if list is empty
         if let Some(h) = old_head {
-            let e = &mut self.nodes[h as usize];
+            let e = &mut self.nodes[h];
             e.prev = Some(index);
         } else {
             self.tail = Some(index);
@@ -146,7 +162,7 @@ where
     }
 
     fn peek(&self, id: NodeId) -> Option<V> {
-        self.nodes[id as usize].value.clone()
+        self.nodes[id].value.clone()
     }
 }
 
@@ -181,7 +197,7 @@ where
         let id = *guard.map.get(&key)?;
         guard.unlink(id);
         guard.push_front(id);
-        let entry = &mut guard.nodes[id as usize];
+        let entry = &mut guard.nodes[id];
         Some(f(entry.value.as_mut().unwrap()))
     }
 
@@ -195,7 +211,7 @@ where
         }
         if let Some(&id) = guard.map.get(&key) {
             // Entry already exists
-            let old = guard.nodes[id as usize].value.replace(value);
+            let old = guard.nodes[id].value.replace(value);
             guard.unlink(id);
             guard.push_front(id);
             old
@@ -217,7 +233,7 @@ where
             }
 
             if let Some(&id) = guard.map.get(&key) {
-                guard.nodes[id as usize].value.replace(value.clone());
+                guard.nodes[id].value.replace(value.clone());
                 guard.unlink(id);
                 guard.push_front(id);
             } else {
@@ -231,9 +247,14 @@ where
     pub fn remove(&self, key: K) -> Option<V> {
         let mut guard = self.list.write();
         if let Some(&p) = guard.map.get(&key) {
+            // Fix the neighbors
             guard.unlink(p);
+            // Remove from the map
             guard.map.remove(&key);
-            return std::mem::take(&mut guard.nodes[p as usize].value);
+            // Mark the entry as free
+            guard.free.push(p);
+            // Remove the value from the entry
+            return std::mem::take(&mut guard.nodes[p].value);
         }
         None
     }
@@ -241,7 +262,7 @@ where
     pub fn peek(&self, key: K) -> Option<V> {
         let guard = self.list.read();
         if let Some(&id) = guard.map.get(&key) {
-            let entry = guard.nodes.get(id as usize)?;
+            let entry = guard.nodes.get(id)?;
             entry.value.clone()
         } else {
             None
@@ -255,7 +276,7 @@ where
         let mut guard = self.list.write();
         if let Some(&id) = guard.map.get(&key) {
             guard.push_front(id);
-            return std::mem::take(&mut guard.nodes[id as usize].value);
+            return std::mem::take(&mut guard.nodes[id].value);
         }
         None
     }
@@ -266,9 +287,9 @@ where
     pub fn put_back(&self, key: K, value: V) -> anyhow::Result<()> {
         let mut guard = self.list.write();
         if let Some(&id) = guard.map.get(&key)
-            && guard.nodes[id as usize].value.is_none()
+            && guard.nodes[id].value.is_none()
         {
-            guard.nodes[id as usize].value.replace(value);
+            guard.nodes[id].value.replace(value);
             return Ok(());
         }
         bail!("Could not find entry in cache")
