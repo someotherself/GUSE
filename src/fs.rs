@@ -53,11 +53,11 @@ enum FsOperationContext {
     /// Is the root directory
     Root,
     /// Is one of the directories holding a repo
-    RepoDir { ino: u64 },
+    RepoDir,
     /// Dir or File inside the live dir
-    InsideLiveDir { ino: u64 },
+    InsideLiveDir,
     /// Dir or File inside a repo dir
-    InsideGitDir { ino: u64 },
+    InsideGitDir,
 }
 
 impl FsOperationContext {
@@ -69,11 +69,11 @@ impl FsOperationContext {
             Ok(FsOperationContext::Root)
         } else if ino & mask == 0 && fs.repos_list.contains_key(&repo_dir) {
             // If the least significant 48 bits are 0
-            Ok(FsOperationContext::RepoDir { ino })
+            Ok(FsOperationContext::RepoDir)
         } else if fs.is_in_live(inode.to_norm())? {
-            Ok(FsOperationContext::InsideLiveDir { ino })
+            Ok(FsOperationContext::InsideLiveDir)
         } else {
-            Ok(FsOperationContext::InsideGitDir { ino })
+            Ok(FsOperationContext::InsideGitDir)
         }
     }
 }
@@ -728,8 +728,8 @@ impl GitFs {
         let ctx = FsOperationContext::get_operation(self, ino);
         match ctx? {
             FsOperationContext::Root => bail!("Target is a directory"),
-            FsOperationContext::RepoDir { ino: _ } => bail!("Target is a directory"),
-            FsOperationContext::InsideLiveDir { ino: _ } => match parent_kind {
+            FsOperationContext::RepoDir => bail!("Target is a directory"),
+            FsOperationContext::InsideLiveDir => match parent_kind {
                 FileType::Directory => {
                     ops::open::open_live(self, ino.to_norm(), read, write, truncate)
                 }
@@ -743,7 +743,7 @@ impl GitFs {
                 ),
                 _ => bail!("Invalid filemode"),
             },
-            FsOperationContext::InsideGitDir { ino: _ } => {
+            FsOperationContext::InsideGitDir => {
                 match parent_kind {
                     // If parent is a dir
                     FileType::Directory => match target_kind {
@@ -777,15 +777,9 @@ impl GitFs {
         let ctx = FsOperationContext::get_operation(self, ino);
         match ctx? {
             FsOperationContext::Root => ops::opendir::opendir_root(self, ino.to_norm()),
-            FsOperationContext::RepoDir { ino: _ } => {
-                ops::opendir::opendir_repo(self, ino.to_norm())
-            }
-            FsOperationContext::InsideLiveDir { ino: _ } => {
-                ops::opendir::opendir_live(self, ino.to_norm())
-            }
-            FsOperationContext::InsideGitDir { ino: _ } => {
-                ops::opendir::opendir_git(self, ino.to_norm())
-            }
+            FsOperationContext::RepoDir => ops::opendir::opendir_repo(self, ino.to_norm()),
+            FsOperationContext::InsideLiveDir => ops::opendir::opendir_live(self, ino.to_norm()),
+            FsOperationContext::InsideGitDir => ops::opendir::opendir_git(self, ino.to_norm()),
         }
     }
 
@@ -797,13 +791,11 @@ impl GitFs {
 
             match ctx? {
                 FsOperationContext::Root => bail!("Not allowed"),
-                FsOperationContext::RepoDir { ino: _ } => bail!("Not allowed"),
-                FsOperationContext::InsideLiveDir { ino: _ } => {
+                FsOperationContext::RepoDir => bail!("Not allowed"),
+                FsOperationContext::InsideLiveDir => {
                     ops::read::read_live(self, ino, offset, buf, fh)
                 }
-                FsOperationContext::InsideGitDir { ino: _ } => {
-                    ops::read::read_git(self, ino, offset, buf, fh)
-                }
+                FsOperationContext::InsideGitDir => ops::read::read_git(self, ino, offset, buf, fh),
             }
         };
         if let Ok(ref bytes_read) = ret {
@@ -820,11 +812,11 @@ impl GitFs {
             let ctx = FsOperationContext::get_operation(self, ino);
             match ctx? {
                 FsOperationContext::Root => bail!("Not allowed"),
-                FsOperationContext::RepoDir { ino: _ } => bail!("Not allowed"),
-                FsOperationContext::InsideLiveDir { ino } => {
-                    ops::write::write_live(self, ino, offset, buf, fh)
+                FsOperationContext::RepoDir => bail!("Not allowed"),
+                FsOperationContext::InsideLiveDir => {
+                    ops::write::write_live(self, ino.into(), offset, buf, fh)
                 }
-                FsOperationContext::InsideGitDir { ino: _ } => {
+                FsOperationContext::InsideGitDir => {
                     ops::write::write_git(self, ino.to_norm(), offset, buf, fh)
                 }
             }
@@ -841,11 +833,11 @@ impl GitFs {
         let ctx = FsOperationContext::get_operation(self, ino)?;
         match ctx {
             FsOperationContext::Root => bail!("Not allowed"),
-            FsOperationContext::RepoDir { ino: _ } => bail!("Not allowed"),
-            FsOperationContext::InsideLiveDir { ino: _ } => {
+            FsOperationContext::RepoDir => bail!("Not allowed"),
+            FsOperationContext::InsideLiveDir => {
                 ops::truncate::truncate_live(self, ino.to_norm(), size, fh)
             }
-            FsOperationContext::InsideGitDir { ino: _ } => {
+            FsOperationContext::InsideGitDir => {
                 ops::truncate::truncate_git(self, ino.to_norm(), size, fh)
             }
         }
@@ -951,7 +943,7 @@ impl GitFs {
                 attr.git_mode = st_mode;
                 Ok(attr)
             }
-            FsOperationContext::RepoDir { ino: _ } => {
+            FsOperationContext::RepoDir => {
                 let mut attr: FileAttr = dir_attr(InoFlag::RepoRoot).into();
                 attr.ino = ino.into();
                 attr.git_mode = st_mode;
@@ -961,7 +953,7 @@ impl GitFs {
                     Inodes::VirtualIno(_) => self.prepare_virtual_file(ino.to_virt()),
                 }
             }
-            FsOperationContext::InsideLiveDir { ino: _ } => match ino {
+            FsOperationContext::InsideLiveDir => match ino {
                 Inodes::NormalIno(_) => ops::getattr::getattr_live_dir(self, ino.to_norm()),
                 Inodes::VirtualIno(_) => {
                     let attr = ops::getattr::getattr_live_dir(self, ino.to_norm())?;
@@ -977,7 +969,7 @@ impl GitFs {
                     }
                 }
             },
-            FsOperationContext::InsideGitDir { ino: _ } => match ino {
+            FsOperationContext::InsideGitDir => match ino {
                 Inodes::NormalIno(_) => ops::getattr::getattr_git_dir(self, ino.to_norm()),
                 Inodes::VirtualIno(_) => {
                     let attr = ops::getattr::getattr_git_dir(self, ino.to_norm())?;
@@ -1020,13 +1012,13 @@ impl GitFs {
             FsOperationContext::Root => {
                 ops::mkdir::mkdir_root(self, ROOT_INO, name, dir_attr(InoFlag::Root))
             }
-            FsOperationContext::RepoDir { ino } => {
-                ops::mkdir::mkdir_repo(self, ino, name, dir_attr(InoFlag::RepoRoot))
+            FsOperationContext::RepoDir => {
+                ops::mkdir::mkdir_repo(self, parent.into(), name, dir_attr(InoFlag::RepoRoot))
             }
-            FsOperationContext::InsideLiveDir { ino } => {
-                ops::mkdir::mkdir_live(self, ino, name, dir_attr(InoFlag::InsideLive))
+            FsOperationContext::InsideLiveDir => {
+                ops::mkdir::mkdir_live(self, parent.into(), name, dir_attr(InoFlag::InsideLive))
             }
-            FsOperationContext::InsideGitDir { ino: _ } => {
+            FsOperationContext::InsideGitDir => {
                 ops::mkdir::mkdir_git(self, parent.to_norm(), name, dir_attr(InoFlag::InsideBuild))
             }
         }
@@ -1058,15 +1050,15 @@ impl GitFs {
                 tracing::error!("This directory is read only");
                 bail!("This directory is read only")
             }
-            FsOperationContext::RepoDir { ino: _ } => {
+            FsOperationContext::RepoDir => {
                 tracing::error!("This directory is read only");
                 bail!("This directory is read only")
             }
-            FsOperationContext::InsideLiveDir { ino: _ } => {
+            FsOperationContext::InsideLiveDir => {
                 tracing::error!("This directory is read only");
                 bail!("This directory is read only")
             }
-            FsOperationContext::InsideGitDir { ino: _ } => {
+            FsOperationContext::InsideGitDir => {
                 ops::link::link_git(self, ino.to_norm(), newparent.to_norm(), newname)
             }
         }
@@ -1097,13 +1089,13 @@ impl GitFs {
             FsOperationContext::Root => {
                 bail!("This directory is read only")
             }
-            FsOperationContext::RepoDir { ino: _ } => {
+            FsOperationContext::RepoDir => {
                 bail!("This directory is read only")
             }
-            FsOperationContext::InsideLiveDir { ino } => {
-                ops::create::create_live(self, ino, name, write)
+            FsOperationContext::InsideLiveDir => {
+                ops::create::create_live(self, parent.into(), name, write)
             }
-            FsOperationContext::InsideGitDir { ino: _ } => {
+            FsOperationContext::InsideGitDir => {
                 ops::create::create_git(self, parent.to_norm(), name, write)
             }
         }
@@ -1142,12 +1134,14 @@ impl GitFs {
                 tracing::error!("This directory is read only");
                 bail!(std::io::Error::from_raw_os_error(libc::EACCES))
             }
-            FsOperationContext::RepoDir { ino: _ } => {
+            FsOperationContext::RepoDir => {
                 tracing::error!("Not allowed");
                 bail!(std::io::Error::from_raw_os_error(libc::EACCES))
             }
-            FsOperationContext::InsideLiveDir { ino } => ops::unlink::unlink_live(self, ino, name),
-            FsOperationContext::InsideGitDir { ino: _ } => {
+            FsOperationContext::InsideLiveDir => {
+                ops::unlink::unlink_live(self, parent.into(), name)
+            }
+            FsOperationContext::InsideGitDir => {
                 ops::unlink::unlink_build_dir(self, parent.to_norm(), name)
             }
         }
@@ -1200,17 +1194,17 @@ impl GitFs {
             FsOperationContext::Root => {
                 bail!("This directory is read only")
             }
-            FsOperationContext::RepoDir { ino: _ } => {
+            FsOperationContext::RepoDir => {
                 bail!("Not allowed")
             }
-            FsOperationContext::InsideLiveDir { ino: _ } => ops::rename::rename_live(
+            FsOperationContext::InsideLiveDir => ops::rename::rename_live(
                 self,
                 parent.to_norm(),
                 name,
                 new_parent.to_norm(),
                 new_name,
             ),
-            FsOperationContext::InsideGitDir { ino: _ } => ops::rename::rename_git_build(
+            FsOperationContext::InsideGitDir => ops::rename::rename_git_build(
                 self,
                 parent.to_norm(),
                 name,
@@ -1240,15 +1234,13 @@ impl GitFs {
             FsOperationContext::Root => {
                 bail!("Not allowed")
             }
-            FsOperationContext::RepoDir { ino: _ } => {
+            FsOperationContext::RepoDir => {
                 bail!("Not allowed")
             }
-            FsOperationContext::InsideLiveDir { ino: _ } => {
+            FsOperationContext::InsideLiveDir => {
                 ops::rmdir::rmdir_live(self, parent.to_norm(), name)
             }
-            FsOperationContext::InsideGitDir { ino: _ } => {
-                ops::rmdir::rmdir_git(self, parent.to_norm(), name)
-            }
+            FsOperationContext::InsideGitDir => ops::rmdir::rmdir_git(self, parent.to_norm(), name),
         }
     }
 
@@ -1259,14 +1251,14 @@ impl GitFs {
             let ctx = FsOperationContext::get_operation(self, parent);
             match ctx? {
                 FsOperationContext::Root => ops::readdir::readdir_root_dir(self),
-                FsOperationContext::RepoDir { ino: _ } => {
+                FsOperationContext::RepoDir => {
                     ops::readdir::readdir_repo_dir(self, parent.to_norm())
                 }
-                FsOperationContext::InsideLiveDir { ino: _ } => match parent {
+                FsOperationContext::InsideLiveDir => match parent {
                     Inodes::NormalIno(_) => ops::readdir::readdir_live_dir(self, parent.to_norm()),
                     Inodes::VirtualIno(_) => ops::readdir::read_virtual_dir(self, parent.to_virt()),
                 },
-                FsOperationContext::InsideGitDir { ino: _ } => match parent {
+                FsOperationContext::InsideGitDir => match parent {
                     Inodes::NormalIno(_) => ops::readdir::readdir_git_dir(self, parent.to_norm()),
                     Inodes::VirtualIno(_) => ops::readdir::read_virtual_dir(self, parent.to_virt()),
                 },
@@ -1313,7 +1305,7 @@ impl GitFs {
         let ctx = FsOperationContext::get_operation(self, parent);
         match ctx? {
             FsOperationContext::Root => ops::lookup::lookup_root(self, name),
-            FsOperationContext::RepoDir { ino: _ } => {
+            FsOperationContext::RepoDir => {
                 let Some(attr) = ops::lookup::lookup_repo(self, parent.to_norm(), name)? else {
                     return Ok(None);
                 };
@@ -1323,7 +1315,7 @@ impl GitFs {
                 }
                 Ok(Some(attr))
             }
-            FsOperationContext::InsideLiveDir { ino: _ } => {
+            FsOperationContext::InsideLiveDir => {
                 // If the target has is a virtual, either File or Dir
                 if spec.is_virtual() {
                     let Some(attr) = ops::lookup::lookup_live(self, parent.to_norm(), name)? else {
@@ -1352,7 +1344,7 @@ impl GitFs {
                     Inodes::VirtualIno(_) => ops::lookup::lookup_vdir(self, parent.to_virt(), name),
                 }
             }
-            FsOperationContext::InsideGitDir { ino: _ } => {
+            FsOperationContext::InsideGitDir => {
                 if spec.is_virtual() {
                     let attr = match ops::lookup::lookup_git(self, parent.to_norm(), name)? {
                         Some(attr) => attr,
