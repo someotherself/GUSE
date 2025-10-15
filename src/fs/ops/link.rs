@@ -26,19 +26,18 @@ pub fn link_git(
         bail!(std::io::Error::from_raw_os_error(libc::EACCES))
     }
     let repo = fs.get_repo(source_ino.to_norm_u64())?;
+    let commit_oid = fs.get_oid_from_db(source_ino.into())?;
 
     let original = {
-        let parent_oid = fs.parent_commit_build_session(source_ino)?;
         let build_root = fs.get_path_to_build_folder(source_ino)?;
-        let session = repo.get_or_init_build_session(parent_oid, &build_root)?;
+        let session = repo.get_or_init_build_session(commit_oid, &build_root)?;
         session.finish_path(fs, source_ino)?
     };
 
     let link = {
         let ino = newparent;
-        let parent_oid = fs.parent_commit_build_session(ino)?;
         let build_root = fs.get_path_to_build_folder(ino)?;
-        let session = repo.get_or_init_build_session(parent_oid, &build_root)?;
+        let session = repo.get_or_init_build_session(commit_oid, &build_root)?;
         session.finish_path(fs, ino)?.join(newname)
     };
     std::fs::hard_link(&original, &link)?;

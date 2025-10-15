@@ -47,7 +47,7 @@ pub const ROOT_INO: u64 = 1;
 pub const VDIR_BIT: u64 = 1u64 << 47;
 const ATTR_LRU: usize = 15000;
 const DENTRY_LRU: usize = 15000;
-const FILE_LRU: usize = 500;
+const FILE_LRU: usize = 600;
 
 enum FsOperationContext {
     /// Is the root directory
@@ -118,7 +118,7 @@ impl FsOperationContext {
 // ino for repo_2 folder1:  0000000000000010000000000....0011
 
 // Virtual inodes
-// The 48th bit is reserved for virtual inoded. 
+// The 48th bit is reserved for virtual inoded.
 // A normal (Inodes::NormalIno) ino will have it set to 0
 // If inode 0000000000000001000000000....0111 is a real file
 // Inode    0000000000000001100000000....0111 will be a virtual directory
@@ -1597,11 +1597,10 @@ impl GitFs {
         let path = if self.is_in_live(ino)? {
             self.get_live_path(ino)?
         } else if self.is_in_build(ino)? {
-            let parent_oid = self.get_oid_from_db(ino.into())?;
+            let commit_oid = self.get_oid_from_db(ino.into())?;
             let build_root = self.get_path_to_build_folder(ino)?;
             let repo = self.get_repo(ino.into())?;
-            let session = repo.get_or_init_build_session(parent_oid, &build_root)?;
-            drop(repo);
+            let session = repo.get_or_init_build_session(commit_oid, &build_root)?;
             session.finish_path(self, ino)?
         } else {
             bail!(std::io::Error::from_raw_os_error(libc::EPERM));
@@ -1722,6 +1721,9 @@ impl GitFs {
         Ok(repo.clone())
     }
 
+    /// Used in InoFlag::InsideSnap.
+    ///
+    /// Will go up the directory tree and the commit_oid from the root Snap folder
     pub fn get_parent_commit(&self, ino: u64) -> anyhow::Result<Oid> {
         let repo = self.get_repo(ino)?;
 
@@ -1927,7 +1929,7 @@ impl GitFs {
         parent_ino: NormalIno,
         child_name: &OsStr,
     ) -> anyhow::Result<FileAttr> {
-        if let Ok(ino) = self.get_ino_by_parent_cache(parent_ino.into(), child_name.to_os_string())
+        if let Ok(ino) = self.get_ino_by_parent_cache(parent_ino.into(), child_name)
             && let Ok(attr) = self.get_attr_from_cache(ino)
         {
             return Ok(attr);
@@ -2059,6 +2061,7 @@ impl GitFs {
     /// Send and forget but will log errors as tracing::error!
     fn remove_db_dentry(&self, parent_ino: NormalIno, target_name: &OsStr) -> anyhow::Result<()> {
         let repo_id = GitFs::ino_to_repo_id(parent_ino.into());
+        self.remove_inode_from_cache(parent_ino.into(), target_name)?;
         let writer_tx = {
             let guard = self
                 .conn_list
@@ -2273,6 +2276,14 @@ impl GitFs {
     }
 
     fn get_oid_from_db(&self, ino: u64) -> anyhow::Result<Oid> {
+        let cache_res = {
+            let repo = self.get_repo(ino)?;
+            repo.attr_cache.with_get_mut(ino, |a| a.oid)
+        };
+        if let Some(oid) = cache_res {
+            return Ok(oid);
+        }
+
         let repo_id = GitFs::ino_to_repo_id(ino);
         let repo_db = self
             .conn_list
@@ -2293,6 +2304,14 @@ impl GitFs {
     }
 
     pub fn get_ino_flag_from_db(&self, ino: NormalIno) -> anyhow::Result<InoFlag> {
+        let cache_res = {
+            let repo = self.get_repo(ino.into())?;
+            repo.attr_cache.with_get_mut(ino.into(), |a| a.ino_flag)
+        };
+        if let Some(ino_flag) = cache_res {
+            return Ok(ino_flag);
+        }
+
         let repo_id = GitFs::ino_to_repo_id(ino.into());
         let repo_db = self
             .conn_list
@@ -2310,6 +2329,14 @@ impl GitFs {
         if ino.to_norm_u64() == 0 {
             return Ok(FileMode::Tree);
         }
+        let cache_res = {
+            let repo = self.get_repo(ino.into())?;
+            repo.attr_cache.with_get_mut(ino.into(), |a| a.git_mode)
+        };
+        if let Some(mode) = cache_res {
+            return repo::try_into_filemode(mode as u64).ok_or_else(|| anyhow!("Invalid filemode"));
+        }
+
         let repo_id = GitFs::ino_to_repo_id(ino.into());
         let repo_db = self
             .conn_list
@@ -2411,10 +2438,17 @@ impl GitFs {
         Ok(())
     }
 
-    fn remove_dentry_from_cache(&self, taget_ino: u64, target_name: &OsStr) -> anyhow::Result<()> {
-        let repo = self.get_repo(taget_ino)?;
+    fn remove_dentry_from_cache(&self, target_ino: u64, target_name: &OsStr) -> anyhow::Result<()> {
+        let repo = self.get_repo(target_ino)?;
         repo.dentry_cache
-            .remove((taget_ino, target_name.to_os_string()));
+            .remove((target_ino, target_name.to_os_string()));
+        Ok(())
+    }
+
+    fn remove_inode_from_cache(&self, parent_ino: u64, target_name: &OsStr) -> anyhow::Result<()> {
+        let repo = self.get_repo(parent_ino)?;
+        let target_ino = self.get_ino_by_parent_cache(parent_ino, target_name)?;
+        repo.attr_cache.remove(target_ino);
         Ok(())
     }
 
@@ -2492,13 +2526,11 @@ impl GitFs {
             .ok_or(anyhow!("Could not get attr from cache"))
     }
 
-    fn get_ino_by_parent_cache(
-        &self,
-        parent_ino: u64,
-        target_name: OsString,
-    ) -> anyhow::Result<u64> {
+    fn get_ino_by_parent_cache(&self, parent_ino: u64, target_name: &OsStr) -> anyhow::Result<u64> {
         let repo = self.get_repo(parent_ino)?;
-        let dentry = repo.dentry_cache.get((parent_ino, target_name));
+        let dentry = repo
+            .dentry_cache
+            .get((parent_ino, target_name.to_os_string()));
         if let Some(dentry) = dentry {
             Ok(dentry.target_ino)
         } else {

@@ -120,23 +120,19 @@ pub fn rename_git_build(
         }
     }
 
+    let repo = fs.get_repo(old_parent.to_norm_u64())?;
+    let commit_oid = fs.get_oid_from_db(old_parent.into())?;
     let src = {
         let ino = old_parent;
-        let parent_oid = fs.parent_commit_build_session(ino)?;
         let build_root = fs.get_path_to_build_folder(ino)?;
-        let repo = fs.get_repo(ino.to_norm_u64())?;
-        let session = repo.get_or_init_build_session(parent_oid, &build_root)?;
-        drop(repo);
+        let session = repo.get_or_init_build_session(commit_oid, &build_root)?;
         session.finish_path(fs, ino)?.join(old_name)
     };
 
     let dest = {
         let ino = new_parent;
-        let parent_oid = fs.parent_commit_build_session(ino)?;
         let build_root = fs.get_path_to_build_folder(ino)?;
-        let repo = fs.get_repo(ino.to_norm_u64())?;
-        let session = repo.get_or_init_build_session(parent_oid, &build_root)?;
-        drop(repo);
+        let session = repo.get_or_init_build_session(commit_oid, &build_root)?;
         session.finish_path(fs, ino)?.join(new_name)
     };
 
@@ -154,6 +150,7 @@ pub fn rename_git_build(
 
     let mut new_attr = fs.attr_from_path(ino_flag, dest.clone())?;
     new_attr.ino = src_attr.ino;
+    new_attr.oid = src_attr.oid;
 
     let node = StorageNode {
         parent_ino: new_parent.to_norm_u64(),
