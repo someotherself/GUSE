@@ -30,17 +30,16 @@ impl BuildSession {
         let mut components = vec![];
 
         let mut cur_ino = ino.to_norm_u64();
-        let mut ino_flag = fs.get_ino_flag_from_db(cur_ino.into())?;
 
         let max_loops = 1000;
 
         for _ in 0..max_loops {
+            components.push(fs.get_name_from_db(cur_ino)?);
+            cur_ino = fs.get_single_parent(cur_ino)?;
+            let ino_flag = fs.get_ino_flag_from_db(cur_ino.into())?;
             if ino_flag == InoFlag::SnapFolder {
                 break;
             }
-            components.push(fs.get_name_from_db(cur_ino)?);
-            cur_ino = fs.get_single_parent(cur_ino)?;
-            ino_flag = fs.get_ino_flag_from_db(cur_ino.into())?;
         }
 
         components.reverse();

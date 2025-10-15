@@ -2480,15 +2480,6 @@ impl GitFs {
             if let Some(perm) = attr.perm {
                 a.perm = perm
             }
-            if let Some(uid) = attr.uid {
-                a.uid = uid
-            }
-            if let Some(gid) = attr.gid {
-                a.gid = gid
-            }
-            if let Some(rdev) = attr.rdev {
-                a.rdev = rdev
-            }
             if let Some(flags) = attr.flags {
                 a.flags = flags
             }
