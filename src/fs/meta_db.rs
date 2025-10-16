@@ -17,7 +17,7 @@ use crate::{
         ROOT_INO,
         fileattr::{
             Dentry, FileAttr, FileType, InoFlag, SetFileAttr, StorageNode, pair_to_system_time,
-            system_time_to_pair, try_into_filetype,
+            system_time_to_pair, try_into_filetype_u32,
         },
         ops::readdir::{BuildCtxMetadata, DirectoryEntry},
         repo,
@@ -1270,7 +1270,7 @@ impl MetaDb {
         let ino_flag = u64::try_from(inode_flag)?;
         let ino_flag = InoFlag::try_from(ino_flag)?;
         let kind: FileType =
-            try_into_filetype(git_mode as u64).ok_or_else(|| anyhow!("Invalid filetype"))?;
+            try_into_filetype_u32(git_mode as u32).ok_or_else(|| anyhow!("Invalid filetype"))?;
         let size = size as u64;
         let blocks = size.div_ceil(512);
         let atime = pair_to_system_time(atime_secs, atime_nsecs as i32);

@@ -12,14 +12,17 @@ pub enum Inodes {
 pub struct NormalIno(u64);
 
 impl NormalIno {
+    #[inline]
     pub fn to_virt(&self) -> VirtualIno {
         VirtualIno(self | VDIR_BIT)
     }
 
+    #[inline]
     pub fn to_virt_u64(&self) -> u64 {
         self | VDIR_BIT
     }
 
+    #[inline]
     pub fn to_norm_u64(&self) -> u64 {
         self.0
     }
@@ -29,20 +32,24 @@ impl NormalIno {
 pub struct VirtualIno(u64);
 
 impl VirtualIno {
+    #[inline]
     pub fn to_norm(self) -> NormalIno {
         NormalIno(self.0 & !VDIR_BIT)
     }
 
+    #[inline]
     pub fn to_norm_u64(&self) -> u64 {
         self.0 & !VDIR_BIT
     }
 
+    #[inline]
     pub fn to_virt_u64(&self) -> u64 {
         self.0
     }
 }
 
 impl Inodes {
+    #[inline]
     pub fn to_norm(self) -> NormalIno {
         match self {
             Inodes::NormalIno(ino) => NormalIno(ino),
@@ -53,6 +60,7 @@ impl Inodes {
         }
     }
 
+    #[inline]
     pub fn to_virt(self) -> VirtualIno {
         match self {
             Inodes::NormalIno(ino) => {
@@ -63,6 +71,7 @@ impl Inodes {
         }
     }
 
+    #[inline]
     pub fn to_u64_n(self) -> u64 {
         match self {
             Inodes::NormalIno(ino) | Inodes::VirtualIno(ino) => ino & !VDIR_BIT,

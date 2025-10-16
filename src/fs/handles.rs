@@ -27,6 +27,7 @@ impl Default for FileHandles {
 }
 
 impl FileHandles {
+    #[inline]
     pub fn exists(&self, fh: u64) -> Option<u64> {
         self.handles.get(&fh).map(|entry| entry.ino)
     }
@@ -122,6 +123,7 @@ impl FileHandles {
         }
     }
 
+    #[inline]
     fn next_handle(&self) -> u64 {
         self.current_handle.fetch_add(1, Ordering::SeqCst)
     }

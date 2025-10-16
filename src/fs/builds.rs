@@ -49,6 +49,7 @@ impl BuildSession {
         Ok(full_path)
     }
 
+    #[inline]
     pub fn temp_dir(&self) -> PathBuf {
         self.folder.path().to_path_buf()
     }
@@ -94,10 +95,12 @@ impl BuildOperationCtx {
         }))
     }
 
+    #[inline]
     pub fn path(&self) -> PathBuf {
         self.full_path.clone()
     }
 
+    #[inline]
     pub fn commit_oid(&self) -> Oid {
         self.target
     }

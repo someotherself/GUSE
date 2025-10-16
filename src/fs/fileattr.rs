@@ -53,6 +53,7 @@ pub enum FileType {
 }
 
 impl FileType {
+    #[inline]
     pub fn from_filemode(mode: ObjectType) -> anyhow::Result<FileType> {
         match mode {
             ObjectType::Blob => Ok(FileType::RegularFile),
@@ -63,6 +64,7 @@ impl FileType {
     }
 }
 
+#[inline]
 pub const fn dir_attr(ino_flag: InoFlag) -> CreateFileAttr {
     CreateFileAttr {
         kind: FileType::Directory,
@@ -76,6 +78,7 @@ pub const fn dir_attr(ino_flag: InoFlag) -> CreateFileAttr {
     }
 }
 
+#[inline]
 pub const fn file_attr(ino_flag: InoFlag) -> CreateFileAttr {
     CreateFileAttr {
         kind: FileType::RegularFile,
@@ -249,18 +252,11 @@ impl From<InoFlag> for u64 {
     }
 }
 
-pub fn try_into_filetype(mode: u64) -> Option<FileType> {
-    let m = u32::try_from(mode).ok()?;
-    match m {
+#[inline]
+pub const fn try_into_filetype_u32(m: u32) -> Option<FileType> {
+    match m & 0o170000 {
         0o040000 => Some(FileType::Directory),
-        0o100644 | 0o100755 | 0o120000 | 0o160000 => Some(FileType::RegularFile),
-        _ => {
-            let typ = m & 0o170000;
-            match typ {
-                0o040000 => Some(FileType::Directory),
-                0o120000 | 0o160000 | 0o100000 => Some(FileType::RegularFile),
-                _ => None,
-            }
-        }
+        0o100000 | 0o120000 | 0o160000 => Some(FileType::RegularFile),
+        _ => None,
     }
 }

@@ -47,9 +47,9 @@ const LIVE_FOLDER: &str = "live";
 pub const REPO_SHIFT: u8 = 48;
 pub const ROOT_INO: u64 = 1;
 pub const VDIR_BIT: u64 = 1u64 << 47;
-const ATTR_LRU: usize = 15000;
-const DENTRY_LRU: usize = 15000;
-const FILE_LRU: usize = 600;
+const ATTR_LRU: usize = 25000;
+const DENTRY_LRU: usize = 25000;
+const FILE_LRU: usize = 800;
 
 enum FsOperationContext {
     /// Is the root directory
@@ -185,14 +185,17 @@ struct VFileEntry {
 }
 
 impl SourceTypes {
+    #[inline]
     pub fn is_file(&self) -> bool {
         matches!(self, SourceTypes::RealFile(_))
     }
 
+    #[inline]
     pub fn is_blob(&self) -> bool {
         matches!(self, SourceTypes::RoBlob { oid: _, data: _ })
     }
 
+    #[inline]
     pub fn is_dir(&self) -> bool {
         matches!(self, SourceTypes::DirSnapshot { entries: _ })
     }
@@ -1868,10 +1871,12 @@ impl GitFs {
         MetaDb::get_single_parent(&conn, ino)
     }
 
+    #[inline]
     fn repo_id_to_ino(repo_id: u16) -> u64 {
         (repo_id as u64) << REPO_SHIFT
     }
 
+    #[inline]
     fn ino_to_repo_id(ino: u64) -> u16 {
         (ino >> REPO_SHIFT) as u16
     }
