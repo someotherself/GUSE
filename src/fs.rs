@@ -1078,7 +1078,7 @@ impl GitFs {
     pub fn create(
         &self,
         parent: u64,
-        os_name: &OsStr,
+        name: &OsStr,
         read: bool,
         write: bool,
     ) -> anyhow::Result<(FileAttr, u64)> {
@@ -1090,9 +1090,6 @@ impl GitFs {
         if !self.exists(parent)? {
             bail!(format!("Parent {} does not exist", parent));
         }
-        let name = os_name
-            .to_str()
-            .ok_or_else(|| anyhow!("Not a valid UTF-8 name"))?;
 
         let ctx = FsOperationContext::get_operation(self, parent);
         match ctx? {

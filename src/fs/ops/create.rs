@@ -1,4 +1,7 @@
-use std::{ffi::OsString, sync::Arc};
+use std::{
+    ffi::{OsStr, OsString},
+    sync::Arc,
+};
 
 use anyhow::bail;
 use libc::EPERM;
@@ -16,7 +19,7 @@ use crate::{
 pub fn create_live(
     fs: &GitFs,
     parent: u64,
-    name: &str,
+    name: &OsStr,
     write: bool,
 ) -> anyhow::Result<(FileAttr, u64)> {
     let ino = fs.next_inode_checked(parent)?;
@@ -49,7 +52,7 @@ pub fn create_live(
 pub fn create_git(
     fs: &GitFs,
     parent: NormalIno,
-    name: &str,
+    name: &OsStr,
     write: bool,
 ) -> anyhow::Result<(FileAttr, u64)> {
     let Some(ctx) = BuildOperationCtx::new(fs, parent)? else {

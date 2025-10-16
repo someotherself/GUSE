@@ -49,32 +49,27 @@ pub fn open_git(
     write: bool,
     truncate: bool,
 ) -> anyhow::Result<u64> {
-    let oid = fs.get_oid_from_db(ino.to_norm_u64())?;
-    let flag = fs.get_ino_flag_from_db(ino)?;
-    if flag == InoFlag::InsideBuild {
+    let metadata = fs.get_builctx_metadata(ino)?;
+    if metadata.ino_flag == InoFlag::InsideBuild {
         // Check the cache first
         let file = match fs.take_file_from_cache(ino.into()) {
             Ok(file) => file,
             Err(_) => {
                 let build_root = fs.get_path_to_build_folder(ino)?;
-                let commit_oid = fs.get_oid_from_db(ino.into())?;
 
                 let path = {
                     let mut found = None;
                     let dentries = fs.list_dentries_for_inode(ino)?;
+                    let repo = fs.get_repo(ino.to_norm_u64())?;
                     for (parent_ino, name) in dentries {
-                        let repo = fs.get_repo(ino.to_norm_u64())?;
-                        let session = {
-                            let build_root = fs.get_path_to_build_folder(ino)?;
-                            repo.get_or_init_build_session(commit_oid, &build_root)?
-                        };
+                        let session = repo.get_or_init_build_session(metadata.oid, &build_root)?;
                         let parent_path = session.finish_path(fs, parent_ino.into())?.join(&name);
                         if parent_path.exists() {
                             found = Some(parent_path);
                             break;
                         }
                     }
-                    found.ok_or_else(|| anyhow!("No existing path for inode {}", ino))?
+                    found.ok_or_else(|| anyhow!("No existing path for inode {ino}"))?
                 };
 
                 let open_file = OpenOptions::new()
@@ -95,7 +90,7 @@ pub fn open_git(
         let fh = fs.handles.open(handle)?;
         return Ok(fh);
     }
-    open_blob(fs, oid, ino.to_norm_u64(), read)
+    open_blob(fs, metadata.oid, ino.to_norm_u64(), read)
 }
 
 pub fn open_vfile(fs: &GitFs, ino: Inodes, read: bool, write: bool) -> anyhow::Result<u64> {
