@@ -185,9 +185,7 @@ where
     pub fn get(&self, key: K) -> Option<V> {
         let mut guard = self.list.write();
         let id = *guard.map.get(&key)?;
-        if guard.nodes[id].value.is_none() {
-            return None
-        };
+        guard.nodes[id].value.as_ref()?;
         guard.unlink(id);
         guard.push_front(id)
     }
@@ -198,9 +196,7 @@ where
             return None;
         }
         let id = *guard.map.get(&key)?;
-        if guard.nodes[id].value.is_none() {
-            return None
-        };
+        guard.nodes[id].value.as_ref()?;
         guard.unlink(id);
         guard.push_front(id);
         let entry = &mut guard.nodes[id];
@@ -592,3 +588,15 @@ mod test {
         assert_eq!(attr.size, 12);
     }
 }
+
+pub struct DentryInner<K: Debug, V: Clone, S = ahash::RandomState> {
+    target_ino_map: HashMap<K, Vec<NodeId>, S>,
+    parentino_name_map: HashMap<K, NodeId, S>,
+    targetino_name_map: HashMap<K, NodeId, S>,
+    nodes: Vec<Entry<K, V>>,
+    free: Vec<NodeId>,
+    head: Option<NodeId>, // MRU
+    tail: Option<NodeId>, // LRU
+    capacity: NonZeroUsize,
+}
+pub struct DentryLry {}
