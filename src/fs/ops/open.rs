@@ -99,7 +99,8 @@ pub fn open_git(
 }
 
 pub fn open_vfile(fs: &GitFs, ino: Inodes, read: bool, write: bool) -> anyhow::Result<u64> {
-    let res = classify_inode(fs, ino.to_u64_v())?;
+    let metadata = fs.get_builctx_metadata(ino.to_norm())?;
+    let res = classify_inode(&metadata)?;
     match res {
         DirCase::Month { year, month } => {
             let mut contents = {
@@ -166,7 +167,8 @@ pub fn open_vfile(fs: &GitFs, ino: Inodes, read: bool, write: bool) -> anyhow::R
 
 /// Saved the file in the vfile_entry and returns the size of the content
 pub fn create_vfile_entry(fs: &GitFs, ino: VirtualIno) -> anyhow::Result<u64> {
-    let res = classify_inode(fs, ino.to_virt_u64())?;
+    let metadata = fs.get_builctx_metadata(ino.to_norm())?;
+    let res = classify_inode(&metadata)?;
     let (entry, len) = match res {
         DirCase::Month { year, month } => {
             let entries = {

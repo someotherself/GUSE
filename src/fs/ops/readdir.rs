@@ -70,6 +70,13 @@ impl From<ObjectAttr> for DirectoryEntry {
     }
 }
 
+pub struct BuildCtxMetadata {
+    pub mode: git2::FileMode,
+    pub oid: Oid,
+    pub name: OsString,
+    pub ino_flag: InoFlag,
+}
+
 #[derive(Debug)]
 pub enum DirCase {
     /// The month folders
@@ -202,13 +209,10 @@ pub fn readdir_live_dir(fs: &GitFs, ino: NormalIno) -> anyhow::Result<Vec<Direct
 // Two branches
 // 1 - ino is for a month folder -> show days folders
 // 2 - ino is for a commit or inside a commit -> show commit contents
-pub fn classify_inode(fs: &GitFs, ino: u64) -> anyhow::Result<DirCase> {
-    let mode = fs.get_mode_from_db(ino.into())?;
-    let oid = fs.get_oid_from_db(ino)?;
-    let target_name = fs.get_name_from_db(ino)?;
-    if (mode == FileMode::Tree || mode == FileMode::Commit) && oid == Oid::zero() {
+pub fn classify_inode(meta: &BuildCtxMetadata) -> anyhow::Result<DirCase> {
+    if (meta.mode == FileMode::Tree || meta.mode == FileMode::Commit) && meta.oid == Oid::zero() {
         // Branch 1
-        if let Some((y, m)) = namespec::split_once_os(&target_name, b'-')
+        if let Some((y, m)) = namespec::split_once_os(&meta.name, b'-')
             && let (Some(year), Some(month)) =
                 (namespec::parse_i32_os(&y), namespec::parse_u32_os(&m))
         {
@@ -219,7 +223,7 @@ pub fn classify_inode(fs: &GitFs, ino: u64) -> anyhow::Result<DirCase> {
     // Branch 2
     // Will be a commit_id for the root folder of the commit
     // Or a Tree or Blob for anything inside
-    Ok(DirCase::Commit { oid })
+    Ok(DirCase::Commit { oid: meta.oid })
 }
 
 // Performance is a priority
@@ -234,6 +238,30 @@ fn read_build_dir(fs: &GitFs, ino: NormalIno) -> anyhow::Result<Vec<DirectoryEnt
 
     let entries = populate_build_entries(fs, ino, &ctx.path())?;
     out.extend(entries);
+    Ok(out)
+}
+
+fn populate_build_entries(
+    fs: &GitFs,
+    ino: NormalIno,
+    build_path: &Path,
+) -> anyhow::Result<Vec<DirectoryEntry>> {
+    let mut out: Vec<DirectoryEntry> = Vec::new();
+    for node in build_path.read_dir()? {
+        let node = node?;
+        let node_name = node.file_name();
+        let (kind, filemode) = if node.file_type()?.is_dir() {
+            (FileType::Directory, libc::S_IFDIR)
+        } else {
+            (FileType::RegularFile, libc::S_IFREG)
+        };
+        let entry_ino = match fs.exists_by_name(ino.into(), &node_name)? {
+            Some(ino) => ino,
+            None => continue,
+        };
+        let entry = DirectoryEntry::new(entry_ino, Oid::zero(), node_name, kind, filemode);
+        out.push(entry);
+    }
     Ok(out)
 }
 
@@ -342,38 +370,13 @@ fn dot_git_root(fs: &GitFs, parent_ino: u64) -> anyhow::Result<DirectoryEntry> {
     Ok(entry)
 }
 
-fn populate_build_entries(
-    fs: &GitFs,
-    ino: NormalIno,
-    build_path: &Path,
-) -> anyhow::Result<Vec<DirectoryEntry>> {
-    let mut out: Vec<DirectoryEntry> = Vec::new();
-    for node in build_path.read_dir()? {
-        let node = node?;
-        let node_name = node.file_name();
-        let (kind, filemode) = if node.file_type()?.is_dir() {
-            (FileType::Directory, libc::S_IFDIR)
-        } else {
-            (FileType::RegularFile, libc::S_IFREG)
-        };
-        let entry_ino = match fs.exists_by_name(ino.into(), &node_name)? {
-            Some(ino) => ino,
-            None => continue,
-        };
-        let entry = DirectoryEntry::new(entry_ino, Oid::zero(), node_name, kind, filemode);
-        out.push(entry);
-    }
-    Ok(out)
-}
-
 pub fn readdir_git_dir(fs: &GitFs, parent: NormalIno) -> anyhow::Result<Vec<DirectoryEntry>> {
-    let ino_flag = fs.get_ino_flag_from_db(parent)?;
+    let metadata = fs.get_builctx_metadata(parent)?;
     let repo = fs.get_repo(parent.into())?;
-    let mut dir_entries = match ino_flag {
+    let mut dir_entries = match metadata.ino_flag {
         InoFlag::MonthFolder => {
             // The objects are Snap folders
-            let Ok(DirCase::Month { year, month }) = classify_inode(fs, parent.to_norm_u64())
-            else {
+            let Ok(DirCase::Month { year, month }) = classify_inode(&metadata) else {
                 bail!("Invalid MONTH folder name")
             };
             let objects = repo.month_commits(&format!("{year:04}-{month:02}"))?;
@@ -382,8 +385,7 @@ pub fn readdir_git_dir(fs: &GitFs, parent: NormalIno) -> anyhow::Result<Vec<Dire
         InoFlag::SnapFolder => {
             // The Oid will be a commit oid
             // Will also contain everything in the build folder
-            let oid = fs.get_oid_from_db(parent.into())?;
-            let objects = repo.list_tree(oid, None)?;
+            let objects = repo.list_tree(metadata.oid, None)?;
             // git objects
             let mut dir_entries = objects_to_dir_entries(fs, parent, objects, InoFlag::InsideSnap)?;
             // build files/folders
@@ -397,10 +399,10 @@ pub fn readdir_git_dir(fs: &GitFs, parent: NormalIno) -> anyhow::Result<Vec<Dire
         InoFlag::InsideSnap => {
             // The Oid will be a tree oid
             // Is one of the folders (Tree) inside Snap. Only list git objects in it
-            let oid = fs.get_oid_from_db(parent.into())?;
             let commit_oid = fs.get_parent_commit(parent.into())?;
-            let repo = fs.get_repo(parent.into())?;
-            let objects = repo.list_tree(commit_oid, Some(oid)).unwrap_or_default();
+            let objects = repo
+                .list_tree(commit_oid, Some(metadata.oid))
+                .unwrap_or_default();
             objects_to_dir_entries(fs, parent, objects, InoFlag::InsideSnap)?
         }
         InoFlag::InsideBuild | InoFlag::BuildRoot => {
@@ -438,7 +440,6 @@ fn objects_to_dir_entries(
                     ObjectType::Tree | ObjectType::Commit => dir_attr(ino_flag).into(),
                     _ => file_attr(ino_flag).into(),
                 };
-                // TODO: Add the commit oid
                 attr.oid = entry.oid;
                 attr.ino = ino;
                 attr.size = entry.size;
@@ -458,17 +459,13 @@ fn objects_to_dir_entries(
     Ok(dir_entries)
 }
 
-fn get_history_objects(fs: &GitFs, ino: u64, oid: Oid) -> anyhow::Result<Vec<ObjectAttr>> {
-    let repo = fs.get_repo(ino)?;
-    repo.blob_history_objects(oid)
-}
-
 fn log_entries(
     fs: &GitFs,
     ino: u64,
     origin_oid: Oid,
 ) -> anyhow::Result<Vec<(OsString, (u64, ObjectAttr))>> {
-    let entries = get_history_objects(fs, ino, origin_oid)?;
+    let repo = fs.get_repo(ino)?;
+    let entries = repo.blob_history_objects(origin_oid)?;
 
     let mut log_entries: Vec<(OsString, (u64, ObjectAttr))> = vec![];
     for e in entries {

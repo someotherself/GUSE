@@ -23,7 +23,9 @@ use crate::fs::fileattr::{
 };
 use crate::fs::handles::FileHandles;
 use crate::fs::meta_db::{DbWriteMsg, MetaDb, oneshot, set_conn_pragmas, set_wal_once};
-use crate::fs::ops::readdir::{DirectoryEntry, DirectoryEntryPlus, DirectoryStreamCookie};
+use crate::fs::ops::readdir::{
+    BuildCtxMetadata, DirectoryEntry, DirectoryEntryPlus, DirectoryStreamCookie,
+};
 use crate::fs::repo::{GitRepo, State, VirtualNode};
 use crate::inodes::{Inodes, NormalIno, VirtualIno};
 use crate::internals::cache::LruCache;
@@ -1956,6 +1958,18 @@ impl GitFs {
         MetaDb::get_metadata(&conn, target_ino)
     }
 
+    fn get_builctx_metadata(&self, ino: NormalIno) -> anyhow::Result<BuildCtxMetadata> {
+        let repo_id = GitFs::ino_to_repo_id(ino.into());
+        let repo_db = self
+            .conn_list
+            .get(&repo_id)
+            .ok_or_else(|| anyhow::anyhow!("no db"))?;
+        let conn = repo_db.ro_pool.get()?;
+
+        let meta = MetaDb::get_builctx_metadata(&conn, ino.into())?;
+        Ok(meta)
+    }
+
     /// Takes Inodes as virtual inodes do not "exist"
     pub fn exists(&self, ino: Inodes) -> anyhow::Result<bool> {
         let ino = ino.to_u64_n();
@@ -2325,7 +2339,6 @@ impl GitFs {
     }
 
     fn get_mode_from_db(&self, ino: NormalIno) -> anyhow::Result<git2::FileMode> {
-        // Live directory does not exist in the DB. Handle it separately.
         if ino.to_norm_u64() == 0 {
             return Ok(FileMode::Tree);
         }

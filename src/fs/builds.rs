@@ -30,16 +30,17 @@ impl BuildSession {
         let mut components = vec![];
 
         let mut cur_ino = ino.to_norm_u64();
+        let mut ino_flag = fs.get_ino_flag_from_db(cur_ino.into())?;
 
         let max_loops = 1000;
 
         for _ in 0..max_loops {
-            components.push(fs.get_name_from_db(cur_ino)?);
-            cur_ino = fs.get_single_parent(cur_ino)?;
-            let ino_flag = fs.get_ino_flag_from_db(cur_ino.into())?;
             if ino_flag == InoFlag::SnapFolder {
                 break;
             }
+            components.push(fs.get_name_from_db(cur_ino)?);
+            cur_ino = fs.get_single_parent(cur_ino)?;
+            ino_flag = fs.get_ino_flag_from_db(cur_ino.into())?;
         }
 
         components.reverse();
@@ -55,7 +56,6 @@ impl BuildSession {
 
 /// Used by readdir, create and mkdir
 pub struct BuildOperationCtx {
-    ino: NormalIno,
     target: Oid,
     temp_dir: PathBuf,
     full_path: PathBuf,
@@ -63,14 +63,16 @@ pub struct BuildOperationCtx {
 
 impl BuildOperationCtx {
     pub fn new(fs: &GitFs, ino: NormalIno) -> anyhow::Result<Option<Self>> {
-        let case = classify_inode(fs, ino.to_norm_u64())?;
+        let metadata = fs.get_builctx_metadata(ino)?;
+        let case = classify_inode(&metadata)?;
 
         let DirCase::Commit { oid } = case else {
             return Ok(None);
         };
 
-        let ino_flag = fs.get_ino_flag_from_db(ino)?;
-        let target = if ino_flag == InoFlag::SnapFolder || ino_flag == InoFlag::InsideBuild {
+        let target = if metadata.ino_flag == InoFlag::SnapFolder
+            || metadata.ino_flag == InoFlag::InsideBuild
+        {
             oid
         } else {
             return Ok(None);
@@ -86,7 +88,6 @@ impl BuildOperationCtx {
         let full_path = build_session.finish_path(fs, ino)?;
 
         Ok(Some(Self {
-            ino,
             target,
             temp_dir,
             full_path,

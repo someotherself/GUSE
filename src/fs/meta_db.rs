@@ -19,7 +19,8 @@ use crate::{
             Dentry, FileAttr, FileType, InoFlag, SetFileAttr, StorageNode, pair_to_system_time,
             system_time_to_pair, try_into_filetype,
         },
-        ops::readdir::DirectoryEntry,
+        ops::readdir::{BuildCtxMetadata, DirectoryEntry},
+        repo,
     },
     inodes::NormalIno,
 };
@@ -1300,5 +1301,51 @@ impl MetaDb {
         };
 
         Ok(attr)
+    }
+
+    pub fn get_builctx_metadata(
+        conn: &rusqlite::Connection,
+        ino: u64,
+    ) -> anyhow::Result<BuildCtxMetadata> {
+        let sql = r#"
+        SELECT
+            m.git_mode, -- 0
+            m.oid, -- 1
+            m.inode_flag, -- 2
+            (SELECT d.name
+               FROM dentries d
+               WHERE d.target_inode = m.inode
+               LIMIT 1) AS name -- 3
+        FROM inode_map m
+        WHERE m.inode = ?1
+        LIMIT 1
+    "#;
+
+        let mut stmt = conn.prepare_cached(sql)?;
+        let row = stmt
+            .query_row(params![ino as i64], |row| {
+                let mode_i: i64 = row.get(0)?;
+                let oid_txt: String = row.get(1)?;
+                let flag_i: i64 = row.get(2)?;
+                let name_raw: Vec<u8> = row.get(3)?;
+
+                let mode = repo::try_into_filemode(mode_i as u64)
+                    .ok_or_else(|| rusqlite::Error::InvalidQuery)?;
+                let oid: Oid = oid_txt.parse().map_err(|_| rusqlite::Error::InvalidQuery)?;
+                let ino_flag = (flag_i as u64)
+                    .try_into()
+                    .map_err(|_| rusqlite::Error::InvalidQuery)?;
+
+                Ok(BuildCtxMetadata {
+                    mode,
+                    oid,
+                    ino_flag,
+                    name: OsString::from_vec(name_raw),
+                })
+            })
+            .optional()?
+            .ok_or_else(|| anyhow!("inode {} not found in inode_map", ino))?;
+
+        Ok(row)
     }
 }
