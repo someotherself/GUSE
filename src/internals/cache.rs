@@ -1,18 +1,18 @@
-use std::{collections::HashMap, fmt::Debug, num::NonZeroUsize};
+use std::{collections::HashMap, num::NonZeroUsize};
 
 use anyhow::bail;
 use parking_lot::RwLock;
 
 type NodeId = usize;
 
-struct Entry<K: Debug, V> {
-    key: K,
-    value: Option<V>,
-    next: Option<NodeId>, // towards the LRU (tail)
-    prev: Option<NodeId>, // towards the MRU (head)
+struct Entry<K, V> {
+    pub key: K,
+    pub value: Option<V>,
+    pub next: Option<NodeId>, // towards the LRU (tail)
+    pub prev: Option<NodeId>, // towards the MRU (head)
 }
 
-impl<K: Debug, V> Entry<K, V> {
+impl<K, V> Entry<K, V> {
     pub fn new(key: K, value: V) -> Self {
         Self {
             key,
@@ -23,7 +23,7 @@ impl<K: Debug, V> Entry<K, V> {
     }
 }
 
-pub struct Inner<K: Debug, V: Clone, S = ahash::RandomState> {
+pub struct Inner<K, V: Clone, S = ahash::RandomState> {
     map: HashMap<K, NodeId, S>,
     nodes: Vec<Entry<K, V>>,
     free: Vec<NodeId>,
@@ -32,7 +32,7 @@ pub struct Inner<K: Debug, V: Clone, S = ahash::RandomState> {
     capacity: NonZeroUsize,
 }
 
-impl<K: Debug, V: Clone, S> Inner<K, V, S>
+impl<K, V: Clone, S> Inner<K, V, S>
 where
     K: Eq + std::hash::Hash + Clone,
     S: core::hash::BuildHasher + Default,
@@ -137,16 +137,15 @@ where
         let index = match self.free.pop() {
             Some(i) => {
                 let _ = std::mem::replace(&mut self.nodes[i], entry);
-                self.map.insert(key, i);
                 i
             }
             None => {
                 let index = self.nodes.len() as NodeId;
                 self.nodes.push(entry);
-                self.map.insert(key, index);
                 index
             }
         };
+        self.map.insert(key, index);
 
         // Handle old head, or if list is empty
         if let Some(h) = old_head {
@@ -166,11 +165,11 @@ where
     }
 }
 
-pub struct LruCache<K: Debug, V: Clone, S = ahash::RandomState> {
+pub struct LruCache<K, V: Clone, S = ahash::RandomState> {
     list: RwLock<Inner<K, V, S>>,
 }
 
-impl<K: Debug, V: Clone, S> LruCache<K, V, S>
+impl<K, V: Clone, S> LruCache<K, V, S>
 where
     K: Eq + std::hash::Hash + Clone,
     S: core::hash::BuildHasher + Default,
@@ -185,7 +184,6 @@ where
     pub fn get(&self, key: K) -> Option<V> {
         let mut guard = self.list.write();
         let id = *guard.map.get(&key)?;
-        guard.nodes[id].value.as_ref()?;
         guard.unlink(id);
         guard.push_front(id)
     }
@@ -196,7 +194,6 @@ where
             return None;
         }
         let id = *guard.map.get(&key)?;
-        guard.nodes[id].value.as_ref()?;
         guard.unlink(id);
         guard.push_front(id);
         let entry = &mut guard.nodes[id];
@@ -588,15 +585,3 @@ mod test {
         assert_eq!(attr.size, 12);
     }
 }
-
-pub struct DentryInner<K: Debug, V: Clone, S = ahash::RandomState> {
-    target_ino_map: HashMap<K, Vec<NodeId>, S>,
-    parentino_name_map: HashMap<K, NodeId, S>,
-    targetino_name_map: HashMap<K, NodeId, S>,
-    nodes: Vec<Entry<K, V>>,
-    free: Vec<NodeId>,
-    head: Option<NodeId>, // MRU
-    tail: Option<NodeId>, // LRU
-    capacity: NonZeroUsize,
-}
-pub struct DentryLry {}
