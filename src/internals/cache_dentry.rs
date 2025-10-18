@@ -173,7 +173,11 @@ where
                 index
             }
         };
-        self.target_ino_map.insert(value.target_ino, vec![index]);
+        if let Some(vec) = self.target_ino_map.get_mut(&value.target_ino) {
+            vec.push(index);
+        } else {
+            self.target_ino_map.insert(value.target_ino, vec![index]);
+        }
         self.parent_ino_name_map
             .insert((value.parent_ino, value.target_name.clone()), index);
         self.target_ino_name_map
@@ -319,43 +323,70 @@ where
 mod test {
     use super::*;
 
-    fn test_lru_cache_insert() {
+    #[test]
+    fn test_dentry_lru_cache_insert_and_remove() {
         let lru: DentryLru = DentryLru::new(3);
         let dentry1 = Dentry {
             target_ino: 1,
             parent_ino: 2,
             target_name: "aaa".into(),
         };
+        // Entry with the same parent
         let dentry2 = Dentry {
-            target_ino: 1,
+            target_ino: 3,
             parent_ino: 2,
-            target_name: "aaa".into(),
+            target_name: "bbb".into(),
         };
+        // Hard link with the same inode
         let dentry3 = Dentry {
             target_ino: 1,
-            parent_ino: 2,
-            target_name: "aaa".into(),
+            parent_ino: 6,
+            target_name: "ccc".into(),
         };
-        let dentry4 = Dentry {
+
+        lru.insert(dentry1.clone());
+        assert!(lru.peek((dentry1.clone().target_ino, dentry1.clone().target_name))
+            .is_some());
+
+        lru.insert(dentry2.clone());
+        assert!(
+            lru.peek((dentry2.clone().target_ino, dentry2.clone().target_name))
+                .is_some()
+        );
+
+        lru.insert(dentry3.clone());
+        assert!(
+            lru.peek((dentry3.clone().target_ino, dentry3.clone().target_name))
+                .is_some()
+        );
+
+        let dentry_res_1_par_name = lru.get_by_parent_and_name((dentry1.parent_ino, dentry1.target_name.clone())).unwrap();
+        assert_eq!(dentry_res_1_par_name.target_ino, dentry1.target_ino);
+
+        let dentry_res_1_tar_name = lru.get_by_target_and_name((dentry1.target_ino, dentry1.target_name));
+        assert!(dentry_res_1_tar_name.is_some());
+
+        let dentry_res_1_tar = lru.get_by_target(dentry1.target_ino).unwrap();
+
+        assert_eq!(dentry_res_1_tar.len(), 2);
+
+
+
+    }
+
+    fn test_dentry_lru_cache_insert() {
+        let lru: DentryLru = DentryLru::new(3);
+        let dentry1 = Dentry {
             target_ino: 1,
             parent_ino: 2,
             target_name: "aaa".into(),
         };
-        let dentry5 = Dentry {
-            target_ino: 1,
-            parent_ino: 2,
-            target_name: "aaa".into(),
-        };
-        let dentry6 = Dentry {
-            target_ino: 1,
-            parent_ino: 2,
-            target_name: "aaa".into(),
-        };
-        let dentry7 = Dentry {
-            target_ino: 1,
-            parent_ino: 2,
-            target_name: "aaa".into(),
-        };
+        let dentry2 = dentry1.clone();
+        let dentry3 = dentry1.clone();
+        let dentry4 = dentry1.clone();
+        let dentry5 = dentry1.clone();
+        let dentry6 = dentry1.clone();
+        let dentry7 = dentry1.clone();
 
         lru.insert(dentry1.clone());
         assert!(
