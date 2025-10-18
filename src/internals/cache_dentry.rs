@@ -230,6 +230,14 @@ where
         Some(values)
     }
 
+    pub fn get_single_dentry(&self, target_ino: u64) -> Option<Dentry> {
+        let mut guard = self.list.write();
+        let mut ids = guard.target_ino_map.get(&target_ino)?.clone();
+
+        guard.unlink_all(&ids);
+        ids.pop().map(|id| guard.push_front(id))
+    }
+
     pub fn get_by_target_and_name(&self, key: (u64, OsString)) -> Option<Dentry> {
         let mut guard = self.list.write();
         let id = *guard.target_ino_name_map.get(&key)?;

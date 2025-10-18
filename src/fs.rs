@@ -1965,8 +1965,10 @@ impl GitFs {
         MetaDb::get_metadata(&conn, target_ino)
     }
 
-    // TODO: Read from cache
     fn get_builctx_metadata(&self, ino: NormalIno) -> anyhow::Result<BuildCtxMetadata> {
+        if let Ok(meta) = self.get_builctx_metadata_from_cache(ino) {
+            return Ok(meta);
+        };
         let repo_id = GitFs::ino_to_repo_id(ino.into());
         let repo_db = self
             .conn_list
@@ -2037,6 +2039,13 @@ impl GitFs {
     }
 
     fn get_ino_from_db(&self, parent: u64, name: &OsStr) -> anyhow::Result<u64> {
+        let repo = self.get_repo(parent)?;
+        if let Some(dentry) = repo
+            .dentry_cache
+            .get_by_parent_and_name((parent, name.to_os_string()))
+        {
+            return Ok(dentry.target_ino);
+        }
         let repo_id = GitFs::ino_to_repo_id(parent);
         let repo_db = self
             .conn_list
@@ -2286,8 +2295,10 @@ impl GitFs {
         Ok(cur_oid)
     }
 
-    // TODO: FIX NEW SQL
     fn get_path_from_db(&self, ino: NormalIno) -> anyhow::Result<PathBuf> {
+        if let Ok(path) = self.get_path_from_cache(ino.into()) {
+            return Ok(path);
+        };
         let repo_id = GitFs::ino_to_repo_id(ino.into());
         let repo_db = self
             .conn_list
@@ -2407,7 +2418,10 @@ impl GitFs {
             return Ok(());
         }
         let ino = nodes[0].attr.ino;
-        let _ = self.write_inodes_to_cache(ino, nodes.clone());
+        let mut cache_res = false;
+        if self.write_inodes_to_cache(ino, nodes.clone()).is_ok() {
+            cache_res = true
+        };
 
         let repo_id = GitFs::ino_to_repo_id(ino);
         let writer_tx = {
@@ -2419,16 +2433,16 @@ impl GitFs {
         };
 
         let (tx, rx) = oneshot::<()>();
-        let msg = DbWriteMsg::WriteInodes {
-            nodes,
-            resp: Some(tx),
-        };
+        let tx = if cache_res { None } else { Some(tx) };
+        let msg = DbWriteMsg::WriteInodes { nodes, resp: tx };
 
         writer_tx
             .send(msg)
             .context("writer_tx error on write_dentry")?;
 
-        rx.recv().context("writer_rx disc on write_inodes")??;
+        if !cache_res {
+            rx.recv().context("writer_rx disc on write_inodes")??;
+        }
 
         Ok(())
     }
@@ -2566,6 +2580,51 @@ impl GitFs {
         repo.attr_cache
             .get(ino)
             .ok_or(anyhow!("Could not get attr from cache"))
+    }
+
+    fn get_builctx_metadata_from_cache(&self, ino: NormalIno) -> anyhow::Result<BuildCtxMetadata> {
+        let ino = ino.to_norm_u64();
+        let repo = self.get_repo(ino)?;
+        let dentries = repo
+            .dentry_cache
+            .get_by_target(ino)
+            .ok_or_else(|| anyhow!("Cannot find dentry in cache"))?;
+        let name = if !dentries.is_empty() {
+            dentries[0].target_name.clone()
+        } else {
+            bail!("No dentries found")
+        };
+        let Some(attr) = repo.attr_cache.get(ino) else {
+            bail!("Attribute not found for {ino}")
+        };
+        let mode = repo::try_into_filemode(attr.git_mode as u64)
+            .ok_or_else(|| anyhow!("Invalid filemode"))?;
+        Ok(BuildCtxMetadata {
+            mode,
+            oid: attr.oid,
+            name,
+            ino_flag: attr.ino_flag,
+        })
+    }
+
+    /// Equivalent to get_path_from_db
+    fn get_path_from_cache(&self, target_ino: u64) -> anyhow::Result<PathBuf> {
+        let repo = self.get_repo(target_ino)?;
+
+        let mut components: Vec<OsString> = Vec::new();
+        let mut curr = target_ino;
+
+        while let Some(dentry) = repo.dentry_cache.get_single_dentry(curr) {
+            components.push(dentry.target_name);
+            curr = dentry.parent_ino;
+        }
+        if components.is_empty() && target_ino != ROOT_INO {
+            bail!(format!("Could not build path for {target_ino}"))
+        }
+
+        components.reverse();
+
+        Ok(components.iter().collect::<PathBuf>())
     }
 
     fn get_ino_by_parent_cache(&self, parent_ino: u64, target_name: &OsStr) -> anyhow::Result<u64> {

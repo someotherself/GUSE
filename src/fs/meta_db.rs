@@ -1041,9 +1041,6 @@ impl MetaDb {
         Ok(())
     }
 
-    // TODO: Move to fs.rs TODO
-    // TODO: Move to fs.rs TODO
-    // TODO: Move to fs.rs TODO
     pub fn get_path_from_db(conn: &rusqlite::Connection, ino: u64) -> anyhow::Result<PathBuf> {
         let mut stmt = conn.prepare(
             "SELECT parent_inode, name

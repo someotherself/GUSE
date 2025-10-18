@@ -13,8 +13,8 @@ use crate::{
 
 pub fn rename_live(
     fs: &GitFs,
-    parent: NormalIno,
-    name: &OsStr,
+    old_parent: NormalIno,
+    old_name: &OsStr,
     new_parent: NormalIno,
     new_name: &OsStr,
 ) -> anyhow::Result<()> {
@@ -25,7 +25,7 @@ pub fn rename_live(
     }
 
     let src_attr = fs
-        .lookup(parent.to_norm_u64(), name)?
+        .lookup(old_parent.to_norm_u64(), old_name)?
         .ok_or_else(|| anyhow!("Source does not exist"))?;
 
     let mut dest_exists = false;
@@ -38,38 +38,13 @@ pub fn rename_live(
         }
     }
 
-    let src = fs.build_full_path(parent)?.join(name);
+    let src = fs.build_full_path(old_parent)?.join(old_name);
     let dest = fs.build_full_path(new_parent)?.join(new_name);
 
     std::fs::rename(src, &dest)?;
 
-    fs.remove_db_dentry(parent, name)?;
     if dest_exists {
         fs.remove_db_dentry(new_parent, new_name)?;
-    }
-
-    {
-        let _ = fs.notifier.try_send(InvalMsg::Entry {
-            parent: parent.to_norm_u64(),
-            name: OsString::from(name),
-        });
-        let _ = fs.notifier.try_send(InvalMsg::Entry {
-            parent: new_parent.to_norm_u64(),
-            name: OsString::from(new_name),
-        });
-
-        let _ = fs.notifier.try_send(InvalMsg::Inode {
-            ino: parent.to_norm_u64(),
-            off: 0,
-            len: 0,
-        });
-        if new_parent.to_norm_u64() != parent.to_norm_u64() {
-            let _ = fs.notifier.try_send(InvalMsg::Inode {
-                ino: new_parent.to_norm_u64(),
-                off: 0,
-                len: 0,
-            });
-        }
     }
 
     let ino_flag = if dest_in_live {
@@ -86,12 +61,37 @@ pub fn rename_live(
     };
     new_attr.ino = src_attr.ino;
 
-    let nodes = vec![StorageNode {
+    let node = StorageNode {
         parent_ino: new_parent.to_norm_u64(),
         name: new_name.into(),
         attr: new_attr,
-    }];
-    fs.write_inodes_to_db(nodes)?;
+    };
+    fs.update_db_record(old_parent, old_name, node)?;
+
+    {
+        let _ = fs.notifier.try_send(InvalMsg::Entry {
+            parent: old_parent.to_norm_u64(),
+            name: OsString::from(old_name),
+        });
+        let _ = fs.notifier.try_send(InvalMsg::Entry {
+            parent: new_parent.to_norm_u64(),
+            name: OsString::from(new_name),
+        });
+
+        let _ = fs.notifier.try_send(InvalMsg::Inode {
+            ino: old_parent.to_norm_u64(),
+            off: 0,
+            len: 0,
+        });
+        if new_parent.to_norm_u64() != old_parent.to_norm_u64() {
+            let _ = fs.notifier.try_send(InvalMsg::Inode {
+                ino: new_parent.to_norm_u64(),
+                off: 0,
+                len: 0,
+            });
+        }
+    }
+
     Ok(())
 }
 
