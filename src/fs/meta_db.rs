@@ -544,36 +544,6 @@ impl MetaDb {
         Ok(count)
     }
 
-    pub fn list_dentries_for_inode(
-        conn: &rusqlite::Connection,
-        ino: u64,
-    ) -> anyhow::Result<Vec<(u64, OsString)>> {
-        let ino_i64 = i64::try_from(ino).context("inode u64→i64 overflow")?;
-
-        let mut stmt = conn.prepare(
-            r#"
-            SELECT parent_inode, name
-            FROM dentries
-            WHERE target_inode = ?1
-            ORDER BY parent_inode, name
-            "#,
-        )?;
-
-        let rows = stmt
-            .query_map(params![ino_i64], |row| {
-                let parent_i64: i64 = row.get(0)?;
-                let name = OsString::from_vec(row.get(1)?);
-                let parent_u64 = u64::try_from(parent_i64).map_err(|_| {
-                    rusqlite::Error::IntegralValueOutOfRange(parent_i64 as usize, parent_i64)
-                })?;
-                Ok((parent_u64, name))
-            })?
-            .collect::<std::result::Result<Vec<_>, _>>()
-            .context("collect dentries for inode")?;
-
-        Ok(rows)
-    }
-
     pub fn read_children(
         conn: &rusqlite::Connection,
         parent_ino: u64,

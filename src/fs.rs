@@ -1843,25 +1843,6 @@ impl GitFs {
         MetaDb::read_children(&conn, parent_ino.to_norm_u64())
     }
 
-    /// Returns (parent_ino, target_name)
-    pub fn list_dentries_for_inode(&self, ino: NormalIno) -> anyhow::Result<Vec<(u64, OsString)>> {
-        let repo = self.get_repo(ino.into())?;
-        if let Some(entries) = repo.dentry_cache.get_by_target(ino.into()) {
-            let out = entries
-                .iter()
-                .map(|e| (e.parent_ino, e.target_name.clone()))
-                .collect::<Vec<(u64, OsString)>>();
-            return Ok(out);
-        }
-        let repo_id = GitFs::ino_to_repo_id(ino.into());
-        let repo_db = self
-            .conn_list
-            .get(&repo_id)
-            .ok_or_else(|| anyhow::anyhow!("no db"))?;
-        let conn = repo_db.ro_pool.get()?;
-        MetaDb::list_dentries_for_inode(&conn, ino.to_norm_u64())
-    }
-
     // TODO: Read from cache
     pub fn get_all_parents(&self, ino: u64) -> anyhow::Result<Vec<u64>> {
         let repo_id = GitFs::ino_to_repo_id(ino);
