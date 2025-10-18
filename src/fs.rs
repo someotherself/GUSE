@@ -1821,6 +1821,7 @@ impl GitFs {
         MetaDb::get_dir_parent(&conn, ino.into())
     }
 
+    // TODO: Read from cache
     pub fn count_children(&self, ino: NormalIno) -> anyhow::Result<usize> {
         let repo_id = GitFs::ino_to_repo_id(ino.into());
         let repo_db = self
@@ -1831,6 +1832,7 @@ impl GitFs {
         MetaDb::count_children(&conn, ino.to_norm_u64())
     }
 
+    // TODO: Read from cache
     pub fn read_children(&self, parent_ino: NormalIno) -> anyhow::Result<Vec<DirectoryEntry>> {
         let repo_id = GitFs::ino_to_repo_id(parent_ino.into());
         let repo_db = self
@@ -1843,6 +1845,14 @@ impl GitFs {
 
     /// Returns (parent_ino, target_name)
     pub fn list_dentries_for_inode(&self, ino: NormalIno) -> anyhow::Result<Vec<(u64, OsString)>> {
+        let repo = self.get_repo(ino.into())?;
+        if let Some(entries) = repo.dentry_cache.get_by_target(ino.into()) {
+            let out = entries
+                .iter()
+                .map(|e| (e.parent_ino, e.target_name.clone()))
+                .collect::<Vec<(u64, OsString)>>();
+            return Ok(out);
+        }
         let repo_id = GitFs::ino_to_repo_id(ino.into());
         let repo_db = self
             .conn_list
@@ -1852,6 +1862,7 @@ impl GitFs {
         MetaDb::list_dentries_for_inode(&conn, ino.to_norm_u64())
     }
 
+    // TODO: Read from cache
     pub fn get_all_parents(&self, ino: u64) -> anyhow::Result<Vec<u64>> {
         let repo_id = GitFs::ino_to_repo_id(ino);
         let repo_db = self
@@ -1863,6 +1874,12 @@ impl GitFs {
     }
 
     pub fn get_single_parent(&self, ino: u64) -> anyhow::Result<u64> {
+        let repo = self.get_repo(ino)?;
+        if let Some(entries) = repo.dentry_cache.get_by_target(ino)
+            && !entries.is_empty()
+        {
+            return Ok(entries[0].parent_ino);
+        }
         let repo_id = GitFs::ino_to_repo_id(ino);
         let repo_db = self
             .conn_list
@@ -1920,6 +1937,13 @@ impl GitFs {
     }
 
     fn exists_by_name(&self, parent: u64, name: &OsStr) -> anyhow::Result<Option<u64>> {
+        let repo = self.get_repo(parent)?;
+        if let Some(target) = repo
+            .dentry_cache
+            .get_by_parent_and_name((parent, name.to_os_string()))
+        {
+            return Ok(Some(target.target_ino));
+        };
         let repo_id = GitFs::ino_to_repo_id(parent);
         let repo_db = self
             .conn_list
@@ -1959,6 +1983,7 @@ impl GitFs {
         MetaDb::get_metadata(&conn, target_ino)
     }
 
+    // TODO: Read from cache
     fn get_builctx_metadata(&self, ino: NormalIno) -> anyhow::Result<BuildCtxMetadata> {
         let repo_id = GitFs::ino_to_repo_id(ino.into());
         let repo_db = self
@@ -2309,6 +2334,10 @@ impl GitFs {
     }
 
     fn inode_exists(&self, ino: u64) -> anyhow::Result<bool> {
+        let repo = self.get_repo(ino)?;
+        if repo.attr_cache.get(ino).is_some() {
+            return Ok(true);
+        }
         let repo_id = GitFs::ino_to_repo_id(ino);
         let repo_db = self
             .conn_list
@@ -2319,13 +2348,10 @@ impl GitFs {
     }
 
     pub fn get_ino_flag_from_db(&self, ino: NormalIno) -> anyhow::Result<InoFlag> {
-        let cache_res = {
-            let repo = self.get_repo(ino.into())?;
-            repo.attr_cache.with_get_mut(ino.into(), |a| a.ino_flag)
-        };
-        if let Some(ino_flag) = cache_res {
+        let repo = self.get_repo(ino.into())?;
+        if let Some(ino_flag) = repo.attr_cache.with_get_mut(ino.into(), |a| a.ino_flag) {
             return Ok(ino_flag);
-        }
+        };
 
         let repo_id = GitFs::ino_to_repo_id(ino.into());
         let repo_db = self
@@ -2343,13 +2369,10 @@ impl GitFs {
         if ino.to_norm_u64() == 0 {
             return Ok(FileMode::Tree);
         }
-        let cache_res = {
-            let repo = self.get_repo(ino.into())?;
-            repo.attr_cache.with_get_mut(ino.into(), |a| a.git_mode)
-        };
-        if let Some(mode) = cache_res {
+        let repo = self.get_repo(ino.into())?;
+        if let Some(mode) = repo.attr_cache.with_get_mut(ino.into(), |a| a.git_mode) {
             return repo::try_into_filemode(mode as u64).ok_or_else(|| anyhow!("Invalid filemode"));
-        }
+        };
 
         let repo_id = GitFs::ino_to_repo_id(ino.into());
         let repo_db = self
@@ -2362,6 +2385,12 @@ impl GitFs {
     }
 
     fn get_name_from_db(&self, ino: u64) -> anyhow::Result<OsString> {
+        let repo = self.get_repo(ino)?;
+        if let Some(entries) = repo.dentry_cache.get_by_target(ino)
+            && !entries.is_empty()
+        {
+            return Ok(entries[0].target_name.clone());
+        }
         let repo_id = GitFs::ino_to_repo_id(ino);
         let repo_db = self
             .conn_list
