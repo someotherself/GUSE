@@ -345,16 +345,16 @@ impl GitFs {
             build_sessions: HashMap::new(),
         };
 
-            let git_repo = GitRepo {
-                repo_dir: repo_name.to_owned(),
-                repo_id,
-                inner: parking_lot::Mutex::new(repo),
-                state: parking_lot::RwLock::new(state),
-                attr_cache: LruCache::new(ATTR_LRU),
-                dentry_cache: DentryLru::new(DENTRY_LRU),
-                file_cache: LruCache::new(FILE_LRU),
-            };
-        
+        let git_repo = GitRepo {
+            repo_dir: repo_name.to_owned(),
+            repo_id,
+            inner: parking_lot::Mutex::new(repo),
+            state: parking_lot::RwLock::new(state),
+            attr_cache: LruCache::new(ATTR_LRU),
+            dentry_cache: DentryLru::new(DENTRY_LRU),
+            file_cache: LruCache::new(FILE_LRU),
+        };
+
         let repo_rc = Arc::from(git_repo);
         self.insert_repo(repo_rc, repo_name, repo_id)?;
         Ok(repo_id)
@@ -1934,10 +1934,7 @@ impl GitFs {
         parent_ino: NormalIno,
         child_name: &OsStr,
     ) -> anyhow::Result<FileAttr> {
-        if let Ok(ino) = self.get_ino_by_parent_cache(parent_ino.into(), child_name)
-            && let Ok(attr) = self.get_attr_from_cache(ino)
-        {
-            // TODO: Fix after implementing dentry cache. Lookup by name and parent
+        if let Ok(attr) = self.lookup_in_cache(parent_ino.into(), child_name) {
             return Ok(attr);
         };
         let repo_id = GitFs::ino_to_repo_id(parent_ino.into());
@@ -2455,6 +2452,17 @@ impl GitFs {
         Ok(())
     }
 
+    fn lookup_in_cache(&self, parent_ino: u64, target_name: &OsStr) -> anyhow::Result<FileAttr> {
+        let repo = self.get_repo(parent_ino)?;
+        let target = repo
+            .dentry_cache
+            .get_by_parent_and_name((parent_ino, target_name.to_os_string()))
+            .ok_or_else(|| anyhow!("Could not find dentry in cache"))?;
+        repo.attr_cache
+            .get(target.target_ino)
+            .ok_or_else(|| anyhow!("Could not find attr in cache"))
+    }
+
     fn remove_dentry_from_cache(&self, target_ino: u64, target_name: &OsStr) -> anyhow::Result<()> {
         let repo = self.get_repo(target_ino)?;
         repo.dentry_cache
@@ -2465,6 +2473,8 @@ impl GitFs {
     fn remove_inode_from_cache(&self, parent_ino: u64, target_name: &OsStr) -> anyhow::Result<()> {
         let repo = self.get_repo(parent_ino)?;
         let target_ino = self.get_ino_by_parent_cache(parent_ino, target_name)?;
+        repo.dentry_cache
+            .remove_by_parent((parent_ino, target_name.to_os_string()));
         repo.attr_cache.remove(target_ino);
         Ok(())
     }

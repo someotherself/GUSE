@@ -265,7 +265,7 @@ where
         }
     }
 
-    pub fn insert_many<I>(&self, entries: I) 
+    pub fn insert_many<I>(&self, entries: I)
     where
         I: IntoIterator<Item = Dentry>,
     {
@@ -367,8 +367,10 @@ mod test {
         };
 
         lru.insert(dentry1.clone());
-        assert!(lru.peek((dentry1.clone().target_ino, dentry1.clone().target_name))
-            .is_some());
+        assert!(
+            lru.peek((dentry1.clone().target_ino, dentry1.clone().target_name))
+                .is_some()
+        );
 
         lru.insert(dentry2.clone());
         assert!(
@@ -382,18 +384,18 @@ mod test {
                 .is_some()
         );
 
-        let dentry_res_1_par_name = lru.get_by_parent_and_name((dentry1.parent_ino, dentry1.target_name.clone())).unwrap();
+        let dentry_res_1_par_name = lru
+            .get_by_parent_and_name((dentry1.parent_ino, dentry1.target_name.clone()))
+            .unwrap();
         assert_eq!(dentry_res_1_par_name.target_ino, dentry1.target_ino);
 
-        let dentry_res_1_tar_name = lru.get_by_target_and_name((dentry1.target_ino, dentry1.target_name));
+        let dentry_res_1_tar_name =
+            lru.get_by_target_and_name((dentry1.target_ino, dentry1.target_name));
         assert!(dentry_res_1_tar_name.is_some());
 
         let dentry_res_1_tar = lru.get_by_target(dentry1.target_ino).unwrap();
 
         assert_eq!(dentry_res_1_tar.len(), 2);
-
-
-
     }
 
     fn test_dentry_lru_cache_insert() {

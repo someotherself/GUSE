@@ -16,9 +16,7 @@ use std::{
 };
 
 use crate::{
-    fs::{
-        builds::BuildSession, fileattr::FileAttr, ObjectAttr, SourceTypes
-    },
+    fs::{ObjectAttr, SourceTypes, builds::BuildSession, fileattr::FileAttr},
     inodes::VirtualIno,
     internals::{cache::LruCache, cache_dentry::DentryLru},
 };
@@ -31,7 +29,7 @@ pub struct GitRepo {
     /// LruCache<target_ino, FileAttr>
     pub attr_cache: LruCache<u64, FileAttr>,
     /// LruCache<(parent, target_name), Dentry>
-    pub dentry_cache: DentryLru<>,
+    pub dentry_cache: DentryLru,
     /// LruCache<ino, >
     pub file_cache: LruCache<u64, SourceTypes>,
 }
