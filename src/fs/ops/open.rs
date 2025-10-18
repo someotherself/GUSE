@@ -76,7 +76,7 @@ pub fn open_git(
                 read: true,
                 write,
             };
-        fs.handles.open(handle)
+            fs.handles.open(handle)
         }
         InoFlag::InsideDotGit => {
             let file = {

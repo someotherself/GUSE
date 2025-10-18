@@ -235,7 +235,7 @@ impl FileExt for SourceTypes {
                 let src = &data[start..end];
                 buf[..src.len()].copy_from_slice(src);
                 Ok(src.len())
-            },
+            }
             Self::DirSnapshot { entries: _ } => Err(std::io::Error::from_raw_os_error(libc::EROFS)),
             Self::Closed => Err(std::io::Error::from_raw_os_error(libc::EROFS)),
         }
