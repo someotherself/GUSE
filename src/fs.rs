@@ -1821,7 +1821,6 @@ impl GitFs {
         MetaDb::get_dir_parent(&conn, ino.into())
     }
 
-    // TODO: Read from cache
     pub fn count_children(&self, ino: NormalIno) -> anyhow::Result<usize> {
         let repo_id = GitFs::ino_to_repo_id(ino.into());
         let repo_db = self
@@ -1832,7 +1831,6 @@ impl GitFs {
         MetaDb::count_children(&conn, ino.to_norm_u64())
     }
 
-    // TODO: Read from cache
     pub fn read_children(&self, parent_ino: NormalIno) -> anyhow::Result<Vec<DirectoryEntry>> {
         let repo_id = GitFs::ino_to_repo_id(parent_ino.into());
         let repo_db = self
@@ -2300,13 +2298,10 @@ impl GitFs {
     }
 
     fn get_oid_from_db(&self, ino: u64) -> anyhow::Result<Oid> {
-        let cache_res = {
-            let repo = self.get_repo(ino)?;
-            repo.attr_cache.with_get_mut(ino, |a| a.oid)
-        };
-        if let Some(oid) = cache_res {
+        let repo = self.get_repo(ino)?;
+        if let Some(oid) = repo.attr_cache.with_get_mut(ino, |a| a.oid) {
             return Ok(oid);
-        }
+        };
 
         let repo_id = GitFs::ino_to_repo_id(ino);
         let repo_db = self

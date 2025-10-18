@@ -346,11 +346,11 @@ where
         let guard = self.list.read();
 
         let ids = guard.target_ino_map.get(&target_ino)?;
-        let mut parents = vec![];
-        for &id in ids {
-            parents.push(guard.nodes[id].value.parent_ino);
-        }
-        Some(parents)
+        Some(
+            ids.iter()
+                .map(|&e| guard.nodes[e].value.parent_ino)
+                .collect::<Vec<u64>>(),
+        )
     }
 }
 
