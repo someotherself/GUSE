@@ -265,6 +265,28 @@ where
         }
     }
 
+    pub fn insert_many<I>(&self, entries: I) 
+    where
+        I: IntoIterator<Item = Dentry>,
+    {
+        let mut guard = self.list.write();
+
+        for entry in entries {
+            while guard.target_ino_map.len() >= guard.capacity.into() {
+                guard.evict();
+            }
+            let key = (entry.target_ino, entry.target_name.clone());
+
+            if let Some(&id) = guard.target_ino_name_map.get(&key) {
+                let _ = std::mem::replace(&mut guard.nodes[id].value, entry);
+                guard.unlink(id);
+                guard.push_front(id);
+            } else {
+                guard.insert_front(entry);
+            }
+        }
+    }
+
     // key: (parent_ino, target_name)
     pub fn remove_by_parent(&self, key: (u64, OsString)) -> Option<Dentry> {
         let mut guard = self.list.write();

@@ -29,6 +29,7 @@ use crate::fs::ops::readdir::{
 use crate::fs::repo::{GitRepo, State, VirtualNode};
 use crate::inodes::{Inodes, NormalIno, VirtualIno};
 use crate::internals::cache::LruCache;
+use crate::internals::cache_dentry::DentryLru;
 use crate::mount::InvalMsg;
 use crate::namespec::NameSpec;
 
@@ -344,16 +345,16 @@ impl GitFs {
             build_sessions: HashMap::new(),
         };
 
-        let git_repo = GitRepo {
-            repo_dir: repo_name.to_owned(),
-            repo_id,
-            inner: parking_lot::Mutex::new(repo),
-            state: parking_lot::RwLock::new(state),
-            attr_cache: LruCache::new(ATTR_LRU),
-            dentry_cache: LruCache::new(DENTRY_LRU),
-            file_cache: LruCache::new(FILE_LRU),
-        };
-
+            let git_repo = GitRepo {
+                repo_dir: repo_name.to_owned(),
+                repo_id,
+                inner: parking_lot::Mutex::new(repo),
+                state: parking_lot::RwLock::new(state),
+                attr_cache: LruCache::new(ATTR_LRU),
+                dentry_cache: DentryLru::new(DENTRY_LRU),
+                file_cache: LruCache::new(FILE_LRU),
+            };
+        
         let repo_rc = Arc::from(git_repo);
         self.insert_repo(repo_rc, repo_name, repo_id)?;
         Ok(repo_id)
@@ -393,7 +394,7 @@ impl GitFs {
             inner: parking_lot::Mutex::new(repo),
             state: parking_lot::RwLock::new(state),
             attr_cache: LruCache::new(ATTR_LRU),
-            dentry_cache: LruCache::new(DENTRY_LRU),
+            dentry_cache: DentryLru::new(DENTRY_LRU),
             file_cache: LruCache::new(FILE_LRU),
         };
 
@@ -1936,6 +1937,7 @@ impl GitFs {
         if let Ok(ino) = self.get_ino_by_parent_cache(parent_ino.into(), child_name)
             && let Ok(attr) = self.get_attr_from_cache(ino)
         {
+            // TODO: Fix after implementing dentry cache. Lookup by name and parent
             return Ok(attr);
         };
         let repo_id = GitFs::ino_to_repo_id(parent_ino.into());
@@ -2434,7 +2436,7 @@ impl GitFs {
     fn write_inodes_to_cache(&self, ino: u64, entries: Vec<StorageNode>) -> anyhow::Result<()> {
         let repo = self.get_repo(ino)?;
         let mut attrs: Vec<(u64, FileAttr)> = Vec::new();
-        let mut dentries: Vec<((u64, OsString), Dentry)> = Vec::new();
+        let mut dentries: Vec<Dentry> = Vec::new();
         #[allow(clippy::let_unit_value)]
         let _ = entries
             .into_iter()
@@ -2444,7 +2446,7 @@ impl GitFs {
                     parent_ino: e.parent_ino,
                     target_name: e.name.clone(),
                 };
-                dentries.push(((e.parent_ino, e.name.clone()), dentry));
+                dentries.push(dentry);
                 attrs.push((e.attr.ino, e.attr));
             })
             .collect::<()>();
@@ -2456,7 +2458,7 @@ impl GitFs {
     fn remove_dentry_from_cache(&self, target_ino: u64, target_name: &OsStr) -> anyhow::Result<()> {
         let repo = self.get_repo(target_ino)?;
         repo.dentry_cache
-            .remove((target_ino, target_name.to_os_string()));
+            .remove_by_target((target_ino, target_name.to_os_string()));
         Ok(())
     }
 
@@ -2518,10 +2520,9 @@ impl GitFs {
     }
 
     fn write_dentry_to_cache(&self, dentry: Dentry) -> anyhow::Result<()> {
-        let ino = dentry.parent_ino;
-        let name = dentry.target_name.clone();
-        let repo = self.get_repo(ino)?;
-        repo.dentry_cache.insert((ino, name), dentry);
+        let parent_ino = dentry.parent_ino;
+        let repo = self.get_repo(parent_ino)?;
+        repo.dentry_cache.insert(dentry);
         Ok(())
     }
 
@@ -2536,7 +2537,7 @@ impl GitFs {
         let repo = self.get_repo(parent_ino)?;
         let dentry = repo
             .dentry_cache
-            .get((parent_ino, target_name.to_os_string()));
+            .get_by_parent_and_name((parent_ino, target_name.to_os_string()));
         if let Some(dentry) = dentry {
             Ok(dentry.target_ino)
         } else {
@@ -2555,11 +2556,11 @@ impl GitFs {
 
         let old_ino = repo
             .dentry_cache
-            .get((old_parent, old_name.to_os_string()))
+            .get_by_parent_and_name((old_parent, old_name.to_os_string()))
             .ok_or(anyhow!("Could not find dentry"))?
             .target_ino;
         repo.dentry_cache
-            .remove((old_parent, old_name.to_os_string()));
+            .remove_by_parent((old_parent, old_name.to_os_string()));
         repo.attr_cache.remove(old_ino);
 
         self.write_inodes_to_cache(new_ino, vec![node])?;

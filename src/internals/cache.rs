@@ -1,18 +1,18 @@
-use std::{collections::HashMap, num::NonZeroUsize};
+use std::{collections::HashMap, fmt::Debug, num::NonZeroUsize};
 
 use anyhow::bail;
 use parking_lot::RwLock;
 
 type NodeId = usize;
 
-struct Entry<K, V> {
+struct Entry<K: Debug, V> {
     pub key: K,
     pub value: Option<V>,
     pub next: Option<NodeId>, // towards the LRU (tail)
     pub prev: Option<NodeId>, // towards the MRU (head)
 }
 
-impl<K, V> Entry<K, V> {
+impl<K: Debug, V> Entry<K, V> {
     pub fn new(key: K, value: V) -> Self {
         Self {
             key,
@@ -23,7 +23,7 @@ impl<K, V> Entry<K, V> {
     }
 }
 
-pub struct Inner<K, V: Clone, S = ahash::RandomState> {
+pub struct Inner<K: Debug, V: Clone, S = ahash::RandomState> {
     map: HashMap<K, NodeId, S>,
     nodes: Vec<Entry<K, V>>,
     free: Vec<NodeId>,
@@ -32,7 +32,7 @@ pub struct Inner<K, V: Clone, S = ahash::RandomState> {
     capacity: NonZeroUsize,
 }
 
-impl<K, V: Clone, S> Inner<K, V, S>
+impl<K: Debug, V: Clone, S> Inner<K, V, S>
 where
     K: Eq + std::hash::Hash + Clone,
     S: core::hash::BuildHasher + Default,
@@ -165,11 +165,11 @@ where
     }
 }
 
-pub struct LruCache<K, V: Clone, S = ahash::RandomState> {
+pub struct LruCache<K: Debug, V: Clone, S = ahash::RandomState> {
     list: RwLock<Inner<K, V, S>>,
 }
 
-impl<K, V: Clone, S> LruCache<K, V, S>
+impl<K: Debug, V: Clone, S> LruCache<K, V, S>
 where
     K: Eq + std::hash::Hash + Clone,
     S: core::hash::BuildHasher + Default,
@@ -184,6 +184,9 @@ where
     pub fn get(&self, key: K) -> Option<V> {
         let mut guard = self.list.write();
         let id = *guard.map.get(&key)?;
+        if guard.free.contains(&id) {
+            return None;
+        }
         guard.unlink(id);
         guard.push_front(id)
     }
@@ -239,8 +242,6 @@ where
                 guard.insert_front(key, value);
             }
         }
-
-        drop(guard);
     }
 
     pub fn remove(&self, key: K) -> Option<V> {
