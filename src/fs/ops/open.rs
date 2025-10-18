@@ -56,22 +56,12 @@ pub fn open_git(
             Ok(file) => file,
             Err(_) => {
                 let build_root = fs.get_path_to_build_folder(ino)?;
-
-                let path = {
-                    let mut found = None;
-                    let dentries = fs.list_dentries_for_inode(ino)?;
-                    let repo = fs.get_repo(ino.to_norm_u64())?;
-                    for (parent_ino, name) in dentries {
-                        let session = repo.get_or_init_build_session(metadata.oid, &build_root)?;
-                        let parent_path = session.finish_path(fs, parent_ino.into())?.join(&name);
-                        if parent_path.exists() {
-                            found = Some(parent_path);
-                            break;
-                        }
-                    }
-                    found.ok_or_else(|| anyhow!("No existing path for inode {ino}"))?
-                };
-
+                let repo = fs.get_repo(ino.to_norm_u64())?;
+                let dentry = fs.get_single_dentry(ino.into())?;
+                let session = repo.get_or_init_build_session(metadata.oid, &build_root)?;
+                let path = session
+                    .finish_path(fs, dentry.parent_ino.into())?
+                    .join(&dentry.target_name);
                 let open_file = OpenOptions::new()
                     .read(true)
                     .write(write)

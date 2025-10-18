@@ -871,6 +871,34 @@ impl MetaDb {
         Ok(())
     }
 
+    pub fn get_single_dentry(
+        conn: &rusqlite::Connection,
+        target_ino: u64,
+    ) -> anyhow::Result<Dentry> {
+        let mut stmt = conn.prepare(
+            r#"
+            SELECT parent_inode, target_name
+            FROM dentries
+            WHERE target_inode = ?1
+            LIMIT 1
+            "#,
+        )?;
+
+        let (parent_ino, target_name): (i64, Vec<u8>) = stmt
+            .query_row(params![target_ino as i64], |row| {
+                Ok((row.get(0)?, row.get(1)?))
+            })?;
+
+        let parent_ino = u64::try_from(parent_ino)?;
+        let target_name = OsString::from_vec(target_name);
+
+        Ok(Dentry {
+            target_ino,
+            parent_ino,
+            target_name,
+        })
+    }
+
     pub fn update_db_record<C>(
         tx: &C,
         old_parent: u64,

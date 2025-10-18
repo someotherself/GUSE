@@ -2565,6 +2565,23 @@ impl GitFs {
         Ok(())
     }
 
+    fn get_single_dentry(&self, target_ino: u64) -> anyhow::Result<Dentry> {
+        let repo = self.get_repo(target_ino)?;
+        if let Some(entries) = repo.dentry_cache.get_by_target(target_ino)
+            && !entries.is_empty()
+        {
+            return Ok(entries[0].clone());
+        };
+
+        let repo_id = GitFs::ino_to_repo_id(target_ino);
+        let repo_db = self
+            .conn_list
+            .get(&repo_id)
+            .ok_or_else(|| anyhow::anyhow!("no db"))?;
+        let conn = repo_db.ro_pool.get()?;
+        MetaDb::get_single_dentry(&conn, target_ino)
+    }
+
     fn get_attr_from_cache(&self, ino: u64) -> anyhow::Result<FileAttr> {
         let repo = self.get_repo(ino)?;
         repo.attr_cache
