@@ -265,7 +265,7 @@ fn populate_build_entries(
     Ok(out)
 }
 
-fn build_dot_git_path(fs: &GitFs, target_ino: NormalIno) -> anyhow::Result<PathBuf> {
+pub fn build_dot_git_path(fs: &GitFs, target_ino: NormalIno) -> anyhow::Result<PathBuf> {
     let repo_path = {
         let repo_dir = fs.get_repo(target_ino.into())?.repo_dir.clone();
         fs.repos_dir.join(repo_dir)
@@ -330,7 +330,6 @@ fn read_inside_dot_git(fs: &GitFs, parent_ino: NormalIno) -> anyhow::Result<Vec<
             }
         };
 
-        // TODO: Add commit oid
         let entry = DirectoryEntry::new(attr.ino, Oid::zero(), node_name, kind, filemode);
         entries.push(entry);
     }

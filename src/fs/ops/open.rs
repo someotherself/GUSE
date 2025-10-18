@@ -10,9 +10,7 @@ use git2::{Oid, Time};
 
 use crate::{
     fs::{
-        GitFs, Handle, SourceTypes, VFileEntry,
-        fileattr::{InoFlag, ObjectAttr},
-        ops::readdir::{DirCase, classify_inode},
+        fileattr::{InoFlag, ObjectAttr}, ops::readdir::{build_dot_git_path, classify_inode, DirCase}, GitFs, Handle, SourceTypes, VFileEntry
     },
     inodes::{Inodes, NormalIno, VirtualIno},
     namespec,
@@ -50,37 +48,72 @@ pub fn open_git(
     truncate: bool,
 ) -> anyhow::Result<u64> {
     let metadata = fs.get_builctx_metadata(ino)?;
-    if metadata.ino_flag == InoFlag::InsideBuild {
-        // Check the cache first
-        let file = match fs.take_file_from_cache(ino.into()) {
-            Ok(file) => file,
-            Err(_) => {
-                let build_root = fs.get_path_to_build_folder(ino)?;
-                let repo = fs.get_repo(ino.to_norm_u64())?;
-                let dentry = fs.get_single_dentry(ino.into())?;
-                let session = repo.get_or_init_build_session(metadata.oid, &build_root)?;
-                let path = session
-                    .finish_path(fs, dentry.parent_ino.into())?
-                    .join(&dentry.target_name);
+    match metadata.ino_flag {
+        InoFlag::InsideBuild => {
+            let file = match fs.take_file_from_cache(ino.into()) {
+                Ok(file) => file,
+                Err(_) => {
+                    let build_root = fs.get_path_to_build_folder(ino)?;
+                    let repo = fs.get_repo(ino.to_norm_u64())?;
+                    let dentry = fs.get_single_dentry(ino.into())?;
+                    let session = repo.get_or_init_build_session(metadata.oid, &build_root)?;
+                    let path = session
+                        .finish_path(fs, dentry.parent_ino.into())?
+                        .join(&dentry.target_name);
+                    let open_file = OpenOptions::new()
+                        .read(true)
+                        .write(write)
+                        .truncate(write && truncate)
+                        .open(path)?;
+                    SourceTypes::RealFile(Arc::new(open_file))
+                }
+            };
+
+            let handle = Handle {
+                ino: ino.to_norm_u64(),
+                source: file,
+                read: true,
+                write,
+            };
+            let fh = fs.handles.open(handle)?;
+            Ok(fh)
+        }
+        InoFlag::InsideDotGit => {
+                let file = {
+                let path = build_dot_git_path(&fs, ino)?;
                 let open_file = OpenOptions::new()
                     .read(true)
-                    .write(write)
-                    .truncate(write && truncate)
                     .open(path)?;
                 SourceTypes::RealFile(Arc::new(open_file))
-            }
-        };
-
-        let handle = Handle {
-            ino: ino.to_norm_u64(),
-            source: file,
-            read: true,
-            write,
-        };
-        let fh = fs.handles.open(handle)?;
-        return Ok(fh);
+            };
+            let handle = Handle {
+                ino: ino.to_norm_u64(),
+                source: file,
+                read: true,
+                write: false,
+            };
+            let fh = fs.handles.open(handle)?;
+            Ok(fh)
+        }
+        InoFlag::HeadFile => {
+            let file = {
+                let commit = fs.get_parent_commit(ino.into())?.to_string();
+                let mut contents: Vec<u8> = vec![];
+                contents.extend_from_slice(commit.as_bytes());
+                contents.push(b'\n');
+                SourceTypes::RoBlob { oid: metadata.oid, data: Arc::new(contents) }
+            };
+            let handle = Handle {
+                ino: ino.to_norm_u64(),
+                source: file,
+                read: true,
+                write: false,
+            };
+            let fh = fs.handles.open(handle)?;
+            Ok(fh)
+        }
+        _ => open_blob(fs, metadata.oid, ino.to_norm_u64(), read),
     }
-    open_blob(fs, metadata.oid, ino.to_norm_u64(), read)
 }
 
 pub fn open_vfile(fs: &GitFs, ino: Inodes, read: bool, write: bool) -> anyhow::Result<u64> {
@@ -216,7 +249,6 @@ pub fn open_vdir(
         bail!("File not found!")
     };
     let oid = object.oid;
-    drop(repo);
     open_blob(fs, oid, ino.into(), read)
 }
 
