@@ -10,7 +10,9 @@ use git2::{Oid, Time};
 
 use crate::{
     fs::{
-        fileattr::{InoFlag, ObjectAttr}, ops::readdir::{build_dot_git_path, classify_inode, DirCase}, GitFs, Handle, SourceTypes, VFileEntry
+        GitFs, Handle, SourceTypes, VFileEntry,
+        fileattr::{InoFlag, ObjectAttr},
+        ops::readdir::{DirCase, build_dot_git_path, classify_inode},
     },
     inodes::{Inodes, NormalIno, VirtualIno},
     namespec,
@@ -36,8 +38,7 @@ pub fn open_live(
         read: true,
         write,
     };
-    let fh = fs.handles.open(handle)?;
-    Ok(fh)
+    fs.handles.open(handle)
 }
 
 pub fn open_git(
@@ -75,15 +76,12 @@ pub fn open_git(
                 read: true,
                 write,
             };
-            let fh = fs.handles.open(handle)?;
-            Ok(fh)
+        fs.handles.open(handle)
         }
         InoFlag::InsideDotGit => {
-                let file = {
-                let path = build_dot_git_path(&fs, ino)?;
-                let open_file = OpenOptions::new()
-                    .read(true)
-                    .open(path)?;
+            let file = {
+                let path = build_dot_git_path(fs, ino)?;
+                let open_file = OpenOptions::new().read(true).open(path)?;
                 SourceTypes::RealFile(Arc::new(open_file))
             };
             let handle = Handle {
@@ -92,8 +90,7 @@ pub fn open_git(
                 read: true,
                 write: false,
             };
-            let fh = fs.handles.open(handle)?;
-            Ok(fh)
+            fs.handles.open(handle)
         }
         InoFlag::HeadFile => {
             let file = {
@@ -101,7 +98,10 @@ pub fn open_git(
                 let mut contents: Vec<u8> = vec![];
                 contents.extend_from_slice(commit.as_bytes());
                 contents.push(b'\n');
-                SourceTypes::RoBlob { oid: metadata.oid, data: Arc::new(contents) }
+                SourceTypes::RoBlob {
+                    oid: metadata.oid,
+                    data: Arc::new(contents),
+                }
             };
             let handle = Handle {
                 ino: ino.to_norm_u64(),
@@ -109,8 +109,7 @@ pub fn open_git(
                 read: true,
                 write: false,
             };
-            let fh = fs.handles.open(handle)?;
-            Ok(fh)
+            fs.handles.open(handle)
         }
         _ => open_blob(fs, metadata.oid, ino.to_norm_u64(), read),
     }
@@ -146,8 +145,7 @@ pub fn open_vfile(fs: &GitFs, ino: Inodes, read: bool, write: bool) -> anyhow::R
                 read: true,
                 write: false,
             };
-            let fh = fs.handles.open(handle)?;
-            Ok(fh)
+            fs.handles.open(handle)
         }
         DirCase::Commit { oid } => {
             let mut contents = {
@@ -177,8 +175,7 @@ pub fn open_vfile(fs: &GitFs, ino: Inodes, read: bool, write: bool) -> anyhow::R
                 read: true,
                 write: false,
             };
-            let fh = fs.handles.open(handle)?;
-            Ok(fh)
+            fs.handles.open(handle)
         }
     }
 }
@@ -270,8 +267,7 @@ fn open_blob(fs: &GitFs, oid: Oid, ino: u64, read: bool) -> anyhow::Result<u64> 
         read: true,
         write: false,
     };
-    let fh = fs.handles.open(handle)?;
-    Ok(fh)
+    fs.handles.open(handle)
 }
 
 fn short_oid(oid: Oid) -> String {
