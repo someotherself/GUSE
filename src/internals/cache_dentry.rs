@@ -199,6 +199,8 @@ where
     fn peek(&self, id: NodeId) -> Option<Dentry> {
         Some(self.nodes[id].value.clone())
     }
+
+    fn get_all_parents(&self) {}
 }
 
 pub struct DentryLru<S = ahash::RandomState> {
@@ -338,6 +340,17 @@ where
         } else {
             None
         }
+    }
+
+    pub fn get_all_parents(&self, target_ino: u64) -> Option<Vec<u64>> {
+        let guard = self.list.read();
+
+        let ids = guard.target_ino_map.get(&target_ino)?;
+        let mut parents = vec![];
+        for &id in ids {
+            parents.push(guard.nodes[id].value.parent_ino);
+        }
+        Some(parents)
     }
 }
 

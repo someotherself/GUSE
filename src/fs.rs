@@ -1843,8 +1843,11 @@ impl GitFs {
         MetaDb::read_children(&conn, parent_ino.to_norm_u64())
     }
 
-    // TODO: Read from cache
     pub fn get_all_parents(&self, ino: u64) -> anyhow::Result<Vec<u64>> {
+        let repo = self.get_repo(ino)?;
+        if let Some(parents) = repo.dentry_cache.get_all_parents(ino) {
+            return Ok(parents);
+        };
         let repo_id = GitFs::ino_to_repo_id(ino);
         let repo_db = self
             .conn_list
