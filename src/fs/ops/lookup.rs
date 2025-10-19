@@ -2,7 +2,7 @@ use std::ffi::{OsStr, OsString};
 
 use crate::{
     fs::{
-        FileAttr, GitFs,
+        self, FileAttr, GitFs,
         fileattr::{InoFlag, dir_attr},
     },
     inodes::{NormalIno, VirtualIno},
@@ -72,6 +72,19 @@ pub fn lookup_live(
 
 pub fn lookup_git(fs: &GitFs, parent: NormalIno, name: &OsStr) -> anyhow::Result<Option<FileAttr>> {
     let Ok(attr) = fs.get_metadata_by_name(parent, name) else {
+        // If attr is not found, and we are inside in InsideSnap, maybe readdir did not run yet
+        // Try reading the entries and try again
+        let p_flag = fs.get_ino_flag_from_db(parent)?;
+        if p_flag == InoFlag::InsideSnap
+            || p_flag == InoFlag::InsideDotGit
+            || p_flag == InoFlag::HeadFile
+        {
+            fs::ops::readdir::readdir_git_dir(fs, parent)?;
+            let Ok(attr) = fs.get_metadata_by_name(parent, name) else {
+                return Ok(None);
+            };
+            return Ok(Some(attr));
+        }
         return Ok(None);
     };
     Ok(Some(attr))
