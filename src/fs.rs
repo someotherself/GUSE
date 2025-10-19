@@ -1884,10 +1884,7 @@ impl GitFs {
 
     fn exists_by_name(&self, parent: u64, name: &OsStr) -> anyhow::Result<Option<u64>> {
         let repo = self.get_repo(parent)?;
-        if let Some(target) = repo
-            .dentry_cache
-            .get_by_parent_and_name((parent, name.to_os_string()))
-        {
+        if let Some(target) = repo.dentry_cache.get_by_parent_and_name(parent, name) {
             return Ok(Some(target.target_ino));
         };
         let repo_id = GitFs::ino_to_repo_id(parent);
@@ -2004,10 +2001,7 @@ impl GitFs {
 
     fn get_ino_from_db(&self, parent: u64, name: &OsStr) -> anyhow::Result<u64> {
         let repo = self.get_repo(parent)?;
-        if let Some(dentry) = repo
-            .dentry_cache
-            .get_by_parent_and_name((parent, name.to_os_string()))
-        {
+        if let Some(dentry) = repo.dentry_cache.get_by_parent_and_name(parent, name) {
             return Ok(dentry.target_ino);
         }
         let repo_id = GitFs::ino_to_repo_id(parent);
@@ -2442,7 +2436,7 @@ impl GitFs {
         let repo = self.get_repo(parent_ino)?;
         let target = repo
             .dentry_cache
-            .get_by_parent_and_name((parent_ino, target_name.to_os_string()))
+            .get_by_parent_and_name(parent_ino, target_name)
             .ok_or_else(|| anyhow!("Could not find dentry in cache"))?;
         repo.attr_cache
             .get(target.target_ino)
@@ -2451,16 +2445,14 @@ impl GitFs {
 
     fn remove_dentry_from_cache(&self, target_ino: u64, target_name: &OsStr) -> anyhow::Result<()> {
         let repo = self.get_repo(target_ino)?;
-        repo.dentry_cache
-            .remove_by_target((target_ino, target_name.to_os_string()));
+        repo.dentry_cache.remove_by_target(target_ino, target_name);
         Ok(())
     }
 
     fn remove_inode_from_cache(&self, parent_ino: u64, target_name: &OsStr) -> anyhow::Result<()> {
         let repo = self.get_repo(parent_ino)?;
         let target_ino = self.get_ino_by_parent_cache(parent_ino, target_name)?;
-        repo.dentry_cache
-            .remove_by_parent((parent_ino, target_name.to_os_string()));
+        repo.dentry_cache.remove_by_parent(parent_ino, target_name);
         repo.attr_cache.remove(target_ino);
         Ok(())
     }
@@ -2595,7 +2587,7 @@ impl GitFs {
         let repo = self.get_repo(parent_ino)?;
         let dentry = repo
             .dentry_cache
-            .get_by_parent_and_name((parent_ino, target_name.to_os_string()));
+            .get_by_parent_and_name(parent_ino, target_name);
         if let Some(dentry) = dentry {
             Ok(dentry.target_ino)
         } else {
@@ -2614,11 +2606,10 @@ impl GitFs {
 
         let old_ino = repo
             .dentry_cache
-            .get_by_parent_and_name((old_parent, old_name.to_os_string()))
+            .get_by_parent_and_name(old_parent, old_name)
             .ok_or(anyhow!("Could not find dentry"))?
             .target_ino;
-        repo.dentry_cache
-            .remove_by_parent((old_parent, old_name.to_os_string()));
+        repo.dentry_cache.remove_by_parent(old_parent, old_name);
         repo.attr_cache.remove(old_ino);
 
         self.write_inodes_to_cache(new_ino, vec![node])?;

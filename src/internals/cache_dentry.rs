@@ -1,4 +1,8 @@
-use std::{collections::HashMap, ffi::OsString, num::NonZeroUsize};
+use std::{
+    collections::HashMap,
+    ffi::{OsStr, OsString},
+    num::NonZeroUsize,
+};
 
 use parking_lot::RwLock;
 
@@ -15,7 +19,8 @@ struct Entry {
 }
 
 impl Entry {
-    pub fn new(key: (u64, OsString), value: Dentry) -> Self {
+    pub fn new(key: (u64, &OsStr), value: Dentry) -> Self {
+        let key = (key.0, key.1.to_os_string());
         Self {
             key,
             value,
@@ -157,7 +162,7 @@ where
         let old_head = self.head;
 
         // Create new entry and fix the next
-        let mut entry = Entry::new((value.target_ino, value.target_name.clone()), value.clone());
+        let mut entry = Entry::new((value.target_ino, &value.target_name), value.clone());
         entry.next = old_head;
 
         // Get the index of the new entry.
@@ -238,17 +243,21 @@ where
         ids.pop().map(|id| guard.push_front(id))
     }
 
-    pub fn get_by_target_and_name(&self, key: (u64, OsString)) -> Option<Dentry> {
+    pub fn get_by_target_and_name(&self, target_ino: u64, target_name: &OsStr) -> Option<Dentry> {
         let mut guard = self.list.write();
-        let id = *guard.target_ino_name_map.get(&key)?;
+        let id = *guard
+            .target_ino_name_map
+            .get(&(target_ino, target_name.to_os_string()))?;
 
         guard.unlink(id);
         Some(guard.push_front(id))
     }
 
-    pub fn get_by_parent_and_name(&self, key: (u64, OsString)) -> Option<Dentry> {
+    pub fn get_by_parent_and_name(&self, parent_ino: u64, target_name: &OsStr) -> Option<Dentry> {
         let mut guard = self.list.write();
-        let id = *guard.parent_ino_name_map.get(&key)?;
+        let id = *guard
+            .parent_ino_name_map
+            .get(&(parent_ino, target_name.to_os_string()))?;
 
         guard.unlink(id);
         Some(guard.push_front(id))
@@ -298,10 +307,13 @@ where
     }
 
     // key: (parent_ino, target_name)
-    pub fn remove_by_parent(&self, key: (u64, OsString)) -> Option<Dentry> {
+    pub fn remove_by_parent(&self, parent_ino: u64, target_name: &OsStr) -> Option<Dentry> {
         let mut guard = self.list.write();
 
-        if let Some(&p) = guard.parent_ino_name_map.get(&key) {
+        if let Some(&p) = guard
+            .parent_ino_name_map
+            .get(&(parent_ino, target_name.to_os_string()))
+        {
             let value = guard.nodes[p].value.clone();
             // Fix the neighbors
             guard.unlink(p);
@@ -310,7 +322,9 @@ where
             guard
                 .target_ino_name_map
                 .remove(&(value.target_ino, value.target_name.clone()));
-            guard.parent_ino_name_map.remove(&key);
+            guard
+                .parent_ino_name_map
+                .remove(&(parent_ino, target_name.to_os_string()));
             // Mark the entry as free
             guard.free.push(p);
             return Some(value);
@@ -319,16 +333,21 @@ where
     }
 
     /// key: (target_ino, target_name)
-    pub fn remove_by_target(&self, key: (u64, OsString)) -> Option<Dentry> {
+    pub fn remove_by_target(&self, target_ino: u64, target_name: &OsStr) -> Option<Dentry> {
         let mut guard = self.list.write();
 
-        if let Some(&p) = guard.parent_ino_name_map.get(&key) {
+        if let Some(&p) = guard
+            .parent_ino_name_map
+            .get(&(target_ino, target_name.to_os_string()))
+        {
             let value = guard.nodes[p].value.clone();
             // Fix the neighbors
             guard.unlink(p);
             // Remove from the map
             guard.target_ino_map.remove(&value.target_ino);
-            guard.target_ino_name_map.remove(&key);
+            guard
+                .target_ino_name_map
+                .remove(&(target_ino, target_name.to_os_string()));
             guard
                 .parent_ino_name_map
                 .remove(&(value.parent_ino, value.target_name.clone()));
@@ -340,9 +359,12 @@ where
     }
 
     /// key: (target_ino, target_name)
-    pub fn peek(&self, key: (u64, OsString)) -> Option<Dentry> {
+    pub fn peek(&self, target_ino: u64, target_name: &OsStr) -> Option<Dentry> {
         let guard = self.list.read();
-        if let Some(&id) = guard.target_ino_name_map.get(&key) {
+        if let Some(&id) = guard
+            .target_ino_name_map
+            .get(&(target_ino, target_name.to_os_string()))
+        {
             let entry = guard.nodes.get(id)?;
             Some(entry.value.clone())
         } else {
@@ -389,29 +411,29 @@ mod test {
 
         lru.insert(dentry1.clone());
         assert!(
-            lru.peek((dentry1.clone().target_ino, dentry1.clone().target_name))
+            lru.peek(dentry1.clone().target_ino, &dentry1.target_name)
                 .is_some()
         );
 
         lru.insert(dentry2.clone());
         assert!(
-            lru.peek((dentry2.clone().target_ino, dentry2.clone().target_name))
+            lru.peek(dentry2.clone().target_ino, &dentry2.target_name)
                 .is_some()
         );
 
         lru.insert(dentry3.clone());
         assert!(
-            lru.peek((dentry3.clone().target_ino, dentry3.clone().target_name))
+            lru.peek(dentry3.clone().target_ino, &dentry3.target_name)
                 .is_some()
         );
 
         let dentry_res_1_par_name = lru
-            .get_by_parent_and_name((dentry1.parent_ino, dentry1.target_name.clone()))
+            .get_by_parent_and_name(dentry1.parent_ino, &dentry1.target_name)
             .unwrap();
         assert_eq!(dentry_res_1_par_name.target_ino, dentry1.target_ino);
 
         let dentry_res_1_tar_name =
-            lru.get_by_target_and_name((dentry1.target_ino, dentry1.target_name));
+            lru.get_by_target_and_name(dentry1.target_ino, &dentry1.target_name);
         assert!(dentry_res_1_tar_name.is_some());
 
         let dentry_res_1_tar = lru.get_by_target(dentry1.target_ino).unwrap();
@@ -435,62 +457,38 @@ mod test {
 
         lru.insert(dentry1.clone());
         assert!(
-            lru.peek((dentry1.clone().target_ino, dentry1.clone().target_name))
+            lru.peek(dentry1.clone().target_ino, &dentry1.target_name)
                 .is_some()
         );
 
         lru.insert(dentry2.clone());
         assert!(
-            lru.peek((dentry1.clone().target_ino, dentry1.clone().target_name))
+            lru.peek(dentry1.clone().target_ino, &dentry1.target_name)
                 .is_some()
         );
         assert!(
-            lru.peek((dentry2.clone().target_ino, dentry2.clone().target_name))
+            lru.peek(dentry2.clone().target_ino, &dentry2.target_name)
                 .is_some()
         );
 
         lru.insert(dentry3.clone());
-        assert!(
-            lru.peek((dentry1.clone().target_ino, dentry1.clone().target_name))
-                .is_some()
-        );
-        assert!(
-            lru.peek((dentry2.clone().target_ino, dentry2.clone().target_name))
-                .is_some()
-        );
-        assert!(
-            lru.peek((dentry3.clone().target_ino, dentry3.clone().target_name))
-                .is_some()
-        );
+        assert!(lru.peek(dentry1.target_ino, &dentry1.target_name).is_some());
+        assert!(lru.peek(dentry2.target_ino, &dentry2.target_name).is_some());
+        assert!(lru.peek(dentry3.target_ino, &dentry3.target_name).is_some());
 
         lru.insert(dentry4.clone());
-        assert!(
-            lru.peek((dentry1.clone().target_ino, dentry1.clone().target_name))
-                .is_none()
-        );
+        assert!(lru.peek(dentry1.target_ino, &dentry1.target_name).is_none());
 
         lru.insert(dentry5.clone());
-        assert!(
-            lru.peek((dentry2.clone().target_ino, dentry2.clone().target_name))
-                .is_none()
-        );
+        assert!(lru.peek(dentry2.target_ino, &dentry2.target_name).is_none());
 
         lru.insert(dentry6);
-        assert!(
-            lru.peek((dentry3.clone().target_ino, dentry3.clone().target_name))
-                .is_none()
-        );
+        assert!(lru.peek(dentry3.target_ino, &dentry3.target_name).is_none());
 
-        lru.get_by_target_and_name((dentry5.target_ino, dentry5.target_name));
+        lru.get_by_target_and_name(dentry5.target_ino, &dentry5.target_name);
 
         lru.insert(dentry7);
-        assert!(
-            lru.peek((dentry4.target_ino, dentry4.target_name))
-                .is_some()
-        );
-        assert!(
-            lru.peek((dentry3.target_ino, dentry3.target_name))
-                .is_none()
-        );
+        assert!(lru.peek(dentry4.target_ino, &dentry4.target_name).is_some());
+        assert!(lru.peek(dentry3.target_ino, &dentry3.target_name).is_none());
     }
 }
