@@ -121,18 +121,17 @@ pub fn rename_git_build(
     }
 
     let repo = fs.get_repo(old_parent.to_norm_u64())?;
+    let build_root = &repo.build_dir;
     let commit_oid = fs.get_oid_from_db(old_parent.into())?;
     let src = {
         let ino = old_parent;
-        let build_root = fs.get_path_to_build_folder(ino)?;
-        let session = repo.get_or_init_build_session(commit_oid, &build_root)?;
+        let session = repo.get_or_init_build_session(commit_oid, build_root)?;
         session.finish_path(fs, ino)?.join(old_name)
     };
 
     let dest = {
         let ino = new_parent;
-        let build_root = fs.get_path_to_build_folder(ino)?;
-        let session = repo.get_or_init_build_session(commit_oid, &build_root)?;
+        let session = repo.get_or_init_build_session(commit_oid, build_root)?;
         session.finish_path(fs, ino)?.join(new_name)
     };
 

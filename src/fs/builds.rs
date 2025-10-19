@@ -79,12 +79,9 @@ impl BuildOperationCtx {
             return Ok(None);
         };
 
-        let build_root = fs.get_path_to_build_folder(ino)?;
-
-        let build_session = {
-            let repo = fs.get_repo(ino.to_norm_u64())?;
-            repo.get_or_init_build_session(oid, &build_root)?
-        };
+        let repo = fs.get_repo(ino.to_norm_u64())?;
+        let build_root = &repo.build_dir;
+        let build_session = repo.get_or_init_build_session(oid, build_root)?;
         let temp_dir = build_session.folder.path().to_path_buf();
         let full_path = build_session.finish_path(fs, ino)?;
 

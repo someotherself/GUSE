@@ -8,7 +8,7 @@ use parking_lot::{Mutex, RwLock};
 use std::{
     collections::{BTreeMap, HashMap, HashSet, hash_map::Entry},
     ffi::OsString,
-    path::Path,
+    path::{Path, PathBuf},
     sync::{
         Arc,
         atomic::{AtomicBool, AtomicUsize},
@@ -23,6 +23,7 @@ use crate::{
 
 pub struct GitRepo {
     pub repo_dir: String,
+    pub build_dir: PathBuf,
     pub repo_id: u16,
     pub inner: Mutex<Repository>,
     pub state: RwLock<State>,

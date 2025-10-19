@@ -329,6 +329,7 @@ impl GitFs {
 
         // Create the live folder on disk
         let live_path = tmpdir.join(LIVE_FOLDER);
+        let build_dir = self.repos_dir.join(repo_name).join("build");
         std::fs::create_dir(&live_path)?;
         let repo = git2::Repository::init(live_path)?;
 
@@ -342,6 +343,7 @@ impl GitFs {
 
         let git_repo = GitRepo {
             repo_dir: repo_name.to_owned(),
+            build_dir,
             repo_id,
             inner: parking_lot::Mutex::new(repo),
             state: parking_lot::RwLock::new(state),
@@ -374,6 +376,7 @@ impl GitFs {
 
         let live_path = repo_path.join(LIVE_FOLDER);
         let repo = git2::Repository::init(live_path)?;
+        let build_dir = repo_path.join("build");
 
         let state: State = State {
             head: None,
@@ -385,6 +388,7 @@ impl GitFs {
 
         let git_repo = GitRepo {
             repo_dir: repo_name.to_owned(),
+            build_dir,
             repo_id,
             inner: parking_lot::Mutex::new(repo),
             state: parking_lot::RwLock::new(state),
@@ -1469,15 +1473,6 @@ impl GitFs {
         Ok(path_to_live.join(out.iter().collect::<PathBuf>()))
     }
 
-    fn get_path_to_build_folder(&self, ino: NormalIno) -> anyhow::Result<PathBuf> {
-        let repo_dir = {
-            let repo = self.get_repo(ino.to_norm_u64())?;
-            repo.repo_dir.clone()
-        };
-        let repo_dir_path = self.repos_dir.join(repo_dir).join("build");
-        Ok(repo_dir_path)
-    }
-
     fn build_full_path(&self, ino: NormalIno) -> anyhow::Result<PathBuf> {
         let repo_ino = {
             let repo = self.get_repo(ino.into())?;
@@ -1565,9 +1560,9 @@ impl GitFs {
             self.get_live_path(ino)?
         } else if self.is_in_build(ino)? {
             let commit_oid = self.get_oid_from_db(ino.into())?;
-            let build_root = self.get_path_to_build_folder(ino)?;
             let repo = self.get_repo(ino.into())?;
-            let session = repo.get_or_init_build_session(commit_oid, &build_root)?;
+            let build_root = &repo.build_dir;
+            let session = repo.get_or_init_build_session(commit_oid, build_root)?;
             session.finish_path(self, ino)?
         } else {
             bail!(std::io::Error::from_raw_os_error(libc::EPERM));
