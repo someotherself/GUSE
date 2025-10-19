@@ -310,6 +310,15 @@ impl GitFs {
             fs.load_repo(repo_name)?;
         }
 
+        for (repo_id, repo) in fs.repos_list.clone() {
+            let repo_ino = GitFs::repo_id_to_ino(repo_id);
+            let live_ino = fs.get_live_ino(repo_ino);
+            let repo_name = repo.repo_dir.clone();
+            let live_path = fs.repos_dir.join(repo_name).join(LIVE_FOLDER);
+
+            // Read contents of live
+            fs.read_dir_to_db(&live_path, &fs, InoFlag::InsideLive, live_ino)?;
+        }
         Ok(Arc::from(fs))
     }
 
@@ -485,6 +494,37 @@ impl GitFs {
         // Create build folder again
         std::fs::create_dir(&build_path)?;
 
+        Ok(())
+    }
+
+    fn read_dir_to_db(
+        &self,
+        path: &Path,
+        fs: &GitFs,
+        ino_flag: InoFlag,
+        parent_ino: u64,
+    ) -> anyhow::Result<()> {
+        let mut stack: Vec<(PathBuf, u64)> = vec![(path.into(), parent_ino)];
+        while let Some((cur_path, cur_parent)) = stack.pop() {
+            let mut nodes: Vec<StorageNode> = vec![];
+            for entry in cur_path.read_dir()? {
+                let entry = entry?;
+                let mut attr = self.refresh_medata_using_path(entry.path(), ino_flag)?;
+                let ino = self.next_inode_checked(parent_ino)?;
+
+                if entry.file_type()?.is_dir() {
+                    stack.push((entry.path(), ino));
+                }
+
+                attr.ino = ino;
+                nodes.push(StorageNode {
+                    parent_ino: cur_parent,
+                    name: entry.file_name(),
+                    attr,
+                });
+            }
+            fs.write_inodes_to_db(nodes)?;
+        }
         Ok(())
     }
 
