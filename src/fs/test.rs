@@ -311,7 +311,6 @@ fn test_rename_live_across_parents() -> anyhow::Result<()> {
             fs.rename(left_attr.ino, x, right_attr.ino, x)?;
 
             // Verify
-            println!("left_attr: {left_attr:?}");
             assert!(fs.lookup(left_attr.ino, x)?.is_none());
             assert!(fs.lookup(right_attr.ino, x)?.is_some());
 

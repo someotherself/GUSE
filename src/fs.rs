@@ -52,10 +52,6 @@ const ATTR_LRU: usize = 25000;
 const DENTRY_LRU: usize = 25000;
 const FILE_LRU: usize = 800;
 
-// TODO
-// Promote on cache misses
-// TODO
-
 enum FsOperationContext {
     /// Is the root directory
     Root,
