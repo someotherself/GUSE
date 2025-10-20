@@ -30,7 +30,7 @@ pub fn open_live(
     let file = OpenOptions::new()
         .read(true)
         .write(write)
-        .truncate(truncate)
+        .truncate(write && truncate)
         .open(path)?;
     let handle = Handle {
         ino,
