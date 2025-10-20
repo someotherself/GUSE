@@ -35,6 +35,11 @@ pub fn create_live(
     }];
     fs.write_inodes_to_db(nodes)?;
     {
+        let _ = fs.notifier.try_send(InvalMsg::Store {
+            ino,
+            off: 0,
+            data: Vec::new(),
+        });
         let _ = fs.notifier.try_send(InvalMsg::Entry {
             parent,
             name: OsString::from(name),
@@ -80,6 +85,11 @@ pub fn create_git(
         attr,
     }];
     fs.write_inodes_to_db(nodes)?;
+    let _ = fs.notifier.try_send(InvalMsg::Store {
+        ino,
+        off: 0,
+        data: Vec::new(),
+    });
     let _ = fs.notifier.try_send(InvalMsg::Entry {
         parent: parent.to_norm_u64(),
         name: OsString::from(name),
