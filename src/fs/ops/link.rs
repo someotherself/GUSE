@@ -11,7 +11,6 @@ use crate::{
     mount::InvalMsg,
 };
 
-
 pub fn link_live(
     fs: &GitFs,
     source_ino: NormalIno,

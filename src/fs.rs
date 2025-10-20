@@ -1954,7 +1954,13 @@ impl GitFs {
             .get(&repo_id)
             .ok_or_else(|| anyhow::anyhow!("no db"))?;
         let conn = repo_db.ro_pool.get()?;
-        MetaDb::get_metadata(&conn, target_ino)
+        let attr = MetaDb::get_metadata(&conn, target_ino)?;
+
+        // Cache attr on miss
+        let repo = self.get_repo(target_ino)?;
+        repo.attr_cache.insert(target_ino, attr);
+
+        Ok(attr)
     }
 
     fn get_builctx_metadata(&self, ino: NormalIno) -> anyhow::Result<BuildCtxMetadata> {
@@ -2041,7 +2047,16 @@ impl GitFs {
             .get(&repo_id)
             .ok_or_else(|| anyhow::anyhow!("no db"))?;
         let conn = repo_db.ro_pool.get()?;
-        MetaDb::get_ino_from_db(&conn, parent, name)
+        let target_ino = MetaDb::get_ino_from_db(&conn, parent, name)?;
+
+        let repo = self.get_repo(parent)?;
+        repo.dentry_cache.insert(Dentry {
+            target_ino,
+            parent_ino: parent,
+            target_name: name.to_owned(),
+        });
+
+        Ok(target_ino)
     }
 
     /// Send and forget but will log errors as tracing::error!
@@ -2559,7 +2574,9 @@ impl GitFs {
             .get(&repo_id)
             .ok_or_else(|| anyhow::anyhow!("no db"))?;
         let conn = repo_db.ro_pool.get()?;
-        MetaDb::get_single_dentry(&conn, target_ino)
+        let dentry = MetaDb::get_single_dentry(&conn, target_ino)?;
+        repo.dentry_cache.insert(dentry.clone());
+        Ok(dentry)
     }
 
     fn get_attr_from_cache(&self, ino: u64) -> anyhow::Result<FileAttr> {
