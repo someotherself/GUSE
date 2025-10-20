@@ -149,6 +149,9 @@ impl GitRepo {
     pub fn month_folders(&self) -> anyhow::Result<Vec<ObjectAttr>> {
         let mut out = Vec::new();
 
+        // Refresh snapshots
+        self.refresh_snapshots()?;
+
         self.with_state(|s| {
             for secs in s.snapshots.keys() {
                 let dt = chrono::DateTime::from_timestamp(*secs, 0)
