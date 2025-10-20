@@ -39,7 +39,7 @@ pub fn lookup_repo(
     };
     let attr = if name == "live" {
         let live_ino = fs.get_ino_from_db(parent.into(), OsStr::new("live"))?;
-        let path = fs.repos_dir.join(&repo.repo_dir);
+        let path = fs.repos_dir.join(&repo.repo_dir).join("live");
         let mut attr = fs.attr_from_path(InoFlag::LiveRoot, path)?;
         attr.ino = live_ino;
         attr
