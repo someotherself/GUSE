@@ -1586,6 +1586,9 @@ impl GitFs {
         attr.uid = unsafe { libc::getuid() } as u32;
         attr.gid = unsafe { libc::getgid() } as u32;
         attr.size = metadata.size();
+        if std_type.is_dir() {
+            attr.blksize = 4096
+        };
 
         Ok(attr)
     }
