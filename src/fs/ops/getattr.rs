@@ -1,5 +1,5 @@
 use crate::{
-    fs::{fileattr::InoFlag, FileAttr, GitFs},
+    fs::{FileAttr, GitFs, fileattr::InoFlag},
     inodes::NormalIno,
 };
 

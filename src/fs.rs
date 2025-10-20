@@ -289,6 +289,20 @@ impl GitFs {
                             tracing::debug!("inval_inode failed: {e}");
                         }
                     }
+                    InvalMsg::Delete {
+                        parent,
+                        child,
+                        name,
+                    } => {
+                        if let Err(e) = n.delete(parent, child, &name) {
+                            tracing::debug!("inval_delete failed: {e}");
+                        }
+                    }
+                    InvalMsg::Store { ino, off, data } => {
+                        if let Err(e) = n.store(ino, off, &data) {
+                            tracing::debug!("inval_store failed: {e}");
+                        }
+                    }
                 }
             }
         });

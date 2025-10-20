@@ -115,8 +115,25 @@ fn fuse_allow_other_enabled() -> std::io::Result<bool> {
 }
 
 pub enum InvalMsg {
-    Entry { parent: u64, name: OsString },
-    Inode { ino: u64, off: i64, len: i64 },
+    Entry {
+        parent: u64,
+        name: OsString,
+    },
+    Inode {
+        ino: u64,
+        off: i64,
+        len: i64,
+    },
+    Store {
+        ino: u64,
+        off: u64,
+        data: Vec<u8>,
+    },
+    Delete {
+        parent: u64,
+        child: u64,
+        name: OsString,
+    },
 }
 
 #[derive(Clone)]
@@ -459,7 +476,7 @@ impl fuser::Filesystem for GitFsAdapter {
         let cookie: usize = if offset <= 2 {
             offset as usize
         } else {
-            // This is a subsequent call, get the last cookie 
+            // This is a subsequent call, get the last cookie
             let next_name = {
                 let state = state_arc.lock().unwrap();
                 state.next_name.clone()

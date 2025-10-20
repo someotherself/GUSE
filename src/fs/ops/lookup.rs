@@ -69,12 +69,12 @@ pub fn lookup_live(
     name: &OsStr,
 ) -> anyhow::Result<Option<FileAttr>> {
     let Ok(attr) = fs.get_metadata_by_name(parent, name) else {
-            // Safety
-            fs::ops::readdir::readdir_live_dir(fs, parent)?;
-            let Ok(attr) = fs.get_metadata_by_name(parent, name) else {
-                return Ok(None);
-            };
-            return Ok(Some(attr));
+        // Safety
+        fs::ops::readdir::readdir_live_dir(fs, parent)?;
+        let Ok(attr) = fs.get_metadata_by_name(parent, name) else {
+            return Ok(None);
+        };
+        return Ok(Some(attr));
     };
     Ok(Some(attr))
 }
