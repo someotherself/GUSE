@@ -43,6 +43,12 @@ pub fn lookup_repo(
         let mut attr = fs.attr_from_path(InoFlag::LiveRoot, path)?;
         attr.ino = live_ino;
         attr
+    } else if name == "build" {
+        let live_ino = fs.get_ino_from_db(parent.into(), OsStr::new("build"))?;
+        let path = fs.repos_dir.join(&repo.repo_dir).join("build");
+        let mut attr = fs.attr_from_path(InoFlag::BuildRoot, path)?;
+        attr.ino = live_ino;
+        attr
     } else {
         // It will always be a yyyy-mm folder
         // Build blank attr for it
