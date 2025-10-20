@@ -73,6 +73,12 @@ pub fn rename_live(
             parent: old_parent.to_norm_u64(),
             name: OsString::from(old_name),
         });
+        if old_parent != new_parent {
+            let _ = fs.notifier.try_send(InvalMsg::Entry {
+                parent: new_parent.to_norm_u64(),
+                name: OsString::from(new_name),
+            });
+        };
         let _ = fs.notifier.try_send(InvalMsg::Inode {
             ino: old_parent.to_norm_u64(),
             off: 0,
@@ -158,11 +164,12 @@ pub fn rename_git_build(
             parent: old_parent.to_norm_u64(),
             name: OsString::from(old_name),
         });
-        let _ = fs.notifier.try_send(InvalMsg::Entry {
-            parent: new_parent.to_norm_u64(),
-            name: OsString::from(new_name),
-        });
-
+        if old_parent != new_parent {
+            let _ = fs.notifier.try_send(InvalMsg::Entry {
+                parent: new_parent.to_norm_u64(),
+                name: OsString::from(new_name),
+            });
+        };
         let _ = fs.notifier.try_send(InvalMsg::Inode {
             ino: old_parent.to_norm_u64(),
             off: 0,
