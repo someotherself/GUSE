@@ -1087,8 +1087,7 @@ impl GitFs {
                 bail!("This directory is read only")
             }
             FsOperationContext::InsideLiveDir => {
-                tracing::error!("This directory is read only");
-                bail!("This directory is read only")
+                ops::link::link_live(self, ino.to_norm(), newparent.to_norm(), newname)
             }
             FsOperationContext::InsideGitDir => {
                 ops::link::link_git(self, ino.to_norm(), newparent.to_norm(), newname)

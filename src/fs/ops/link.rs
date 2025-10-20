@@ -11,16 +11,48 @@ use crate::{
     mount::InvalMsg,
 };
 
+
+pub fn link_live(
+    fs: &GitFs,
+    source_ino: NormalIno,
+    newparent: NormalIno,
+    newname: &OsStr,
+) -> anyhow::Result<FileAttr> {
+    if !fs.is_in_live(newparent)? {
+        tracing::error!("This directory is read only");
+        bail!(std::io::Error::from_raw_os_error(libc::EACCES))
+    }
+
+    let original = fs.get_live_path(source_ino)?;
+    let link = fs.get_live_path(newparent)?.join(newname);
+
+    std::fs::hard_link(&original, &link)?;
+    fs.write_dentry(Dentry {
+        target_ino: source_ino.into(),
+        parent_ino: newparent.into(),
+        target_name: newname.to_os_string(),
+    })?;
+
+    {
+        let _ = fs.notifier.try_send(InvalMsg::Entry {
+            parent: newparent.to_norm_u64(),
+            name: OsString::from(newname),
+        });
+        let _ = fs.notifier.try_send(InvalMsg::Inode {
+            ino: newparent.to_norm_u64(),
+            off: 0,
+            len: 0,
+        });
+    }
+    fs.get_metadata(source_ino.to_norm_u64())
+}
+
 pub fn link_git(
     fs: &GitFs,
     source_ino: NormalIno,
     newparent: NormalIno,
     newname: &OsStr,
 ) -> anyhow::Result<FileAttr> {
-    if !fs.is_in_build(source_ino)? {
-        tracing::error!("This directory is read only");
-        bail!(std::io::Error::from_raw_os_error(libc::EACCES))
-    }
     if !fs.is_in_build(newparent)? {
         tracing::error!("This directory is read only");
         bail!(std::io::Error::from_raw_os_error(libc::EACCES))
