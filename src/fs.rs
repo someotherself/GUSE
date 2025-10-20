@@ -506,7 +506,7 @@ impl GitFs {
             for entry in cur_path.read_dir()? {
                 let entry = entry?;
                 let mut attr = self.refresh_medata_using_path(entry.path(), ino_flag)?;
-                let ino = self.next_inode_checked(parent_ino)?;
+                let ino = self.next_inode_checked(cur_parent)?;
 
                 if entry.file_type()?.is_dir() {
                     stack.push((entry.path(), ino));
@@ -1610,22 +1610,6 @@ impl GitFs {
         let mut attr = self.refresh_medata_using_path(path, ino_flag)?;
         attr.ino = ino.into();
 
-        {
-            let parents = self.get_all_parents(ino.into())?;
-            let name = self.get_name_from_db(attr.ino)?;
-            for parent in parents {
-                self.notifier.try_send(InvalMsg::Entry {
-                    parent,
-                    name: OsString::from(&name),
-                })?;
-                self.notifier.try_send(InvalMsg::Inode {
-                    ino: parent,
-                    off: 0,
-                    len: 0,
-                })?;
-            }
-        }
-
         Ok(attr)
     }
 
@@ -2189,6 +2173,54 @@ impl GitFs {
         writer_tx
             .send(msg)
             .context("writer_tx error on update_db_record")?;
+
+        Ok(())
+    }
+
+    /// If ino is a Snap folder, it will walk the folders and add all entries to database
+    fn cache_snap_readdir(&self, ino: NormalIno, deep_seek: bool) -> anyhow::Result<()> {
+        let repo_id = GitFs::ino_to_repo_id(ino.into());
+
+        let writer_tx = {
+            let guard = self
+                .conn_list
+                .get(&repo_id)
+                .ok_or_else(|| anyhow!("No db for repo id {repo_id}"))?;
+            guard.writer_tx.clone()
+        };
+
+        let mut stack: Vec<u64> = vec![ino.into()];
+        let mut nodes: Vec<StorageNode> = Vec::new();
+
+        while let Some(cur_dir) = stack.pop() {
+            let direntries = self.readdirplus(cur_dir)?;
+            nodes.clear();
+            nodes.reserve(direntries.len());
+
+            for e in direntries {
+                if e.entry.kind == FileType::Directory && deep_seek {
+                    stack.push(e.entry.ino);
+                }
+
+                nodes.push(StorageNode {
+                    parent_ino: cur_dir,
+                    name: e.entry.name.clone(),
+                    attr: e.attr,
+                });
+            }
+
+            let batch = std::mem::take(&mut nodes);
+            writer_tx
+                .send(DbWriteMsg::WriteInodes {
+                    nodes: batch,
+                    resp: None,
+                })
+                .context("writer_tx error on cache_snap_readdir")?;
+
+            if !deep_seek {
+                break;
+            }
+        }
 
         Ok(())
     }
