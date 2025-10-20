@@ -457,10 +457,9 @@ impl fuser::Filesystem for GitFsAdapter {
 
         // TODO: Use a monotonic, btree cookie
         let cookie: usize = if offset <= 2 {
-            // Skip the . and ..
             offset as usize
         } else {
-            // This is a subsequent call, get the last cookie
+            // This is a subsequent call, get the last cookie 
             let next_name = {
                 let state = state_arc.lock().unwrap();
                 state.next_name.clone()
