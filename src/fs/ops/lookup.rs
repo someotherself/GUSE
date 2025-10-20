@@ -11,7 +11,7 @@ use crate::{
 pub fn lookup_root(fs: &GitFs, name: &OsStr) -> anyhow::Result<Option<FileAttr>> {
     // Handle a look-up for url -> github.tokio-rs.tokio.git
     let attr = fs.repos_list.iter().find_map(|repo| {
-        let (repo_name, repo_id) = { (OsString::from(repo.repo_dir.clone()), repo.repo_id) };
+        let (repo_name, repo_id) = (OsString::from(repo.repo_dir.clone()), repo.repo_id);
         if repo_name == name {
             let perms = 0o775;
             let st_mode = libc::S_IFDIR | perms;
@@ -68,11 +68,14 @@ pub fn lookup_live(
     parent: NormalIno,
     name: &OsStr,
 ) -> anyhow::Result<Option<FileAttr>> {
-    let attr = match fs.get_metadata_by_name(parent, name) {
-        Ok(a) => a,
-        Err(_) => return Ok(None),
+    let Ok(attr) = fs.get_metadata_by_name(parent, name) else {
+            // Safety
+            fs::ops::readdir::readdir_live_dir(fs, parent)?;
+            let Ok(attr) = fs.get_metadata_by_name(parent, name) else {
+                return Ok(None);
+            };
+            return Ok(Some(attr));
     };
-
     Ok(Some(attr))
 }
 
