@@ -52,7 +52,6 @@ pub fn mkdir_live(
     let new_ino = fs.next_inode_checked(parent)?;
 
     let mut attr: FileAttr = create_attr.into();
-    tracing::info!("mkdir {parent} {name}");
 
     attr.ino = new_ino;
 
