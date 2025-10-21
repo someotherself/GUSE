@@ -1552,6 +1552,12 @@ impl GitFs {
             bail!("Repo does not exist");
         }
         self.repos_map.remove(repo_name);
+        {
+            let _ = self.notifier.try_send(InvalMsg::Entry {
+                parent: ROOT_INO,
+                name: OsString::from(repo_name),
+            });
+        }
         Ok(())
     }
 
