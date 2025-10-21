@@ -61,9 +61,11 @@ pub fn open_git(
                     let path = session
                         .finish_path(fs, dentry.parent_ino.into())?
                         .join(&dentry.target_name);
+                    // Always open with write(true) because the file is cached
+                    // Let the Handle decide if write is allowed
                     let open_file = OpenOptions::new()
                         .read(true)
-                        .write(write)
+                        .write(true)
                         .truncate(write && truncate)
                         .open(path)?;
                     SourceTypes::RealFile(Arc::new(open_file))
