@@ -280,13 +280,11 @@ impl GitFs {
             for msg in rx.iter() {
                 match msg {
                     InvalMsg::Entry { parent, name } => {
-                        tracing::error!("Inval::Entry for {parent} and {}", name.display());
                         if let Err(e) = n.inval_entry(parent, &name) {
                             tracing::debug!("inval_entry failed: {e}");
                         }
                     }
                     InvalMsg::Inode { ino, off, len } => {
-                        tracing::error!("Inval::Inode for {ino}");
                         if let Err(e) = n.inval_inode(ino, off, len) {
                             tracing::debug!("inval_inode failed: {e}");
                         }
@@ -296,16 +294,11 @@ impl GitFs {
                         child,
                         name,
                     } => {
-                        tracing::error!(
-                            "Inval::Delete for {parent}, child {child} and {}",
-                            name.display()
-                        );
                         if let Err(e) = n.delete(parent, child, &name) {
                             tracing::debug!("inval_delete failed: {e}");
                         }
                     }
                     InvalMsg::Store { ino, off, data } => {
-                        tracing::error!("Inval::Store for {ino}");
                         if let Err(e) = n.store(ino, off, &data) {
                             tracing::debug!("inval_store failed: {e}");
                         }
