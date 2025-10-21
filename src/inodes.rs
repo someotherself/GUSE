@@ -33,16 +33,19 @@ pub struct VirtualIno(u64);
 
 impl VirtualIno {
     #[inline]
+    #[must_use]
     pub fn to_norm(self) -> NormalIno {
         NormalIno(self.0 & !VDIR_BIT)
     }
 
     #[inline]
+    #[must_use]
     pub fn to_norm_u64(&self) -> u64 {
         self.0 & !VDIR_BIT
     }
 
     #[inline]
+    #[must_use]
     pub fn to_virt_u64(&self) -> u64 {
         self.0
     }
@@ -50,6 +53,7 @@ impl VirtualIno {
 
 impl Inodes {
     #[inline]
+    #[must_use]
     pub fn to_norm(self) -> NormalIno {
         match self {
             Inodes::NormalIno(ino) => NormalIno(ino),
@@ -61,6 +65,7 @@ impl Inodes {
     }
 
     #[inline]
+    #[must_use]
     pub fn to_virt(self) -> VirtualIno {
         match self {
             Inodes::NormalIno(ino) => {
@@ -72,12 +77,15 @@ impl Inodes {
     }
 
     #[inline]
+    #[must_use]
     pub fn to_u64_n(self) -> u64 {
         match self {
             Inodes::NormalIno(ino) | Inodes::VirtualIno(ino) => ino & !VDIR_BIT,
         }
     }
 
+    #[inline]
+    #[must_use]
     pub fn to_u64_v(self) -> u64 {
         match self {
             Inodes::NormalIno(ino) | Inodes::VirtualIno(ino) => ino | VDIR_BIT,
@@ -161,8 +169,7 @@ impl Deref for Inodes {
     type Target = u64;
     fn deref(&self) -> &Self::Target {
         match self {
-            Inodes::NormalIno(ino) => ino,
-            Inodes::VirtualIno(ino) => ino,
+            Inodes::NormalIno(ino) | Inodes::VirtualIno(ino) => ino,
         }
     }
 }

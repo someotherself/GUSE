@@ -91,14 +91,16 @@ pub fn mount_fuse(opts: MountPoint) -> anyhow::Result<()> {
     let notif = Arc::new(OnceLock::new());
     let fs = GitFsAdapter::new(repos_dir.clone(), opts.read_only, notif.clone())?;
 
-    // let fs = Arc::new(fs.clone());
-
     let mut session = fuser::Session::new(fs.clone(), &mountpoint, &options)?;
     let notifier = session.notifier();
     let _ = notif.set(notifier);
 
     let socket_path = socket_path()?;
-    start_control_server(fs.clone(), socket_path, mountpoint.to_string_lossy().into())?;
+    start_control_server(
+        fs.clone(),
+        &socket_path,
+        mountpoint.to_string_lossy().into(),
+    )?;
 
     session.run()?;
     Ok(())
@@ -151,6 +153,7 @@ impl GitFsAdapter {
         Ok(GitFsAdapter { inner: fs })
     }
 
+    #[must_use]
     pub fn getfs(&self) -> Arc<GitFs> {
         self.inner.clone()
     }
@@ -206,12 +209,12 @@ impl fuser::Filesystem for GitFsAdapter {
                 reply.error(ENOENT);
                 return;
             }
-        };
+        }
 
         match fs.lookup(parent, name) {
             Ok(Some(attr)) => {
                 let ino = attr.ino;
-                reply.entry(&TTL, &attr.into(), 0)
+                reply.entry(&TTL, &attr.into(), 0);
             }
             Ok(None) => {
                 // The name is not found under this parent
@@ -264,7 +267,7 @@ impl fuser::Filesystem for GitFsAdapter {
         match ftype {
             libc::S_IFREG => reply.error(libc::EOPNOTSUPP),
             libc::S_IFIFO | libc::S_IFCHR | libc::S_IFBLK | libc::S_IFSOCK => {
-                reply.error(libc::EPERM)
+                reply.error(libc::EPERM);
             }
             _ => reply.error(libc::EINVAL),
         }
@@ -285,7 +288,7 @@ impl fuser::Filesystem for GitFsAdapter {
             Ok(attr) => reply.entry(&TTL, &attr.into(), 0),
             Err(e) => {
                 error!(?e);
-                reply.error(errno_from_anyhow(&e))
+                reply.error(errno_from_anyhow(&e));
             }
         }
     }
@@ -304,7 +307,7 @@ impl fuser::Filesystem for GitFsAdapter {
             Ok(_) => reply.ok(),
             Err(e) => {
                 error!(e = %e);
-                reply.error(errno_from_anyhow(&e))
+                reply.error(errno_from_anyhow(&e));
             }
         }
     }
@@ -320,10 +323,10 @@ impl fuser::Filesystem for GitFsAdapter {
 
         let res = fs.rmdir(parent, name);
         match res {
-            Ok(_) => reply.ok(),
+            Ok(()) => reply.ok(),
             Err(e) => {
                 error!(e = %e);
-                reply.error(errno_from_anyhow(&e))
+                reply.error(errno_from_anyhow(&e));
             }
         }
     }
@@ -342,7 +345,7 @@ impl fuser::Filesystem for GitFsAdapter {
 
         let res = fs.rename(parent, name, newparent, newname);
         match res {
-            Ok(_) => reply.ok(),
+            Ok(()) => reply.ok(),
             Err(e) => {
                 error!(e = %e);
                 reply.error(ENOENT)
@@ -356,7 +359,7 @@ impl fuser::Filesystem for GitFsAdapter {
         if ino == ROOT_INO {
             reply.error(EISDIR);
             return;
-        };
+        }
         let (read, write) = match flags & libc::O_ACCMODE {
             libc::O_RDONLY => {
                 if flags & libc::O_TRUNC != 0 {
@@ -392,6 +395,7 @@ impl fuser::Filesystem for GitFsAdapter {
         }
     }
 
+    #[allow(clippy::too_many_lines)]
     fn readdir(
         &mut self,
         _req: &fuser::Request<'_>,
@@ -413,12 +417,11 @@ impl fuser::Filesystem for GitFsAdapter {
                 reply.error(libc::ENOTDIR);
                 return;
             };
-            match &ctx.source {
-                SourceTypes::DirSnapshot { entries } => Arc::clone(entries),
-                _ => {
-                    reply.error(libc::ENOTDIR);
-                    return;
-                }
+            if let SourceTypes::DirSnapshot { entries } = &ctx.source {
+                Arc::clone(entries)
+            } else {
+                reply.error(libc::ENOTDIR);
+                return;
             }
         };
 
@@ -462,7 +465,7 @@ impl fuser::Filesystem for GitFsAdapter {
             let mut state = state_arc.lock().unwrap();
             let entries: Arc<[DirectoryEntry]> = Arc::from(gitfs_entries.into_boxed_slice());
             state.dir_stream = Some(entries);
-        };
+        }
 
         {
             let state = state_arc.lock().unwrap();
@@ -641,7 +644,7 @@ impl fuser::Filesystem for GitFsAdapter {
             Ok(n) => reply.data(&buf[..n]),
             Err(e) => {
                 error!(e = %e);
-                reply.error(errno_from_anyhow(&e))
+                reply.error(errno_from_anyhow(&e));
             }
         }
     }
@@ -738,10 +741,10 @@ impl fuser::Filesystem for GitFsAdapter {
 
         if let Some(atime) = atime_opt {
             attr.atime = atime;
-        };
+        }
         if let Some(mtime) = mtime_opt {
             attr.mtime = mtime;
-        };
+        }
 
         if let Some(size) = size
             && let Err(e) = fs.truncate(ino, size, fh)

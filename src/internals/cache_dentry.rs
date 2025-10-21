@@ -11,7 +11,7 @@ use crate::fs::fileattr::Dentry;
 type NodeId = usize;
 
 struct Entry {
-    /// (target_inode, target_name)
+    /// (`target_inode`, `target_name`)
     pub key: (u64, OsString),
     pub value: Dentry,
     pub next: Option<NodeId>, // towards the LRU (tail)
@@ -34,7 +34,7 @@ pub struct DentryInner<S = ahash::RandomState> {
     target_ino_map: HashMap<u64, Vec<NodeId>, S>,
     parent_ino_name_map: HashMap<(u64, OsString), NodeId, S>,
     target_ino_name_map: HashMap<(u64, OsString), NodeId, S>,
-    /// <(target_inode, target_name), Dentry>
+    /// <(`target_inode`, `target_name`), Dentry>
     nodes: Vec<Entry>,
     free: Vec<NodeId>,
     head: Option<NodeId>, // MRU
@@ -71,10 +71,10 @@ where
 
         // Fix the old_head entry
         if let Some(h) = old_head {
-            self.nodes[h].prev = Some(id)
+            self.nodes[h].prev = Some(id);
         } else {
             // List was empty
-            self.tail = Some(id)
+            self.tail = Some(id);
         }
 
         // Fix the head
@@ -139,7 +139,7 @@ where
         if let Some(p) = prev {
             let prev_entry = &mut self.nodes[p];
             prev_entry.next = None;
-            self.tail = Some(p)
+            self.tail = Some(p);
         } else {
             // was empty
             self.head = None;
@@ -167,16 +167,13 @@ where
 
         // Get the index of the new entry.
         // Insert into nodes
-        let index = match self.free.pop() {
-            Some(i) => {
-                let _ = std::mem::replace(&mut self.nodes[i], entry);
-                i
-            }
-            None => {
-                let index = self.nodes.len() as NodeId;
-                self.nodes.push(entry);
-                index
-            }
+        let index = if let Some(i) = self.free.pop() {
+            let _ = std::mem::replace(&mut self.nodes[i], entry);
+            i
+        } else {
+            let index = self.nodes.len() as NodeId;
+            self.nodes.push(entry);
+            index
         };
         if let Some(vec) = self.target_ino_map.get_mut(&value.target_ino) {
             vec.push(index);
@@ -201,11 +198,10 @@ where
         index
     }
 
-    fn peek(&self, id: NodeId) -> Option<Dentry> {
-        Some(self.nodes[id].value.clone())
+    // TODO: Value could be missing (maybe?)
+    fn peek(&self, id: NodeId) -> Dentry {
+        self.nodes[id].value.clone()
     }
-
-    fn get_all_parents(&self) {}
 }
 
 pub struct DentryLru<S = ahash::RandomState> {
@@ -306,7 +302,7 @@ where
         }
     }
 
-    // key: (parent_ino, target_name)
+    /// key: (`parent_ino`, `target_name`)
     pub fn remove_by_parent(&self, parent_ino: u64, target_name: &OsStr) -> Option<Dentry> {
         let mut guard = self.list.write();
 
@@ -332,7 +328,7 @@ where
         None
     }
 
-    /// key: (target_ino, target_name)
+    /// key: (`target_ino`, `target_name`)
     pub fn remove_by_target(&self, target_ino: u64, target_name: &OsStr) -> Option<Dentry> {
         let mut guard = self.list.write();
 
@@ -358,7 +354,7 @@ where
         None
     }
 
-    /// key: (target_ino, target_name)
+    /// key: (`target_ino`, `target_name`)
     pub fn peek(&self, target_ino: u64, target_name: &OsStr) -> Option<Dentry> {
         let guard = self.list.read();
         if let Some(&id) = guard

@@ -14,9 +14,7 @@ use serde::{Deserialize, Serialize};
 use crate::mount::GitFsAdapter;
 
 pub fn socket_path() -> anyhow::Result<PathBuf> {
-    let home = std::env::var_os("HOME")
-        .map(PathBuf::from)
-        .unwrap_or(PathBuf::from("/tmp"));
+    let home = std::env::var_os("HOME").map_or(PathBuf::from("/tmp"), PathBuf::from);
     let sock_dir = home.join(".local").join("share").join("guse");
     std::fs::create_dir_all(&sock_dir)?;
     Ok(sock_dir.join("control.sock"))
@@ -41,19 +39,19 @@ pub enum ControlRes {
 
 pub fn start_control_server(
     fs: GitFsAdapter,
-    socket_path: PathBuf,
+    socket_path: &Path,
     mountpoint: String,
 ) -> anyhow::Result<()> {
-    let listener = bind_socket(&socket_path)?;
+    let listener = bind_socket(socket_path)?;
 
     thread::spawn(move || {
-        for incomming in listener.into_iter() {
+        for incomming in &listener {
             match incomming {
                 Ok(stream) => {
                     let fs = fs.clone();
                     let mp = mountpoint.clone();
                     thread::spawn(move || {
-                        if let Err(e) = handle_client(fs, stream, mp) {
+                        if let Err(e) = handle_client(&fs, stream, &mp) {
                             tracing::error!(e = %e, "Control client error");
                         }
                     });
@@ -67,9 +65,9 @@ pub fn start_control_server(
 
 #[allow(unused_variables)]
 fn handle_client(
-    inner: GitFsAdapter,
+    inner: &GitFsAdapter,
     mut stream: UnixStream,
-    mount_point: String,
+    mount_point: &str,
 ) -> anyhow::Result<()> {
     let mut buf = Vec::new();
     stream.read_to_end(&mut buf)?;
@@ -80,7 +78,7 @@ fn handle_client(
             ControlReq::RepoDelete { name } => {
                 // TODO. Make a 2 step process, with confirmation.
                 let fs = inner.getfs();
-                let Ok(_) = fs.delete_repo(&name) else {
+                let Ok(()) = fs.delete_repo(&name) else {
                     return Ok(ControlRes::Ok);
                 };
                 let repo_path = fs.repos_dir.join(&name);

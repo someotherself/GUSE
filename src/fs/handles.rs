@@ -53,7 +53,7 @@ impl FileHandles {
             let ino = handle_arc.ino;
             if self.register_close(ino).is_some()
                 && let Some(writer_tx) = writer_tx
-                && let Err(e) = GitFs::cleanup_entry_with_writemsg(ino.into(), writer_tx)
+                && let Err(e) = GitFs::cleanup_entry_with_writemsg(ino.into(), &writer_tx)
             {
                 tracing::error!("cleanup_entry_with_writemsg failed for ino {ino}: {e}");
             }

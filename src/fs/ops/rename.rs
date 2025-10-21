@@ -148,7 +148,7 @@ pub fn rename_git_build(
         bail!("Invalid location")
     };
 
-    let mut new_attr = fs.attr_from_path(ino_flag, dest.clone())?;
+    let mut new_attr = GitFs::attr_from_path(ino_flag, &dest.clone())?;
     new_attr.ino = src_attr.ino;
     new_attr.oid = src_attr.oid;
 

@@ -61,10 +61,10 @@ where
 
         // Fix the old_head entry
         if let Some(h) = old_head {
-            self.nodes[h].prev = Some(id)
+            self.nodes[h].prev = Some(id);
         } else {
             // List was empty
-            self.tail = Some(id)
+            self.tail = Some(id);
         }
 
         // Fix the head
@@ -109,7 +109,7 @@ where
         if let Some(p) = prev {
             let prev_entry = &mut self.nodes[p];
             prev_entry.next = None;
-            self.tail = Some(p)
+            self.tail = Some(p);
         } else {
             // was empty
             self.head = None;
@@ -134,16 +134,13 @@ where
 
         // Get the index of the new entry.
         // Insert into nodes
-        let index = match self.free.pop() {
-            Some(i) => {
-                let _ = std::mem::replace(&mut self.nodes[i], entry);
-                i
-            }
-            None => {
-                let index = self.nodes.len() as NodeId;
-                self.nodes.push(entry);
-                index
-            }
+        let index = if let Some(i) = self.free.pop() {
+            let _ = std::mem::replace(&mut self.nodes[i], entry);
+            i
+        } else {
+            let index = self.nodes.len() as NodeId;
+            self.nodes.push(entry);
+            index
         };
         self.map.insert(key, index);
 
@@ -181,9 +178,9 @@ where
         }
     }
 
-    pub fn get(&self, key: K) -> Option<V> {
+    pub fn get(&self, key: &K) -> Option<V> {
         let mut guard = self.list.write();
-        let id = *guard.map.get(&key)?;
+        let id = *guard.map.get(key)?;
         if guard.free.contains(&id) {
             return None;
         }
@@ -191,12 +188,12 @@ where
         guard.push_front(id)
     }
 
-    pub fn with_get_mut<R>(&self, key: K, f: impl FnOnce(&mut V) -> R) -> Option<R> {
+    pub fn with_get_mut<R>(&self, key: &K, f: impl FnOnce(&mut V) -> R) -> Option<R> {
         let mut guard = self.list.write();
-        if !guard.map.contains_key(&key) {
+        if !guard.map.contains_key(key) {
             return None;
         }
-        let id = *guard.map.get(&key)?;
+        let id = *guard.map.get(key)?;
         guard.unlink(id);
         guard.push_front(id);
         let entry = &mut guard.nodes[id];
@@ -244,13 +241,13 @@ where
         }
     }
 
-    pub fn remove(&self, key: K) -> Option<V> {
+    pub fn remove(&self, key: &K) -> Option<V> {
         let mut guard = self.list.write();
-        if let Some(&p) = guard.map.get(&key) {
+        if let Some(&p) = guard.map.get(key) {
             // Fix the neighbors
             guard.unlink(p);
             // Remove from the map
-            guard.map.remove(&key);
+            guard.map.remove(key);
             // Mark the entry as free
             guard.free.push(p);
             // Remove the value from the entry
@@ -259,9 +256,9 @@ where
         None
     }
 
-    pub fn peek(&self, key: K) -> Option<V> {
+    pub fn peek(&self, key: &K) -> Option<V> {
         let guard = self.list.read();
-        if let Some(&id) = guard.map.get(&key) {
+        if let Some(&id) = guard.map.get(key) {
             let entry = guard.nodes.get(id)?;
             entry.value.clone()
         } else {
@@ -272,9 +269,9 @@ where
     /// Takes the value out of the cache, without removing the entry
     ///
     /// Promotes the entry
-    pub fn take_and_promote(&self, key: K) -> Option<V> {
+    pub fn take_and_promote(&self, key: &K) -> Option<V> {
         let mut guard = self.list.write();
-        if let Some(&id) = guard.map.get(&key) {
+        if let Some(&id) = guard.map.get(key) {
             guard.push_front(id);
             return std::mem::take(&mut guard.nodes[id].value);
         }
@@ -283,10 +280,10 @@ where
 
     /// Puts the value back
     ///
-    /// Only called when value was take out with take_and_promote
-    pub fn put_back(&self, key: K, value: V) -> anyhow::Result<()> {
+    /// Only called when value was take out with `take_and_promote`
+    pub fn put_back(&self, key: &K, value: V) -> anyhow::Result<()> {
         let mut guard = self.list.write();
-        if let Some(&id) = guard.map.get(&key)
+        if let Some(&id) = guard.map.get(key)
             && guard.nodes[id].value.is_none()
         {
             guard.nodes[id].value.replace(value);
@@ -307,31 +304,31 @@ mod test {
         let attr: FileAttr = dir_attr(crate::fs::fileattr::InoFlag::LiveRoot).into();
 
         lru.insert(1, attr);
-        assert!(lru.peek(1).is_some());
+        assert!(lru.peek(&1).is_some());
 
         lru.insert(2, attr);
-        assert!(lru.peek(1).is_some());
-        assert!(lru.peek(2).is_some());
+        assert!(lru.peek(&1).is_some());
+        assert!(lru.peek(&2).is_some());
 
         lru.insert(3, attr);
-        assert!(lru.peek(1).is_some());
-        assert!(lru.peek(2).is_some());
-        assert!(lru.peek(3).is_some());
+        assert!(lru.peek(&1).is_some());
+        assert!(lru.peek(&2).is_some());
+        assert!(lru.peek(&3).is_some());
 
         lru.insert(4, attr);
-        assert!(lru.peek(1).is_none());
+        assert!(lru.peek(&1).is_none());
 
         lru.insert(5, attr);
-        assert!(lru.peek(2).is_none());
+        assert!(lru.peek(&2).is_none());
 
         lru.insert(6, attr);
-        assert!(lru.peek(3).is_none());
+        assert!(lru.peek(&3).is_none());
 
-        lru.get(4);
+        lru.get(&4);
 
         lru.insert(7, attr);
-        assert!(lru.peek(4).is_some());
-        assert!(lru.peek(5).is_none());
+        assert!(lru.peek(&4).is_some());
+        assert!(lru.peek(&5).is_none());
     }
 
     #[test]
@@ -344,14 +341,14 @@ mod test {
         lru.insert(2, attr);
         lru.insert(3, attr);
 
-        assert!(lru.get(1).is_some());
+        assert!(lru.get(&1).is_some());
 
         lru.insert(4, attr);
 
-        assert!(lru.peek(1).is_some());
-        assert!(lru.peek(3).is_some());
-        assert!(lru.peek(4).is_some());
-        assert!(lru.peek(2).is_none());
+        assert!(lru.peek(&1).is_some());
+        assert!(lru.peek(&3).is_some());
+        assert!(lru.peek(&4).is_some());
+        assert!(lru.peek(&2).is_none());
     }
 
     #[test]
@@ -363,14 +360,14 @@ mod test {
         lru.insert(2, attr);
         lru.insert(3, attr);
 
-        assert!(lru.peek(1).is_some());
+        assert!(lru.peek(&1).is_some());
 
         lru.insert(4, attr);
 
-        assert!(lru.peek(1).is_none());
-        assert!(lru.peek(2).is_some());
-        assert!(lru.peek(3).is_some());
-        assert!(lru.peek(4).is_some());
+        assert!(lru.peek(&1).is_none());
+        assert!(lru.peek(&2).is_some());
+        assert!(lru.peek(&3).is_some());
+        assert!(lru.peek(&4).is_some());
     }
 
     #[test]
@@ -383,9 +380,9 @@ mod test {
 
         lru.insert(30, attr);
 
-        assert!(lru.peek(10).is_none());
-        assert!(lru.peek(20).is_some());
-        assert!(lru.peek(30).is_some());
+        assert!(lru.peek(&10).is_none());
+        assert!(lru.peek(&20).is_some());
+        assert!(lru.peek(&30).is_some());
     }
 
     #[test]
@@ -397,22 +394,22 @@ mod test {
         lru.insert(2, attr);
         lru.insert(3, attr);
 
-        assert!(lru.remove(2).is_some());
-        assert!(lru.peek(2).is_none());
+        assert!(lru.remove(&2).is_some());
+        assert!(lru.peek(&2).is_none());
 
         lru.insert(4, attr);
         lru.insert(5, attr);
-        let survivors = (lru.peek(1).is_some() as u8) + (lru.peek(3).is_some() as u8);
+        let survivors = (lru.peek(&1).is_some() as u8) + (lru.peek(&3).is_some() as u8);
         assert_eq!(survivors, 1);
-        assert!(lru.peek(4).is_some());
+        assert!(lru.peek(&4).is_some());
     }
 
     #[test]
     fn test_lru_get_miss_returns_none() {
         let lru: LruCache<u64, FileAttr> = LruCache::new(2);
-        assert!(lru.get(9999).is_none());
-        assert!(lru.peek(9999).is_none());
-        assert!(lru.remove(9999).is_none());
+        assert!(lru.get(&9999).is_none());
+        assert!(lru.peek(&9999).is_none());
+        assert!(lru.remove(&9999).is_none());
     }
 
     #[test]
@@ -421,13 +418,13 @@ mod test {
         let attr: FileAttr = dir_attr(crate::fs::fileattr::InoFlag::LiveRoot).into();
 
         lru.insert(1, attr);
-        assert!(lru.peek(1).is_some());
+        assert!(lru.peek(&1).is_some());
 
-        assert!(lru.get(1).is_some());
+        assert!(lru.get(&1).is_some());
 
         lru.insert(2, attr);
-        assert!(lru.peek(1).is_none());
-        assert!(lru.peek(2).is_some());
+        assert!(lru.peek(&1).is_none());
+        assert!(lru.peek(&2).is_some());
     }
 
     #[test]
@@ -439,13 +436,13 @@ mod test {
         lru.insert(2, attr);
         lru.insert(3, attr);
 
-        assert!(lru.get(2).is_some());
+        assert!(lru.get(&2).is_some());
 
         lru.insert(4, attr);
-        assert!(lru.peek(1).is_none());
-        assert!(lru.peek(2).is_some());
-        assert!(lru.peek(3).is_some());
-        assert!(lru.peek(4).is_some());
+        assert!(lru.peek(&1).is_none());
+        assert!(lru.peek(&2).is_some());
+        assert!(lru.peek(&3).is_some());
+        assert!(lru.peek(&4).is_some());
     }
 
     #[test]
@@ -457,15 +454,15 @@ mod test {
         lru.insert(2, attr);
         lru.insert(3, attr);
 
-        assert!(lru.get(3).is_some());
-        assert!(lru.get(3).is_some());
-        assert!(lru.get(3).is_some());
+        assert!(lru.get(&3).is_some());
+        assert!(lru.get(&3).is_some());
+        assert!(lru.get(&3).is_some());
 
         lru.insert(4, attr);
-        assert!(lru.peek(1).is_none());
-        assert!(lru.peek(2).is_some());
-        assert!(lru.peek(3).is_some());
-        assert!(lru.peek(4).is_some());
+        assert!(lru.peek(&1).is_none());
+        assert!(lru.peek(&2).is_some());
+        assert!(lru.peek(&3).is_some());
+        assert!(lru.peek(&4).is_some());
     }
 
     #[test]
@@ -475,17 +472,17 @@ mod test {
         lru.insert(1, 10);
         lru.insert(2, 20);
 
-        let out = lru.with_get_mut(1, |v| {
+        let out = lru.with_get_mut(&1, |v| {
             *v += 5;
             *v
         });
         assert_eq!(out, Some(15));
-        assert_eq!(lru.peek(1), Some(15));
+        assert_eq!(lru.peek(&1), Some(15));
 
         lru.insert(3, 30);
-        assert_eq!(lru.peek(2), None);
-        assert_eq!(lru.peek(1), Some(15));
-        assert_eq!(lru.peek(3), Some(30));
+        assert_eq!(lru.peek(&2), None);
+        assert_eq!(lru.peek(&1), Some(15));
+        assert_eq!(lru.peek(&3), Some(30));
     }
 
     #[test]
@@ -495,15 +492,15 @@ mod test {
         lru.insert(1, 1);
         lru.insert(2, 2);
 
-        let called = lru.with_get_mut(999, |v| {
+        let called = lru.with_get_mut(&999, |v| {
             *v += 1;
             *v
         });
         assert_eq!(called, None);
-        assert_eq!(lru.peek(999), None);
+        assert_eq!(lru.peek(&999), None);
 
-        assert_eq!(lru.peek(1), Some(1));
-        assert_eq!(lru.peek(2), Some(2));
+        assert_eq!(lru.peek(&1), Some(1));
+        assert_eq!(lru.peek(&2), Some(2));
     }
 
     #[test]
@@ -513,22 +510,22 @@ mod test {
         lru.insert(1, 100);
         lru.insert(2, 200);
 
-        let r1 = lru.with_get_mut(2, |v| {
+        let r1 = lru.with_get_mut(&2, |v| {
             *v += 1;
             *v
         });
-        let r2 = lru.with_get_mut(2, |v| {
+        let r2 = lru.with_get_mut(&2, |v| {
             *v += 1;
             *v
         });
         assert_eq!(r1, Some(201));
         assert_eq!(r2, Some(202));
-        assert_eq!(lru.peek(2), Some(202));
+        assert_eq!(lru.peek(&2), Some(202));
 
         lru.insert(3, 300);
-        assert_eq!(lru.peek(1), None);
-        assert_eq!(lru.peek(2), Some(202));
-        assert_eq!(lru.peek(3), Some(300));
+        assert_eq!(lru.peek(&1), None);
+        assert_eq!(lru.peek(&2), Some(202));
+        assert_eq!(lru.peek(&3), Some(300));
     }
 
     #[test]
@@ -536,13 +533,13 @@ mod test {
         let lru: LruCache<i32, i32> = LruCache::new(3);
         lru.insert(42, 7);
 
-        let ret = lru.with_get_mut(42, |v| {
+        let ret = lru.with_get_mut(&42, |v| {
             *v *= 3;
             *v % 10
         });
 
-        assert_eq!(ret, Some(1)); // (7*3)=21; 21 % 10 = 1
-        assert_eq!(lru.peek(42), Some(21));
+        assert_eq!(ret, Some(1));
+        assert_eq!(lru.peek(&42), Some(21));
     }
 
     #[test]
@@ -553,25 +550,25 @@ mod test {
         lru.insert(3, 33);
 
         assert_eq!(
-            lru.with_get_mut(1, |v| {
+            lru.with_get_mut(&1, |v| {
                 *v += 1;
                 *v
             }),
             Some(12)
         );
-        assert_eq!(lru.peek(1), Some(12));
+        assert_eq!(lru.peek(&1), Some(12));
 
         lru.insert(4, 44);
-        assert_eq!(lru.peek(2), None);
-        assert_eq!(lru.peek(1), Some(12));
-        assert_eq!(lru.peek(3), Some(33));
-        assert_eq!(lru.peek(4), Some(44));
+        assert_eq!(lru.peek(&2), None);
+        assert_eq!(lru.peek(&1), Some(12));
+        assert_eq!(lru.peek(&3), Some(33));
+        assert_eq!(lru.peek(&4), Some(44));
 
         lru.insert(5, 55);
-        assert_eq!(lru.peek(3), None);
-        assert_eq!(lru.peek(1), Some(12));
-        assert_eq!(lru.peek(4), Some(44));
-        assert_eq!(lru.peek(5), Some(55));
+        assert_eq!(lru.peek(&3), None);
+        assert_eq!(lru.peek(&1), Some(12));
+        assert_eq!(lru.peek(&4), Some(44));
+        assert_eq!(lru.peek(&5), Some(55));
     }
 
     #[test]
@@ -581,8 +578,8 @@ mod test {
         attr.size = 10;
 
         lru.insert(1, attr);
-        lru.with_get_mut(1, |a| a.size = 12);
-        let attr = lru.get(1).unwrap();
+        lru.with_get_mut(&1, |a| a.size = 12);
+        let attr = lru.get(&1).unwrap();
         assert_eq!(attr.size, 12);
     }
 }
