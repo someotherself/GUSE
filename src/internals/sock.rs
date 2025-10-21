@@ -77,6 +77,7 @@ fn handle_client(
         match req {
             ControlReq::RepoDelete { name } => {
                 // TODO. Make a 2 step process, with confirmation.
+                let name = name.strip_suffix("/").unwrap_or(&name);
                 let fs = inner.getfs();
                 let Ok(()) = fs.delete_repo(&name) else {
                     return Ok(ControlRes::Ok);
