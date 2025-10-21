@@ -490,7 +490,7 @@ impl fuser::Filesystem for GitFsAdapter {
                     .enumerate()
                     .find(|(idx, e)| e.name == next_name)
                 else {
-                    reply.error(libc::EBADF);
+                    reply.error(libc::EIO);
                     return;
                 };
                 cookie
