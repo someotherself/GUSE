@@ -56,11 +56,6 @@ pub fn write_git(
         if new_size != old_size {
             fs.update_size_in_db(ino, new_size)?;
         }
-        // let _ = fs.notifier.try_send(InvalMsg::Inode {
-        //     ino: ino.to_norm_u64(),
-        //     off: 0,
-        //     len: 0,
-        // });
     }
 
     Ok(bytes_written)
