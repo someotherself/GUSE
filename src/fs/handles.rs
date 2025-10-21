@@ -65,8 +65,12 @@ impl FileHandles {
                 }
             };
             if let Some(mut file) = file_opt {
-                let file = std::mem::replace(&mut file, SourceTypes::Closed);
-                Ok(Some(file))
+                if file.is_file() {
+                    let file = std::mem::replace(&mut file, SourceTypes::Closed);
+                    Ok(Some(file))
+                } else {
+                    Ok(None)
+                }
             } else {
                 Ok(None)
             }
