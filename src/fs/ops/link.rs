@@ -33,10 +33,6 @@ pub fn link_live(
     })?;
 
     {
-        let _ = fs.notifier.try_send(InvalMsg::Entry {
-            parent: newparent.to_norm_u64(),
-            name: OsString::from(newname),
-        });
         let _ = fs.notifier.try_send(InvalMsg::Inode {
             ino: newparent.to_norm_u64(),
             off: 0,

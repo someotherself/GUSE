@@ -21,15 +21,21 @@ pub fn read_live(
         bail!("Invalid handle - wrong inode")
     }
 
-    let len = ctx.source.size()?;
+    let len = fs.get_file_size_from_db(ino.to_norm())?;
     if offset >= len {
         return Ok(0);
     }
-
-    let avail = (len - offset) as usize;
-    let want = buf.len().min(avail);
-    let n = ctx.source.read_at(&mut buf[..want], offset)?;
-    Ok(n)
+    let mut filled = 0usize;
+    while filled < buf.len() {
+        let n = ctx
+            .source
+            .read_at(&mut buf[filled..], offset + filled as u64)?;
+        if n == 0 {
+            break;
+        }
+        filled += n;
+    }
+    Ok(filled)
 }
 
 pub fn read_git(
@@ -45,5 +51,6 @@ pub fn read_git(
     if ctx.ino != *ino {
         bail!("Invalid handle - wrong inode")
     }
+    // handle blobs and files separately
     Ok(ctx.source.read_at(buf, offset)?)
 }

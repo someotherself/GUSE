@@ -52,6 +52,7 @@ pub fn mkdir_live(
     let new_ino = fs.next_inode_checked(parent)?;
 
     let mut attr: FileAttr = create_attr.into();
+    tracing::info!("mkdir {parent} {name}");
 
     attr.ino = new_ino;
 
@@ -65,10 +66,6 @@ pub fn mkdir_live(
         ino: new_ino,
         off: 0,
         data: Vec::new(),
-    });
-    let _ = fs.notifier.try_send(InvalMsg::Entry {
-        parent,
-        name: OsString::from(name),
     });
     let _ = fs.notifier.try_send(InvalMsg::Inode {
         ino: parent,

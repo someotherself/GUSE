@@ -2,7 +2,7 @@ use std::os::unix::fs::FileExt;
 
 use anyhow::bail;
 
-use crate::{fs::GitFs, inodes::NormalIno, mount::InvalMsg};
+use crate::{fs::GitFs, inodes::NormalIno};
 
 pub fn write_live(fs: &GitFs, ino: u64, offset: u64, buf: &[u8], fh: u64) -> anyhow::Result<usize> {
     let Some(ctx) = fs.handles.get_context(fh) else {
@@ -17,7 +17,7 @@ pub fn write_live(fs: &GitFs, ino: u64, offset: u64, buf: &[u8], fh: u64) -> any
     if !ctx.source.is_file() {
         bail!("Invalid handle.")
     }
-    let old_size = ctx.source.size()?;
+    let old_size = fs.get_file_size_from_db(ino.into())?;
     let bytes_written = ctx.source.write_at(buf, offset)?;
 
     if bytes_written > 0 {
@@ -25,13 +25,7 @@ pub fn write_live(fs: &GitFs, ino: u64, offset: u64, buf: &[u8], fh: u64) -> any
         if new_size != old_size {
             fs.update_size_in_db(ino.into(), new_size)?;
         }
-        let _ = fs.notifier.try_send(InvalMsg::Inode {
-            ino,
-            off: 0,
-            len: 0,
-        });
     }
-
     Ok(bytes_written)
 }
 
@@ -54,7 +48,7 @@ pub fn write_git(
     if !ctx.write {
         bail!("Write not permitted")
     };
-    let old_size = ctx.source.size()?;
+    let old_size = fs.get_file_size_from_db(ino)?;
     let bytes_written = ctx.source.write_at(buf, offset)?;
 
     if bytes_written > 0 {
@@ -62,11 +56,11 @@ pub fn write_git(
         if new_size != old_size {
             fs.update_size_in_db(ino, new_size)?;
         }
-        let _ = fs.notifier.try_send(InvalMsg::Inode {
-            ino: ino.to_norm_u64(),
-            off: 0,
-            len: 0,
-        });
+        // let _ = fs.notifier.try_send(InvalMsg::Inode {
+        //     ino: ino.to_norm_u64(),
+        //     off: 0,
+        //     len: 0,
+        // });
     }
 
     Ok(bytes_written)

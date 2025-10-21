@@ -674,6 +674,22 @@ impl MetaDb {
         Ok(())
     }
 
+    pub fn get_size_from_db<C>(tx: &C, ino: u64) -> anyhow::Result<u64>
+    where
+        C: std::ops::Deref<Target = rusqlite::Connection>,
+    {
+        let mut stmt = tx.prepare(
+            "SELECT size
+            FROM inode_map
+            WHERE inode = ?1",
+        )?;
+
+        let size_opt: i64 = stmt.query_row(params![ino as i64], |row| row.get(0))?;
+
+        let size = u64::try_from(size_opt)?;
+        Ok(size)
+    }
+
     pub fn get_mode_from_db(conn: &rusqlite::Connection, ino: u64) -> anyhow::Result<u64> {
         let mut stmt = conn.prepare(
             "SELECT git_mode

@@ -280,11 +280,13 @@ impl GitFs {
             for msg in rx.iter() {
                 match msg {
                     InvalMsg::Entry { parent, name } => {
+                        tracing::error!("Inval::Entry for {parent} and {}", name.display());
                         if let Err(e) = n.inval_entry(parent, &name) {
                             tracing::debug!("inval_entry failed: {e}");
                         }
                     }
                     InvalMsg::Inode { ino, off, len } => {
+                        tracing::error!("Inval::Inode for {ino}");
                         if let Err(e) = n.inval_inode(ino, off, len) {
                             tracing::debug!("inval_inode failed: {e}");
                         }
@@ -294,11 +296,16 @@ impl GitFs {
                         child,
                         name,
                     } => {
+                        tracing::error!(
+                            "Inval::Delete for {parent}, child {child} and {}",
+                            name.display()
+                        );
                         if let Err(e) = n.delete(parent, child, &name) {
                             tracing::debug!("inval_delete failed: {e}");
                         }
                     }
                     InvalMsg::Store { ino, off, data } => {
+                        tracing::error!("Inval::Store for {ino}");
                         if let Err(e) = n.store(ino, off, &data) {
                             tracing::debug!("inval_store failed: {e}");
                         }
@@ -2059,10 +2066,25 @@ impl GitFs {
         Ok(target_ino)
     }
 
+    pub fn get_file_size_from_db(&self, ino: NormalIno) -> anyhow::Result<u64> {
+        let repo = self.get_repo(ino.into())?;
+        if let Some(size) = repo.attr_cache.with_get_mut(ino.to_norm_u64(), |a| a.size) {
+            return Ok(size);
+        }
+
+        let repo_id = GitFs::ino_to_repo_id(ino.into());
+        let repo_db = self
+            .conn_list
+            .get(&repo_id)
+            .ok_or_else(|| anyhow::anyhow!("no db"))?;
+        let conn = repo_db.ro_pool.get()?;
+        MetaDb::get_size_from_db(&conn, ino.into())
+    }
+
     /// Send and forget but will log errors as tracing::error!
     pub fn update_size_in_db(&self, ino: NormalIno, size: u64) -> anyhow::Result<()> {
-        let repo_id = GitFs::ino_to_repo_id(ino.into());
         let size_res = self.update_size_in_cache(ino.into(), size);
+        let repo_id = GitFs::ino_to_repo_id(ino.into());
         let writer_tx = {
             let guard = self
                 .conn_list

@@ -40,10 +40,6 @@ pub fn create_live(
             off: 0,
             data: Vec::new(),
         });
-        let _ = fs.notifier.try_send(InvalMsg::Entry {
-            parent,
-            name: OsString::from(name),
-        });
         let _ = fs.notifier.try_send(InvalMsg::Inode {
             ino: parent,
             off: 0,
