@@ -5,11 +5,11 @@ use anyhow::bail;
 use crate::{fs::GitFs, inodes::NormalIno, mount::InvalMsg};
 
 pub fn unlink_live(fs: &GitFs, parent: u64, name: &OsStr) -> anyhow::Result<()> {
-    let Ok(target_ino) = fs.get_ino_from_db(parent, name) else {
+    if fs.get_ino_from_db(parent, name).is_err() {
         tracing::error!("Target does not exist");
         bail!(std::io::Error::from_raw_os_error(libc::ENOENT))
     };
-    let path = fs.build_full_path(target_ino.into())?;
+    let path = fs.build_full_path(parent.into())?.join(name);
     std::fs::remove_file(path)?;
     fs.remove_db_dentry(parent.into(), name)?;
 
