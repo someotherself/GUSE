@@ -75,6 +75,7 @@ pub fn mount_fuse(opts: MountPoint) -> anyhow::Result<()> {
     let mut options = vec![
         MountOption::FSName("GUSE".to_string()),
         MountOption::AutoUnmount,
+        MountOption::Async,
         MountOption::DefaultPermissions,
     ];
     if read_only {
@@ -170,12 +171,14 @@ impl fuser::Filesystem for GitFsAdapter {
             | consts::FUSE_PARALLEL_DIROPS
             | consts::FUSE_ASYNC_READ
             | consts::FUSE_EXPORT_SUPPORT
+            | consts::FUSE_AUTO_INVAL_DATA
+            | consts::FUSE_ASYNC_DIO
             | consts::FUSE_ATOMIC_O_TRUNC;
 
         config.set_max_readahead(128 * 1024).unwrap();
-        config.set_max_write(1024 * 1024).unwrap();
+        config.set_max_write(4 * 1024 * 1024).unwrap();
         config.set_max_background(64).unwrap();
-        config.set_congestion_threshold(32).unwrap();
+        config.set_congestion_threshold(384).unwrap();
         config.add_capabilities(capabilities).unwrap();
         Ok(())
     }

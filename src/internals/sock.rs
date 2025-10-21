@@ -79,16 +79,16 @@ fn handle_client(
                 // TODO. Make a 2 step process, with confirmation.
                 let name = name.strip_suffix("/").unwrap_or(&name);
                 let fs = inner.getfs();
-                let Ok(()) = fs.delete_repo(&name) else {
+                let Ok(()) = fs.delete_repo(name) else {
                     return Ok(ControlRes::Ok);
                 };
-                let repo_path = fs.repos_dir.join(&name);
+                let repo_path = fs.repos_dir.join(name);
                 if repo_path.exists() {
                     println!("Deleting repo at {}", repo_path.display());
                     std::fs::remove_dir_all(&repo_path)
                         .with_context(|| format!("remove_dir_all({})", repo_path.display()))?;
                 }
-                fs.delete_repo(&name)?;
+                fs.delete_repo(name)?;
                 Ok(ControlRes::Ok)
             }
             ControlReq::RepoList => {
