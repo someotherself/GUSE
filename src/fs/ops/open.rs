@@ -35,7 +35,6 @@ pub fn open_live(
     let handle = Handle {
         ino,
         source: SourceTypes::RealFile(Arc::new(file)),
-        read: true,
         write,
     };
     fs.handles.open(handle)
@@ -68,6 +67,13 @@ pub fn open_git(
                         .write(true)
                         .truncate(write && truncate)
                         .open(path)?;
+
+                    // Cache the file
+                    if let Ok(cloned_file) = open_file.try_clone() {
+                        let file_clone = SourceTypes::RealFile(Arc::new(cloned_file));
+                        repo.file_cache.insert(ino.into(), file_clone);
+                    }
+
                     SourceTypes::RealFile(Arc::new(open_file))
                 }
             };
@@ -75,7 +81,6 @@ pub fn open_git(
             let handle = Handle {
                 ino: ino.to_norm_u64(),
                 source: file,
-                read: true,
                 write,
             };
             fs.handles.open(handle)
@@ -89,7 +94,6 @@ pub fn open_git(
             let handle = Handle {
                 ino: ino.to_norm_u64(),
                 source: file,
-                read: true,
                 write: false,
             };
             fs.handles.open(handle)
@@ -108,7 +112,6 @@ pub fn open_git(
             let handle = Handle {
                 ino: ino.to_norm_u64(),
                 source: file,
-                read: true,
                 write: false,
             };
             fs.handles.open(handle)
@@ -144,7 +147,6 @@ pub fn open_vfile(fs: &GitFs, ino: Inodes, read: bool, write: bool) -> anyhow::R
             let handle = Handle {
                 ino: ino.to_u64_v(),
                 source: blob_file,
-                read: true,
                 write: false,
             };
             fs.handles.open(handle)
@@ -174,7 +176,6 @@ pub fn open_vfile(fs: &GitFs, ino: Inodes, read: bool, write: bool) -> anyhow::R
             let handle = Handle {
                 ino: ino.to_u64_v(),
                 source: blob_file,
-                read: true,
                 write: false,
             };
             fs.handles.open(handle)
@@ -266,7 +267,6 @@ fn open_blob(fs: &GitFs, oid: Oid, ino: u64, read: bool) -> anyhow::Result<u64> 
     let handle = Handle {
         ino,
         source: blob_file,
-        read: true,
         write: false,
     };
     fs.handles.open(handle)

@@ -151,7 +151,6 @@ pub struct GitFs {
 pub struct Handle {
     pub ino: u64,
     pub source: SourceTypes,
-    read: bool,
     write: bool,
 }
 
@@ -199,6 +198,13 @@ impl SourceTypes {
     #[inline]
     pub fn is_dir(&self) -> bool {
         matches!(self, SourceTypes::DirSnapshot { entries: _ })
+    }
+
+    pub fn try_clone(&self) -> anyhow::Result<Self> {
+        match self {
+            Self::RealFile(file) => Ok(Self::RealFile(Arc::new(file.try_clone()?))),
+            _ => bail!(std::io::Error::from_raw_os_error(libc::EROFS)),
+        }
     }
 
     pub fn trucate(&self, size: u64) -> anyhow::Result<()> {
@@ -888,13 +894,7 @@ impl GitFs {
         } else {
             Some(self.prepare_writemsg(ino.into())?)
         };
-        match self.handles.close(fh, writer_tx) {
-            Ok(Some(file)) => {
-                let _ = self.put_file_in_cache(ino, file);
-            }
-            Ok(None) => {}
-            Err(_) => return Ok(false),
-        };
+        self.handles.close(fh, writer_tx)?;
         {
             let mut guard = self
                 .vfile_entry
@@ -2681,16 +2681,22 @@ impl GitFs {
     /// Only called during `open()`
     fn take_file_from_cache(&self, ino: u64) -> anyhow::Result<SourceTypes> {
         let repo = self.get_repo(ino)?;
-        repo.file_cache
+        let src_file = repo
+            .file_cache
             .take_and_promote(&ino)
-            .ok_or(anyhow!("Failed to find file in cache"))
+            .ok_or(anyhow!("Failed to find file in cache"))?;
+        let file_clone = src_file.try_clone()?;
+        repo.file_cache.put_back(&ino, src_file)?;
+        Ok(file_clone)
     }
 
-    /// Store file in cache after taking it out
-    ///
-    /// Only called during `release()`
-    fn put_file_in_cache(&self, ino: u64, file: SourceTypes) -> anyhow::Result<()> {
+    fn clone_file_from_cache(&self, ino: u64) -> anyhow::Result<SourceTypes> {
         let repo = self.get_repo(ino)?;
-        repo.file_cache.put_back(&ino, file)
+        let file_clone = repo
+            .file_cache
+            .with_get_mut(&ino, |v| -> anyhow::Result<SourceTypes> { v.try_clone() })
+            .ok_or(|| anyhow!("Failed to find file in cache"))
+            .map_err(|_| anyhow!("Failed to clone file"))??;
+        Ok(file_clone)
     }
 }
