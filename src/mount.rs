@@ -177,7 +177,7 @@ impl fuser::Filesystem for GitFsAdapter {
 
         config.set_max_readahead(128 * 1024).unwrap();
         config.set_max_write(4 * 1024 * 1024).unwrap();
-        config.set_max_background(64).unwrap();
+        config.set_max_background(1024).unwrap();
         config.set_congestion_threshold(384).unwrap();
         config.add_capabilities(capabilities).unwrap();
         Ok(())
