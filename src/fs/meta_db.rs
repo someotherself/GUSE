@@ -346,8 +346,8 @@ impl MetaDb {
 
         let mut insert_dentry = tx.prepare(
             r#"
-        INSERT INTO dentries (parent_inode, name, target_inode)
-        VALUES (?1, ?2, ?3)
+        INSERT INTO dentries (parent_inode, name, target_inode, is_active)
+        VALUES (?1, ?2, ?3, ?4)
         ON CONFLICT(parent_inode, name) DO UPDATE
         SET target_inode = excluded.target_inode;
         "#,
@@ -383,11 +383,13 @@ impl MetaDb {
                 node.parent_ino as i64,
                 node.name.as_bytes(),
                 a.ino as i64,
+                true
             ])?;
 
             affected.insert(a.ino as i64);
         }
 
+        // TODO: Update nlink on negative entry
         let mut upd = tx.prepare(
             "UPDATE inode_map
          SET nlink = (SELECT COUNT(*) FROM dentries d WHERE d.target_inode = inode_map.inode)
@@ -479,13 +481,6 @@ impl MetaDb {
         Ok(set)
     }
 
-    pub fn clear(conn: &rusqlite::Connection) -> anyhow::Result<()> {
-        conn.execute("DELETE FROM inode_map", params![])?;
-        conn.execute("DELETE FROM dentries", params![])?;
-        conn.execute_batch("VACUUM")?;
-        Ok(())
-    }
-
     pub fn get_dir_parent(conn: &rusqlite::Connection, ino: NormalIno) -> anyhow::Result<u64> {
         let ino = ino.to_norm_u64();
         let parent: Option<i64> = conn
@@ -533,6 +528,7 @@ impl MetaDb {
 
     pub fn count_children(conn: &rusqlite::Connection, ino: u64) -> anyhow::Result<usize> {
         let mut stmt = conn.prepare(
+            // TODO: IGNORE negative entries
             "
             SELECT COUNT(*) 
             FROM dentries 
@@ -548,6 +544,7 @@ impl MetaDb {
         conn: &rusqlite::Connection,
         parent_ino: u64,
     ) -> anyhow::Result<Vec<DirectoryEntry>> {
+        // TODO: IGNORE negative entries
         let sql = r#"
             SELECT d.name, d.target_inode, im.oid, im.git_mode
             FROM dentries AS d
@@ -777,6 +774,7 @@ impl MetaDb {
         parent_ino: u64,
         ino: u64,
     ) -> anyhow::Result<OsString> {
+        // TODO: IGNORE negative entries
         let mut stmt = conn.prepare(
             r#"
         SELECT name
@@ -827,10 +825,15 @@ impl MetaDb {
 
         let inserted = tx.execute(
             r#"
-            INSERT INTO dentries (parent_inode, target_inode, name)
-            VALUES (?1, ?2, ?3)
+            INSERT INTO dentries (parent_inode, target_inode, name, is_active)
+            VALUES (?1, ?2, ?3, ?4)
             "#,
-            params![parent_i64, source_i64, dentry.target_name.as_bytes()],
+            params![
+                parent_i64,
+                source_i64,
+                dentry.target_name.as_bytes(),
+                dentry.is_active
+            ],
         )?;
         if inserted != 1 {
             bail!(
@@ -839,6 +842,7 @@ impl MetaDb {
             );
         }
 
+        // TODO: Update nlink on negative entry
         let updated = tx.execute(
             r#"
             UPDATE inode_map
@@ -863,7 +867,7 @@ impl MetaDb {
     ) -> anyhow::Result<Dentry> {
         let mut stmt = conn.prepare(
             r#"
-            SELECT parent_inode, target_name
+            SELECT parent_inode, name
             FROM dentries
             WHERE target_inode = ?1
             LIMIT 1
@@ -882,9 +886,11 @@ impl MetaDb {
             target_ino,
             parent_ino,
             target_name,
+            is_active: true, // TODO: Fix the hard coding
         })
     }
 
+    // Used by rename (mv)
     pub fn update_db_record<C>(
         tx: &C,
         old_parent: u64,
@@ -952,18 +958,20 @@ impl MetaDb {
 
         tx.execute(
             r#"
-        INSERT INTO dentries (parent_inode, name, target_inode)
-        VALUES (?1, ?2, ?3)
+        INSERT INTO dentries (parent_inode, name, target_inode, is_active)
+        VALUES (?1, ?2, ?3, ?4)
         ON CONFLICT(parent_inode, name) DO UPDATE
         SET target_inode = excluded.target_inode
         "#,
             rusqlite::params![
                 node.parent_ino as i64,
                 node.name.as_bytes(),
-                node.attr.ino as i64
+                node.attr.ino as i64,
+                true
             ],
         )?;
 
+        // TODO: Update nlink on negative entry
         tx.execute(
             r#"
         UPDATE inode_map

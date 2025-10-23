@@ -58,7 +58,6 @@ impl BuildSession {
 /// Used by readdir, create and mkdir
 pub struct BuildOperationCtx {
     target: Oid,
-    temp_dir: PathBuf,
     full_path: PathBuf,
 }
 
@@ -82,14 +81,9 @@ impl BuildOperationCtx {
         let repo = fs.get_repo(ino.to_norm_u64())?;
         let build_root = &repo.build_dir;
         let build_session = repo.get_or_init_build_session(oid, build_root)?;
-        let temp_dir = build_session.folder.path().to_path_buf();
         let full_path = build_session.finish_path(fs, ino)?;
 
-        Ok(Some(Self {
-            target,
-            temp_dir,
-            full_path,
-        }))
+        Ok(Some(Self { target, full_path }))
     }
 
     #[inline]

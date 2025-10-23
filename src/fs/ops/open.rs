@@ -50,7 +50,7 @@ pub fn open_git(
     let metadata = fs.get_builctx_metadata(ino)?;
     match metadata.ino_flag {
         InoFlag::InsideBuild => {
-            let file = match fs.take_file_from_cache(ino.into()) {
+            let file = match fs.clone_file_from_cache(ino.into()) {
                 Ok(file) => file,
                 Err(_) => {
                     let repo = fs.get_repo(ino.to_norm_u64())?;

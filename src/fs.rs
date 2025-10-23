@@ -36,6 +36,7 @@ use crate::namespec::NameSpec;
 pub mod builds;
 pub mod fileattr;
 pub mod handles;
+pub mod janitor;
 pub mod meta_db;
 pub mod ops;
 pub mod repo;
@@ -725,6 +726,7 @@ impl GitFs {
                 parent_inode INTEGER NOT NULL,
                 target_inode INTEGER NOT NULL,
                 name         BLOB    NOT NULL,
+                is_active    INTEGER NOT NULL,
                 PRIMARY KEY (parent_inode, name),
                 FOREIGN KEY (parent_inode) REFERENCES inode_map(inode) ON DELETE RESTRICT,
                 FOREIGN KEY (target_inode) REFERENCES inode_map(inode) ON DELETE RESTRICT
@@ -2050,6 +2052,7 @@ impl GitFs {
             target_ino,
             parent_ino: parent,
             target_name: name.to_owned(),
+            is_active: true,
         });
 
         Ok(target_ino)
@@ -2480,6 +2483,7 @@ impl GitFs {
                     target_ino: e.attr.ino,
                     parent_ino: e.parent_ino,
                     target_name: e.name.clone(),
+                    is_active: true,
                 };
                 dentries.push(dentry);
                 attrs.push((e.attr.ino, e.attr));
@@ -2674,20 +2678,6 @@ impl GitFs {
 
         self.write_inodes_to_cache(new_ino, vec![node])?;
         Ok(())
-    }
-
-    /// Take file in cache when opening it
-    ///
-    /// Only called during `open()`
-    fn take_file_from_cache(&self, ino: u64) -> anyhow::Result<SourceTypes> {
-        let repo = self.get_repo(ino)?;
-        let src_file = repo
-            .file_cache
-            .take_and_promote(&ino)
-            .ok_or(anyhow!("Failed to find file in cache"))?;
-        let file_clone = src_file.try_clone()?;
-        repo.file_cache.put_back(&ino, src_file)?;
-        Ok(file_clone)
     }
 
     fn clone_file_from_cache(&self, ino: u64) -> anyhow::Result<SourceTypes> {

@@ -30,6 +30,7 @@ pub fn link_live(
         target_ino: source_ino.into(),
         parent_ino: newparent.into(),
         target_name: newname.to_os_string(),
+        is_active: true,
     })?;
 
     {
@@ -70,6 +71,7 @@ pub fn link_git(
         target_ino: source_ino.into(),
         parent_ino: newparent.into(),
         target_name: newname.to_os_string(),
+        is_active: true,
     })?;
     {
         let _ = fs.notifier.try_send(InvalMsg::Entry {

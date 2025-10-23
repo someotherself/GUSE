@@ -157,6 +157,7 @@ where
         index
     }
 
+    #[allow(dead_code)]
     fn peek(&self, id: NodeId) -> Option<V> {
         self.nodes[id].value.clone()
     }
