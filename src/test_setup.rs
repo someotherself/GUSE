@@ -6,22 +6,21 @@ use thread_local::ThreadLocal;
 
 use crate::fs::GitFs;
 
-pub static SETUP_RESULT: ThreadLocal<Mutex<Option<SetupResult>>> = ThreadLocal::new();
+pub static GITFS_SETUP_RESULT: ThreadLocal<Mutex<Option<GitFsSetupResult>>> = ThreadLocal::new();
 
 #[derive(Debug, Clone)]
-pub struct TestSetup {
+pub struct GitFsTestSetup {
     #[allow(dead_code)]
     pub key: &'static str,
     pub read_only: bool,
 }
 
-pub struct SetupResult {
+pub struct GitFsSetupResult {
     pub fs: Option<Arc<GitFs>>,
     _tmpdir: TempDir,
-    setup: TestSetup,
 }
 
-fn setup(setup: TestSetup) -> SetupResult {
+fn git_fs_setup(setup: GitFsTestSetup) -> GitFsSetupResult {
     let tmpdir = tempfile::Builder::new()
         .prefix(setup.key)
         .tempdir()
@@ -34,21 +33,20 @@ fn setup(setup: TestSetup) -> SetupResult {
     )
     .expect("failed to init GitFs");
 
-    SetupResult {
+    GitFsSetupResult {
         fs: Some(fs),
         _tmpdir: tmpdir,
-        setup,
     }
 }
 
-pub fn run_test<T>(init: TestSetup, t: T) -> anyhow::Result<()>
+pub fn run_git_fs_test<T>(init: GitFsTestSetup, t: T) -> anyhow::Result<()>
 where
-    T: Fn(&Mutex<Option<SetupResult>>) -> anyhow::Result<()>,
+    T: Fn(&Mutex<Option<GitFsSetupResult>>) -> anyhow::Result<()>,
 {
-    let s = SETUP_RESULT.get_or(|| Mutex::new(None));
+    let s = GITFS_SETUP_RESULT.get_or(|| Mutex::new(None));
     {
         let mut s = s.lock().map_err(|_| anyhow!("Lock poisoned"))?;
-        *s = Some(setup(init));
+        *s = Some(git_fs_setup(init));
     }
     t(s)?;
 
@@ -61,7 +59,7 @@ where
 }
 
 pub fn get_fs() -> Arc<GitFs> {
-    let fs = SETUP_RESULT.get_or(|| Mutex::new(None));
+    let fs = GITFS_SETUP_RESULT.get_or(|| Mutex::new(None));
     let mut fs = fs.lock().unwrap();
     fs.as_mut().unwrap().fs.clone().unwrap()
 }

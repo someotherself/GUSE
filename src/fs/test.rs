@@ -5,7 +5,7 @@ use anyhow::anyhow;
 use crate::{
     fs::{FileType, GitFs, REPO_SHIFT},
     inodes::Inodes,
-    test_setup::{TestSetup, get_fs, run_test},
+    test_setup::{GitFsTestSetup, get_fs, run_git_fs_test},
 };
 
 use crate::fs::ROOT_INO;
@@ -14,14 +14,13 @@ const LIVE_DIR_INO: u64 = REPO_DIR_INO + 1;
 
 #[test]
 fn test_mkdir_fetch() -> anyhow::Result<()> {
-    run_test(
-        TestSetup {
+    run_git_fs_test(
+        GitFsTestSetup {
             key: "test_mkdir_fetch",
             read_only: false,
         },
         |_| -> anyhow::Result<()> {
             let fs = get_fs();
-            // let name = OsStr::new("github.tokio-rs.mio.git");
             let name = OsStr::new("github.someotherself.git_rust.git");
             fs.mkdir(ROOT_INO, name)?;
 
@@ -146,8 +145,8 @@ fn test_mkdir_fetch() -> anyhow::Result<()> {
 
 #[test]
 fn test_mkdir_normal() -> anyhow::Result<()> {
-    run_test(
-        TestSetup {
+    run_git_fs_test(
+        GitFsTestSetup {
             key: "test_mkdir_normal",
             read_only: false,
         },
@@ -248,8 +247,8 @@ fn live_ino(fs: &GitFs) -> anyhow::Result<u64> {
 /// Renaming a directory within the same parent should succeed and update the directory entries.
 #[test]
 fn test_rename_live_same_parent_dir() -> anyhow::Result<()> {
-    run_test(
-        TestSetup {
+    run_git_fs_test(
+        GitFsTestSetup {
             key: "rename_live_same_parent",
             read_only: false,
         },
@@ -285,8 +284,8 @@ fn test_rename_live_same_parent_dir() -> anyhow::Result<()> {
 /// Renaming a directory across two different parents inside live should succeed.
 #[test]
 fn test_rename_live_across_parents() -> anyhow::Result<()> {
-    run_test(
-        TestSetup {
+    run_git_fs_test(
+        GitFsTestSetup {
             key: "rename_live_across_parents",
             read_only: false,
         },
@@ -323,8 +322,8 @@ fn test_rename_live_across_parents() -> anyhow::Result<()> {
 /// No-op rename (same parent + same name) should return Ok(()) and not change entries.
 #[test]
 fn test_rename_live_noop_same_name() -> anyhow::Result<()> {
-    run_test(
-        TestSetup {
+    run_git_fs_test(
+        GitFsTestSetup {
             key: "rename_live_noop",
             read_only: false,
         },
@@ -356,8 +355,8 @@ fn test_rename_live_noop_same_name() -> anyhow::Result<()> {
 /// (POSIX rename semantics allow replacing an empty directory).
 #[test]
 fn test_rename_live_overwrite_empty_dir() -> anyhow::Result<()> {
-    run_test(
-        TestSetup {
+    run_git_fs_test(
+        GitFsTestSetup {
             key: "rename_live_overwrite_empty_dir",
             read_only: false,
         },
@@ -395,8 +394,8 @@ fn test_rename_live_overwrite_empty_dir() -> anyhow::Result<()> {
 /// Renaming onto an existing NON-EMPTY destination directory should error.
 #[test]
 fn test_rename_live_overwrite_nonempty_dir_fails() -> anyhow::Result<()> {
-    run_test(
-        TestSetup {
+    run_git_fs_test(
+        GitFsTestSetup {
             key: "rename_live_overwrite_nonempty",
             read_only: false,
         },
@@ -434,8 +433,8 @@ fn test_rename_live_overwrite_nonempty_dir_fails() -> anyhow::Result<()> {
 /// Invalid names (with '/') must error and not change state.
 #[test]
 fn test_rename_live_invalid_name_with_slash() -> anyhow::Result<()> {
-    run_test(
-        TestSetup {
+    run_git_fs_test(
+        GitFsTestSetup {
             key: "rename_live_invalid_name",
             read_only: false,
         },
@@ -467,8 +466,8 @@ fn test_rename_live_invalid_name_with_slash() -> anyhow::Result<()> {
 /// Source missing should error.
 #[test]
 fn test_rename_live_source_missing() -> anyhow::Result<()> {
-    run_test(
-        TestSetup {
+    run_git_fs_test(
+        GitFsTestSetup {
             key: "rename_live_src_missing",
             read_only: false,
         },
