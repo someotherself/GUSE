@@ -102,7 +102,6 @@ pub fn mount_fuse(opts: MountPoint) -> anyhow::Result<()> {
     let _ = notif.set(notifier);
 
     if !disable_socket {
-        println!("Enabling socket");
         let socket_path = socket_path()?;
         start_control_server(
             fs.clone(),
@@ -317,8 +316,17 @@ impl fuser::Filesystem for GitFsAdapter {
         match res {
             Ok(_) => reply.ok(),
             Err(e) => {
-                error!(e = %e);
-                reply.error(errno_from_anyhow(&e));
+                if let Some(ioe) = e.downcast_ref::<std::io::Error>() {
+                    if ioe.kind() == std::io::ErrorKind::NotFound {
+                        tracing::info!(
+                            "rm: cannot remove '{}': No such file or directory",
+                            name.display()
+                        );
+                        return reply.error(ENOENT);
+                    }
+                    error!(e = %e, "UNLINK");
+                    reply.error(errno_from_anyhow(&e));
+                }
             }
         }
     }
@@ -336,8 +344,17 @@ impl fuser::Filesystem for GitFsAdapter {
         match res {
             Ok(()) => reply.ok(),
             Err(e) => {
-                error!(e = %e);
-                reply.error(errno_from_anyhow(&e));
+                if let Some(ioe) = e.downcast_ref::<std::io::Error>() {
+                    if ioe.kind() == std::io::ErrorKind::NotFound {
+                        tracing::info!(
+                            "rm: cannot remove '{}': No such file or directory",
+                            name.display()
+                        );
+                        return reply.error(ENOENT);
+                    }
+                    error!(e = %e, "RMDIR");
+                    reply.error(errno_from_anyhow(&e));
+                }
             }
         }
     }
