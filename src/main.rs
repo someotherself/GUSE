@@ -97,6 +97,13 @@ fn handle_cli_args() -> ArgMatches {
                         .action(ArgAction::Count)
                         .global(true)
                         .help("Increase log verbosity (can be used multiple times)"),
+                )
+                .arg(
+                    Arg::new("disable-socket")
+                        .short('t')
+                        .action(ArgAction::SetTrue)
+                        .requires("mount-point")
+                        .help("Disables the socket communication, needed for commands such as `guse repo remove <repo-name>`"),
                 ),
         )
         .subcommand(
@@ -126,8 +133,16 @@ fn run_mount(matches: &ArgMatches) -> anyhow::Result<()> {
     let read_only = matches.get_flag("read-only");
     let allow_other = matches.get_flag("allow-other");
     let allow_root = matches.get_flag("allow-root");
-    let mount_point =
-        guse::mount::MountPoint::new(mountpoint, repos_dir, read_only, allow_root, allow_other);
+    let disable_socket = matches.get_flag("disable-socket");
+    tracing::info!("sock - {disable_socket}");
+    let mount_point = guse::mount::MountPoint::new(
+        mountpoint,
+        repos_dir,
+        read_only,
+        allow_root,
+        allow_other,
+        disable_socket,
+    );
     guse::mount::mount_fuse(mount_point)?;
     Ok(())
 }

@@ -33,12 +33,14 @@ use crate::internals::sock::{socket_path, start_control_server};
 
 const TTL: Duration = Duration::from_secs(15);
 
+#[derive(Debug, Clone)]
 pub struct MountPoint {
-    mountpoint: PathBuf,
-    repos_dir: PathBuf,
-    read_only: bool,
-    allow_root: bool,
-    allow_other: bool,
+    pub mountpoint: PathBuf,
+    pub repos_dir: PathBuf,
+    pub read_only: bool,
+    pub allow_root: bool,
+    pub allow_other: bool,
+    pub disable_socket: bool,
 }
 
 impl MountPoint {
@@ -48,6 +50,7 @@ impl MountPoint {
         read_only: bool,
         allow_root: bool,
         allow_other: bool,
+        disable_socket: bool,
     ) -> Self {
         Self {
             mountpoint,
@@ -55,6 +58,7 @@ impl MountPoint {
             read_only,
             allow_root,
             allow_other,
+            disable_socket,
         }
     }
 }
@@ -66,6 +70,7 @@ pub fn mount_fuse(opts: MountPoint) -> anyhow::Result<()> {
         read_only,
         allow_root,
         allow_other,
+        disable_socket,
     } = opts;
 
     if !mountpoint.exists() {
@@ -96,12 +101,15 @@ pub fn mount_fuse(opts: MountPoint) -> anyhow::Result<()> {
     let notifier = session.notifier();
     let _ = notif.set(notifier);
 
-    let socket_path = socket_path()?;
-    start_control_server(
-        fs.clone(),
-        &socket_path,
-        mountpoint.to_string_lossy().into(),
-    )?;
+    if !disable_socket {
+        println!("Enabling socket");
+        let socket_path = socket_path()?;
+        start_control_server(
+            fs.clone(),
+            &socket_path,
+            mountpoint.to_string_lossy().into(),
+        )?;
+    }
 
     session.run()?;
     Ok(())
