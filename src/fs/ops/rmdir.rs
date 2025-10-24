@@ -2,12 +2,19 @@ use std::ffi::{OsStr, OsString};
 
 use anyhow::bail;
 
-use crate::{fs::GitFs, inodes::NormalIno, mount::InvalMsg};
+use crate::{
+    fs::{GitFs, meta_db::DbReturn},
+    inodes::NormalIno,
+    mount::InvalMsg,
+};
 
 pub fn rmdir_live(fs: &GitFs, parent: NormalIno, name: &OsStr) -> anyhow::Result<()> {
-    let Ok(target_ino) = fs.get_ino_from_db(parent.into(), name) else {
-        tracing::error!("Target does not exist");
-        bail!(std::io::Error::from_raw_os_error(libc::ENOENT))
+    let target_ino = match fs.get_ino_from_db(parent.into(), name) {
+        Ok(DbReturn::Found { value: ino }) => ino,
+        _ => {
+            tracing::error!("Target does not exist");
+            bail!(std::io::Error::from_raw_os_error(libc::ENOENT))
+        }
     };
     let Ok(path) = fs.get_live_path(target_ino.into()) else {
         tracing::error!("Target does not exist");

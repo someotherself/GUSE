@@ -29,10 +29,9 @@ pub struct SetupResult {
 }
 
 fn git_fs_setup(setup: GitFsTestSetup) -> SetupResult {
-    let cwd = std::env::current_dir().unwrap();
     let tmpdir = tempfile::Builder::new()
         .prefix(setup.key)
-        .tempdir_in(cwd)
+        .tempdir()
         .expect("could not create tmpdir");
 
     let fs = GitFs::new(

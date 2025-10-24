@@ -4,8 +4,9 @@ use anyhow::{anyhow, bail};
 
 use crate::{
     fs::{
-        FileAttr, GitFs,
+        self, FileAttr, GitFs,
         fileattr::{FileType, InoFlag, StorageNode, dir_attr, file_attr},
+        meta_db::DbReturn,
     },
     inodes::NormalIno,
     mount::InvalMsg,
@@ -24,13 +25,12 @@ pub fn rename_live(
         bail!(format!("New parent {} not allowed", new_parent));
     }
 
-    let src_attr = fs
-        .lookup(old_parent.to_norm_u64(), old_name)?
+    let src_attr = fs::ops::lookup::lookup_live(fs, old_parent, old_name)?
         .ok_or_else(|| anyhow!("Source does not exist"))?;
 
     let mut dest_exists = false;
 
-    if let Some(dest_attr) = fs.lookup(new_parent.to_norm_u64(), new_name)? {
+    if let Some(dest_attr) = fs::ops::lookup::lookup_live(fs, new_parent, new_name)? {
         dest_exists = true;
 
         if dest_attr.kind != src_attr.kind {
@@ -109,17 +109,22 @@ pub fn rename_git_build(
     if !dest_in_build && !is_commit_folder {
         bail!(format!("New parent {} not allowed", new_parent));
     }
-    let src_attr = fs.get_metadata_by_name(old_parent, old_name)?;
+    let src_attr = match fs.get_metadata_by_name(old_parent, old_name)? {
+        DbReturn::Found { value } => value,
+        _ => bail!(std::io::Error::from_raw_os_error(libc::ENOENT)),
+    };
 
     let mut dest_exists = false;
 
-    if let Ok(dest_attr) = fs.get_metadata_by_name(new_parent, new_name) {
+    if let Ok(res) = fs.get_metadata_by_name(new_parent, new_name)
+        && let DbReturn::Found { value } = res
+    {
         dest_exists = true;
 
-        if dest_attr.kind != src_attr.kind {
+        if value.kind != src_attr.kind {
             bail!("Source and destination are not the same type")
         }
-    }
+    };
 
     let repo = fs.get_repo(old_parent.to_norm_u64())?;
     let build_root = &repo.build_dir;

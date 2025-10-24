@@ -22,7 +22,7 @@ use crate::fs::fileattr::{
     dir_attr, file_attr,
 };
 use crate::fs::handles::FileHandles;
-use crate::fs::meta_db::{DbWriteMsg, MetaDb, oneshot, set_conn_pragmas, set_wal_once};
+use crate::fs::meta_db::{DbReturn, DbWriteMsg, MetaDb, oneshot, set_conn_pragmas, set_wal_once};
 use crate::fs::ops::readdir::{
     BuildCtxMetadata, DirectoryEntry, DirectoryEntryPlus, DirectoryStreamCookie,
 };
@@ -734,6 +734,7 @@ impl GitFs {
 
                 CREATE INDEX IF NOT EXISTS dentries_by_target ON dentries(target_inode);
                 CREATE INDEX IF NOT EXISTS dentries_by_parent ON dentries(parent_inode);
+                CREATE INDEX IF NOT EXISTS dentries_active_by_target ON dentries(target_inode) WHERE is_active = 1;
             "#,
         )?;
         Ok(())
@@ -1625,7 +1626,10 @@ impl GitFs {
     }
 
     #[instrument(level = "debug", skip(self, stored_attr), fields(ino = %stored_attr.ino), err(Display))]
-    pub fn update_db_metadata(&self, stored_attr: SetFileAttr) -> anyhow::Result<FileAttr> {
+    pub fn update_db_metadata(
+        &self,
+        stored_attr: SetFileAttr,
+    ) -> anyhow::Result<DbReturn<FileAttr>> {
         let target_ino = stored_attr.ino;
         let cache_res = self.update_attr_in_cache(&stored_attr.clone());
         // Update the DB
@@ -1656,7 +1660,7 @@ impl GitFs {
 
         // Fetch the new metadata
         match cache_res {
-            Ok(attr) => Ok(attr),
+            Ok(attr) => Ok(DbReturn::Found { value: attr }),
             Err(_) => self.get_metadata(target_ino),
         }
     }
@@ -1908,14 +1912,23 @@ impl GitFs {
     #[allow(dead_code)]
     fn get_build_ino(&self, ino: NormalIno) -> anyhow::Result<u64> {
         let repo_ino = self.get_repo_ino(ino.to_norm_u64())?;
-        self.get_ino_from_db(repo_ino, OsStr::new("build"))
+        self.get_ino_from_db(repo_ino, OsStr::new("build"))?.into()
     }
 
-    fn exists_by_name(&self, parent: u64, name: &OsStr) -> anyhow::Result<Option<u64>> {
+    fn exists_by_name(&self, parent: u64, name: &OsStr) -> anyhow::Result<DbReturn<u64>> {
         let repo = self.get_repo(parent)?;
-        if let Some(target) = repo.dentry_cache.get_by_parent_and_name(parent, name) {
-            return Ok(Some(target.target_ino));
+        match repo.dentry_cache.get_by_parent_and_name(parent, name) {
+            DbReturn::Found { value: d } => {
+                return Ok(DbReturn::Found {
+                    value: d.target_ino,
+                });
+            }
+            DbReturn::Negative => {
+                return Ok(DbReturn::Negative);
+            }
+            DbReturn::Missing => {}
         }
+
         let repo_id = GitFs::ino_to_repo_id(parent);
         let repo_db = self
             .conn_list
@@ -1929,9 +1942,13 @@ impl GitFs {
         &self,
         parent_ino: NormalIno,
         child_name: &OsStr,
-    ) -> anyhow::Result<FileAttr> {
-        if let Ok(attr) = self.lookup_in_cache(parent_ino.into(), child_name) {
-            return Ok(attr);
+    ) -> anyhow::Result<DbReturn<FileAttr>> {
+        if let Ok(res) = self.lookup_in_cache(parent_ino.into(), child_name) {
+            match res {
+                DbReturn::Found { value: attr } => return Ok(DbReturn::Found { value: attr }),
+                DbReturn::Negative => return Ok(DbReturn::Negative),
+                DbReturn::Missing => {}
+            }
         }
         let repo_id = GitFs::ino_to_repo_id(parent_ino.into());
         let repo_db = self
@@ -1942,9 +1959,13 @@ impl GitFs {
         MetaDb::get_metadata_by_name(&conn, parent_ino.to_norm_u64(), child_name)
     }
 
-    pub fn get_metadata(&self, target_ino: u64) -> anyhow::Result<FileAttr> {
-        if let Ok(attr) = self.get_attr_from_cache(target_ino) {
-            return Ok(attr);
+    pub fn get_metadata(&self, target_ino: u64) -> anyhow::Result<DbReturn<FileAttr>> {
+        if let Ok(res) = self.get_attr_from_cache(target_ino) {
+            match res {
+                DbReturn::Found { value: attr } => return Ok(DbReturn::Found { value: attr }),
+                DbReturn::Negative => return Ok(DbReturn::Negative),
+                DbReturn::Missing => {}
+            }
         }
         let repo_id = GitFs::ino_to_repo_id(target_ino);
         let repo_db = self
@@ -1955,10 +1976,12 @@ impl GitFs {
         let attr = MetaDb::get_metadata(&conn, target_ino)?;
 
         // Cache attr on miss
+        let attr: anyhow::Result<FileAttr> = attr.into();
+        let attr = attr?;
         let repo = self.get_repo(target_ino)?;
         repo.attr_cache.insert(target_ino, attr);
 
-        Ok(attr)
+        Ok(DbReturn::Found { value: attr })
     }
 
     fn get_builctx_metadata(&self, ino: NormalIno) -> anyhow::Result<BuildCtxMetadata> {
@@ -2034,26 +2057,34 @@ impl GitFs {
         (ino & VDIR_BIT) != 0
     }
 
-    fn get_ino_from_db(&self, parent: u64, name: &OsStr) -> anyhow::Result<u64> {
+    fn get_ino_from_db(&self, parent: u64, name: &OsStr) -> anyhow::Result<DbReturn<u64>> {
         let repo = self.get_repo(parent)?;
-        if let Some(dentry) = repo.dentry_cache.get_by_parent_and_name(parent, name) {
-            return Ok(dentry.target_ino);
+        match repo.dentry_cache.get_by_parent_and_name(parent, name) {
+            DbReturn::Found { value: d } => {
+                return Ok(DbReturn::Found {
+                    value: d.target_ino,
+                });
+            }
+            DbReturn::Negative => return Ok(DbReturn::Negative),
+            DbReturn::Missing => {}
         }
+
         let repo_id = GitFs::ino_to_repo_id(parent);
         let repo_db = self
             .conn_list
             .get(&repo_id)
-            .ok_or_else(|| anyhow::anyhow!("no db"))?;
+            .ok_or_else(|| anyhow::anyhow!("no db for get_ino_from_db - repo {}", repo_id))?;
         let conn = repo_db.ro_pool.get()?;
         let target_ino = MetaDb::get_ino_from_db(&conn, parent, name)?;
 
-        let repo = self.get_repo(parent)?;
-        repo.dentry_cache.insert(Dentry {
-            target_ino,
-            parent_ino: parent,
-            target_name: name.to_owned(),
-            is_active: true,
-        });
+        if let DbReturn::Found { value } = target_ino {
+            repo.dentry_cache.insert(Dentry {
+                target_ino: value,
+                parent_ino: parent,
+                target_name: name.to_owned(),
+                is_active: true,
+            });
+        }
 
         Ok(target_ino)
     }
@@ -2195,9 +2226,13 @@ impl GitFs {
         old_parent: NormalIno,
         old_name: &OsStr,
         node: StorageNode,
-    ) -> anyhow::Result<()> {
+    ) -> anyhow::Result<DbReturn<()>> {
         let repo_id = GitFs::ino_to_repo_id(old_parent.into());
-        self.update_cache_record(old_parent.into(), old_name, node.clone())?;
+        if let DbReturn::Negative =
+            self.update_cache_record(old_parent.into(), old_name, node.clone())?
+        {
+            return Ok(DbReturn::Negative);
+        }
         let writer_tx = {
             let guard = self
                 .conn_list
@@ -2216,7 +2251,7 @@ impl GitFs {
             .send(msg)
             .context("writer_tx error on update_db_record")?;
 
-        Ok(())
+        Ok(DbReturn::Found { value: () })
     }
 
     /// If ino is a Snap folder, it will walk the folders and add all entries to database
@@ -2343,7 +2378,7 @@ impl GitFs {
 
     fn inode_exists(&self, ino: u64) -> anyhow::Result<bool> {
         let repo = self.get_repo(ino)?;
-        if repo.attr_cache.get(&ino).is_some() {
+        if repo.attr_cache.get(&ino).is_found() {
             return Ok(true);
         }
         let repo_id = GitFs::ino_to_repo_id(ino);
@@ -2494,15 +2529,21 @@ impl GitFs {
         Ok(())
     }
 
-    fn lookup_in_cache(&self, parent_ino: u64, target_name: &OsStr) -> anyhow::Result<FileAttr> {
+    fn lookup_in_cache(
+        &self,
+        parent_ino: u64,
+        target_name: &OsStr,
+    ) -> anyhow::Result<DbReturn<FileAttr>> {
         let repo = self.get_repo(parent_ino)?;
-        let target = repo
+        let target = match repo
             .dentry_cache
             .get_by_parent_and_name(parent_ino, target_name)
-            .ok_or_else(|| anyhow!("Could not find dentry in cache"))?;
-        repo.attr_cache
-            .get(&target.target_ino)
-            .ok_or_else(|| anyhow!("Could not find attr in cache"))
+        {
+            DbReturn::Found { value } => value,
+            DbReturn::Negative => return Ok(DbReturn::Negative),
+            DbReturn::Missing => return Ok(DbReturn::Missing),
+        };
+        Ok(repo.attr_cache.get(&target.target_ino))
     }
 
     fn remove_dentry_from_cache(&self, target_ino: u64, target_name: &OsStr) -> anyhow::Result<()> {
@@ -2551,9 +2592,7 @@ impl GitFs {
                 a.flags = flags;
             }
         });
-        repo.attr_cache
-            .get(&ino)
-            .ok_or(anyhow!("Cannot get attr from cache"))
+        repo.attr_cache.get(&ino).into()
     }
 
     fn update_size_in_cache(&self, ino: u64, size: u64) -> anyhow::Result<u64> {
@@ -2595,11 +2634,10 @@ impl GitFs {
         Ok(dentry)
     }
 
-    fn get_attr_from_cache(&self, ino: u64) -> anyhow::Result<FileAttr> {
+    fn get_attr_from_cache(&self, ino: u64) -> anyhow::Result<DbReturn<FileAttr>> {
         let repo = self.get_repo(ino)?;
-        repo.attr_cache
-            .get(&ino)
-            .ok_or(anyhow!("Could not get attr from cache"))
+        let attr = repo.attr_cache.get(&ino);
+        Ok(attr)
     }
 
     fn get_builctx_metadata_from_cache(&self, ino: NormalIno) -> anyhow::Result<BuildCtxMetadata> {
@@ -2614,7 +2652,7 @@ impl GitFs {
         } else {
             dentries[0].target_name.clone()
         };
-        let Some(attr) = repo.attr_cache.get(&ino) else {
+        let DbReturn::Found { value: attr } = repo.attr_cache.get(&ino) else {
             bail!("Attribute not found for {ino}")
         };
         let mode = repo::try_into_filemode(u64::from(attr.git_mode))
@@ -2652,7 +2690,7 @@ impl GitFs {
         let dentry = repo
             .dentry_cache
             .get_by_parent_and_name(parent_ino, target_name);
-        if let Some(dentry) = dentry {
+        if let DbReturn::Found { value: dentry } = dentry {
             Ok(dentry.target_ino)
         } else {
             bail!("Could not find dentry in cache")
@@ -2664,20 +2702,24 @@ impl GitFs {
         old_parent: u64,
         old_name: &OsStr,
         node: StorageNode,
-    ) -> anyhow::Result<()> {
+    ) -> anyhow::Result<DbReturn<()>> {
         let new_ino = node.attr.ino;
         let repo = self.get_repo(new_ino)?;
 
-        let old_ino = repo
+        match repo
             .dentry_cache
             .get_by_parent_and_name(old_parent, old_name)
-            .ok_or(anyhow!("Could not find dentry"))?
-            .target_ino;
-        repo.dentry_cache.remove_by_parent(old_parent, old_name);
-        repo.attr_cache.remove(&old_ino);
-
-        self.write_inodes_to_cache(new_ino, vec![node])?;
-        Ok(())
+        {
+            DbReturn::Found { value: d } => {
+                // If old entry is found remove it and create the new entry
+                repo.dentry_cache.remove_by_parent(old_parent, old_name);
+                repo.attr_cache.remove(&d.target_ino);
+                self.write_inodes_to_cache(new_ino, vec![node])?;
+                Ok(DbReturn::Found { value: () })
+            }
+            DbReturn::Negative => Ok(DbReturn::Negative),
+            DbReturn::Missing => Ok(DbReturn::Missing),
+        }
     }
 
     fn clone_file_from_cache(&self, ino: u64) -> anyhow::Result<SourceTypes> {

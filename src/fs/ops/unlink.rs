@@ -35,7 +35,6 @@ pub fn unlink_build_dir(fs: &GitFs, parent: NormalIno, name: &OsStr) -> anyhow::
         session.finish_path(fs, parent)?.join(name)
     };
 
-    let child_ino = fs.exists_by_name(parent.into(), name)?;
     std::fs::remove_file(path)?;
     fs.remove_db_dentry(parent, name)?;
 
@@ -48,13 +47,6 @@ pub fn unlink_build_dir(fs: &GitFs, parent: NormalIno, name: &OsStr) -> anyhow::
         off: 0,
         len: 0,
     });
-    if let Some(child) = child_ino {
-        let _ = fs.notifier.try_send(InvalMsg::Delete {
-            parent: parent.to_norm_u64(),
-            child,
-            name: name.to_owned(),
-        });
-    };
 
     Ok(())
 }

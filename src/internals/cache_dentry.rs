@@ -6,7 +6,7 @@ use std::{
 
 use parking_lot::RwLock;
 
-use crate::fs::fileattr::Dentry;
+use crate::fs::{fileattr::Dentry, meta_db::DbReturn};
 
 type NodeId = usize;
 
@@ -247,14 +247,17 @@ where
         Some(guard.push_front(id))
     }
 
-    pub fn get_by_parent_and_name(&self, parent_ino: u64, target_name: &OsStr) -> Option<Dentry> {
+    pub fn get_by_parent_and_name(&self, parent_ino: u64, target_name: &OsStr) -> DbReturn<Dentry> {
         let mut guard = self.list.write();
-        let id = *guard
+        let Some(&id) = guard
             .parent_ino_name_map
-            .get(&(parent_ino, target_name.to_os_string()))?;
+            .get(&(parent_ino, target_name.to_os_string()))
+        else {
+            return DbReturn::Missing;
+        };
 
         guard.unlink(id);
-        Some(guard.push_front(id))
+        guard.push_front(id).into()
     }
 
     pub fn insert(&self, value: Dentry) -> Option<Dentry> {
@@ -426,7 +429,7 @@ mod test {
 
         let dentry_res_1_par_name = lru
             .get_by_parent_and_name(dentry1.parent_ino, &dentry1.target_name)
-            .unwrap();
+            .try_unwrap();
         assert_eq!(dentry_res_1_par_name.target_ino, dentry1.target_ino);
 
         let dentry_res_1_tar_name =

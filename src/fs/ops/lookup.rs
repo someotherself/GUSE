@@ -4,6 +4,7 @@ use crate::{
     fs::{
         self, FileAttr, GitFs,
         fileattr::{InoFlag, dir_attr},
+        meta_db::DbReturn,
     },
     inodes::{NormalIno, VirtualIno},
 };
@@ -38,22 +39,33 @@ pub fn lookup_repo(
         None => return Ok(None),
     };
     let attr = if name == "live" {
-        let live_ino = fs.get_ino_from_db(parent.into(), OsStr::new("live"))?;
+        let DbReturn::Found { value: live_ino } =
+            fs.get_ino_from_db(parent.into(), OsStr::new("live"))?
+        else {
+            return Ok(None);
+        };
         let path = fs.repos_dir.join(&repo.repo_dir).join("live");
         let mut attr = GitFs::attr_from_path(InoFlag::LiveRoot, &path)?;
         attr.ino = live_ino;
         attr
     } else if name == "build" {
-        let live_ino = fs.get_ino_from_db(parent.into(), OsStr::new("build"))?;
+        let DbReturn::Found { value: build_ino } =
+            fs.get_ino_from_db(parent.into(), OsStr::new("build"))?
+        else {
+            return Ok(None);
+        };
         let path = fs.repos_dir.join(&repo.repo_dir).join("build");
         let mut attr = GitFs::attr_from_path(InoFlag::BuildRoot, &path)?;
-        attr.ino = live_ino;
+        attr.ino = build_ino;
         attr
     } else {
         // It will always be a yyyy-mm folder
         // Build blank attr for it
         let child_ino = match fs.get_ino_from_db(parent.into(), name) {
-            Ok(i) => i,
+            Ok(i_res) => match i_res {
+                DbReturn::Found { value: i } => i,
+                _ => return Ok(None),
+            },
             Err(_) => return Ok(None),
         };
         let mut attr: FileAttr = dir_attr(InoFlag::MonthFolder).into();
@@ -68,35 +80,37 @@ pub fn lookup_live(
     parent: NormalIno,
     name: &OsStr,
 ) -> anyhow::Result<Option<FileAttr>> {
-    let Ok(attr) = fs.get_metadata_by_name(parent, name) else {
-        // Safety
-        fs::ops::readdir::readdir_live_dir(fs, parent)?;
-        let Ok(attr) = fs.get_metadata_by_name(parent, name) else {
-            return Ok(None);
-        };
-        return Ok(Some(attr));
-    };
-    Ok(Some(attr))
+    match fs.get_metadata_by_name(parent, name)? {
+        DbReturn::Found { value } => Ok(Some(value)),
+        DbReturn::Missing | DbReturn::Negative => {
+            fs::ops::readdir::readdir_live_dir(fs, parent)?;
+            match fs.get_metadata_by_name(parent, name)? {
+                DbReturn::Found { value } => Ok(Some(value)),
+                DbReturn::Missing | DbReturn::Negative => Ok(None),
+            }
+        }
+    }
 }
 
 pub fn lookup_git(fs: &GitFs, parent: NormalIno, name: &OsStr) -> anyhow::Result<Option<FileAttr>> {
-    let Ok(attr) = fs.get_metadata_by_name(parent, name) else {
-        // If attr is not found, and we are inside in InsideSnap, maybe readdir did not run yet
-        // Try reading the entries and try again
-        let p_flag = fs.get_ino_flag_from_db(parent)?;
-        if p_flag == InoFlag::InsideSnap
-            || p_flag == InoFlag::InsideDotGit
-            || p_flag == InoFlag::HeadFile
-        {
-            fs::ops::readdir::readdir_git_dir(fs, parent)?;
-            let Ok(attr) = fs.get_metadata_by_name(parent, name) else {
-                return Ok(None);
-            };
-            return Ok(Some(attr));
+    match fs.get_metadata_by_name(parent, name)? {
+        DbReturn::Found { value } => Ok(Some(value)),
+        DbReturn::Missing | DbReturn::Negative => {
+            let p_flag = fs.get_ino_flag_from_db(parent)?;
+            if p_flag == InoFlag::InsideSnap
+                || p_flag == InoFlag::InsideDotGit
+                || p_flag == InoFlag::HeadFile
+            {
+                fs::ops::readdir::readdir_git_dir(fs, parent)?;
+                match fs.get_metadata_by_name(parent, name)? {
+                    DbReturn::Found { value } => Ok(Some(value)),
+                    DbReturn::Missing | DbReturn::Negative => Ok(None),
+                }
+            } else {
+                Ok(None)
+            }
         }
-        return Ok(None);
-    };
-    Ok(Some(attr))
+    }
 }
 
 pub fn lookup_vdir(

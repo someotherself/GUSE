@@ -1,6 +1,7 @@
 use std::{
     collections::HashSet,
     ffi::{OsStr, OsString},
+    fmt::Debug,
     os::unix::ffi::{OsStrExt, OsStringExt},
     path::{Path, PathBuf},
 };
@@ -24,6 +25,75 @@ use crate::{
     },
     inodes::NormalIno,
 };
+
+#[derive(Debug)]
+pub enum DbReturn<U> {
+    Found { value: U },
+    Negative,
+    Missing,
+}
+
+impl<T> DbReturn<T> {
+    pub fn map<U, F>(self, f: F) -> DbReturn<U>
+    where
+        F: FnOnce(T) -> U,
+    {
+        match self {
+            DbReturn::Found { value } => DbReturn::Found { value: f(value) },
+            DbReturn::Missing => DbReturn::Missing,
+            DbReturn::Negative => DbReturn::Negative,
+        }
+    }
+
+    /// ONLY USE FOR TESTS
+    pub fn try_unwrap(self) -> T {
+        match self {
+            DbReturn::Found { value } => value,
+            DbReturn::Missing => panic!("Called try_unwwap on a missing entry"),
+            DbReturn::Negative => panic!("Called try_unwwap on a negative entry"),
+        }
+    }
+
+    pub fn is_found(&self) -> bool {
+        matches!(self, DbReturn::Found { value: _ })
+    }
+
+    pub fn is_miss(&self) -> bool {
+        matches!(self, DbReturn::Missing)
+    }
+
+    pub fn is_neg(&self) -> bool {
+        matches!(self, DbReturn::Negative)
+    }
+}
+
+impl<U> From<Option<U>> for DbReturn<U> {
+    fn from(value: Option<U>) -> DbReturn<U> {
+        match value {
+            Some(v) => DbReturn::Found { value: v },
+            None => DbReturn::Missing,
+        }
+    }
+}
+
+impl From<Dentry> for DbReturn<Dentry> {
+    fn from(value: Dentry) -> DbReturn<Dentry> {
+        if value.is_active {
+            DbReturn::Found { value }
+        } else {
+            DbReturn::Negative
+        }
+    }
+}
+
+impl<U: Debug> From<DbReturn<U>> for anyhow::Result<U> {
+    fn from(value: DbReturn<U>) -> Self {
+        match value {
+            DbReturn::Found { value } => Ok(value),
+            DbReturn::Missing | DbReturn::Negative => bail!("Value {:?} is missing", value),
+        }
+    }
+}
 
 pub struct MetaDb {
     pub ro_pool: Pool<SqliteConnectionManager>,
@@ -389,11 +459,10 @@ impl MetaDb {
             affected.insert(a.ino as i64);
         }
 
-        // TODO: Update nlink on negative entry
         let mut upd = tx.prepare(
             "UPDATE inode_map
          SET nlink = (SELECT COUNT(*) FROM dentries d WHERE d.target_inode = inode_map.inode)
-         WHERE inode = ?1",
+         WHERE inode = ?1 AND is_active = 1",
         )?;
         for ino in affected {
             upd.execute(params![ino])?;
@@ -528,11 +597,10 @@ impl MetaDb {
 
     pub fn count_children(conn: &rusqlite::Connection, ino: u64) -> anyhow::Result<usize> {
         let mut stmt = conn.prepare(
-            // TODO: IGNORE negative entries
             "
             SELECT COUNT(*) 
             FROM dentries 
-            WHERE parent_inode = ?1
+            WHERE parent_inode = ?1 AND is_active = 1
             ",
         )?;
 
@@ -544,12 +612,11 @@ impl MetaDb {
         conn: &rusqlite::Connection,
         parent_ino: u64,
     ) -> anyhow::Result<Vec<DirectoryEntry>> {
-        // TODO: IGNORE negative entries
         let sql = r#"
             SELECT d.name, d.target_inode, im.oid, im.git_mode
             FROM dentries AS d
             JOIN inode_map AS im ON im.inode = d.target_inode
-            WHERE d.parent_inode = ?1
+            WHERE d.parent_inode = ?1 AND d.is_active = 1
             ORDER BY d.name
         "#;
 
@@ -599,7 +666,7 @@ impl MetaDb {
             r#"
             SELECT parent_inode
             FROM dentries
-            WHERE target_inode = ?1
+            WHERE target_inode = ?1 AND is_active = 1
             ORDER BY parent_inode
             LIMIT 2
             "#,
@@ -621,24 +688,27 @@ impl MetaDb {
         conn: &rusqlite::Connection,
         parent: u64,
         name: &OsStr,
-    ) -> anyhow::Result<u64> {
+    ) -> anyhow::Result<DbReturn<u64>> {
         let sql = r#"
-            SELECT target_inode
+            SELECT target_inode, is_active
             FROM dentries
             WHERE parent_inode = ?1 AND name = ?2
             LIMIT 2
         "#;
 
         let mut stmt = conn.prepare_cached(sql)?;
-
         let mut rows = stmt.query((parent as i64, name.as_bytes()))?;
 
         let first = rows.next()?;
         let Some(row) = first else {
-            bail!("Not found: {} under parent ino {parent}", name.display());
+            return Ok(DbReturn::Missing);
         };
 
         let child_i64: i64 = row.get(0)?;
+        let is_active: bool = row.get(1)?;
+        if !is_active {
+            return Ok(DbReturn::Negative);
+        };
         let child = u64::try_from(child_i64)
             .map_err(|_| anyhow!("child_ino out of range: {}", child_i64))?;
 
@@ -649,7 +719,7 @@ impl MetaDb {
             );
         }
 
-        Ok(child)
+        Ok(DbReturn::Found { value: child })
     }
 
     pub fn update_size_in_db<C>(tx: &C, ino: u64, new_size: u64) -> anyhow::Result<()>
@@ -678,7 +748,7 @@ impl MetaDb {
         let mut stmt = tx.prepare(
             "SELECT size
             FROM inode_map
-            WHERE inode = ?1",
+            WHERE inode = ?1 AND is_active = 1",
         )?;
 
         let size_opt: i64 = stmt.query_row(params![ino as i64], |row| row.get(0))?;
@@ -774,12 +844,11 @@ impl MetaDb {
         parent_ino: u64,
         ino: u64,
     ) -> anyhow::Result<OsString> {
-        // TODO: IGNORE negative entries
         let mut stmt = conn.prepare(
             r#"
         SELECT name
         FROM dentries
-        WHERE parent_inode = ?1 AND target_inode = ?2
+        WHERE parent_inode = ?1 AND target_inode = ?2 AND is_active = 1
         "#,
         )?;
         let name_opt: Option<Vec<u8>> = stmt
@@ -842,12 +911,11 @@ impl MetaDb {
             );
         }
 
-        // TODO: Update nlink on negative entry
         let updated = tx.execute(
             r#"
             UPDATE inode_map
             SET nlink = (SELECT COUNT(*) FROM dentries WHERE target_inode = ?1)
-            WHERE inode = ?1
+            WHERE inode = ?1 AND is_active = 1
             "#,
             params![source_i64],
         )?;
@@ -971,12 +1039,11 @@ impl MetaDb {
             ],
         )?;
 
-        // TODO: Update nlink on negative entry
         tx.execute(
             r#"
         UPDATE inode_map
         SET nlink = (SELECT COUNT(*) FROM dentries WHERE target_inode = ?1)
-        WHERE inode = ?1
+        WHERE inode = ?1 AND is_active = 1
         "#,
             rusqlite::params![node.attr.ino as i64],
         )?;
@@ -1069,7 +1136,7 @@ impl MetaDb {
         let mut stmt = conn.prepare(
             "SELECT parent_inode, name
                FROM dentries
-              WHERE target_inode = ?1",
+              WHERE target_inode = ?1 AND is_active = 1",
         )?;
         let mut components = Vec::new();
         let mut curr = ino as i64;
@@ -1102,62 +1169,73 @@ impl MetaDb {
         conn: &rusqlite::Connection,
         parent: NormalIno,
         name: &OsStr,
-    ) -> anyhow::Result<Option<u64>> {
-        let parent = parent.to_norm_u64();
-        let parent_i64 = i64::try_from(parent)?;
-        let name_blob = name.as_bytes();
-        let mut stmt = conn.prepare(
-            "
-            SELECT target_inode
-            FROM dentries
-            WHERE parent_inode = ?1 AND name = ?2",
-        )?;
-
-        let ino_i64: Option<i64> = stmt
-            .query_row(params![parent_i64, name_blob], |row| row.get(0))
-            .optional()?;
-        ino_i64
-            .map(u64::try_from)
-            .transpose()
-            .context("Could not convert to u64")
+    ) -> anyhow::Result<DbReturn<u64>> {
+        MetaDb::get_ino_from_db(conn, parent.into(), name)
     }
 
     pub fn get_metadata_by_name(
         conn: &rusqlite::Connection,
         parent_ino: u64,
         child_name: &OsStr,
-    ) -> anyhow::Result<FileAttr> {
-        let target_ino = MetaDb::get_ino_from_db(conn, parent_ino, child_name)?;
+    ) -> anyhow::Result<DbReturn<FileAttr>> {
+        let target_ino = match MetaDb::get_ino_from_db(conn, parent_ino, child_name)? {
+            DbReturn::Found { value } => value,
+            DbReturn::Negative => return Ok(DbReturn::Negative),
+            DbReturn::Missing => return Ok(DbReturn::Missing),
+        };
         MetaDb::get_metadata(conn, target_ino)
     }
 
-    pub fn get_metadata(conn: &rusqlite::Connection, target_ino: u64) -> anyhow::Result<FileAttr> {
+    pub fn get_metadata(
+        conn: &rusqlite::Connection,
+        target_ino: u64,
+    ) -> anyhow::Result<DbReturn<FileAttr>> {
         let mut stmt = conn.prepare(
             r#"
-            SELECT
-                inode,
-                oid,
-                git_mode,
-                size,
-                inode_flag,
-                uid,
-                gid,
-                atime_secs,
-                atime_nsecs,
-                mtime_secs,
-                mtime_nsecs,
-                ctime_secs,
-                ctime_nsecs,
-                nlink,
-                rdev,
-                flags
-            FROM inode_map
-            WHERE inode = ?1
-            LIMIT 1
-            "#,
+        SELECT
+            inode,
+            oid,
+            git_mode,
+            size,
+            inode_flag,
+            uid,
+            gid,
+            atime_secs,
+            atime_nsecs,
+            mtime_secs,
+            mtime_nsecs,
+            ctime_secs,
+            ctime_nsecs,
+            nlink,
+            rdev,
+            flags
+        FROM inode_map
+        WHERE inode = ?1
+        LIMIT 1
+        "#,
         )?;
 
-        #[allow(clippy::type_complexity)]
+        let res = stmt.query_row(params![i64::try_from(target_ino)?], |row| {
+            Ok((
+                row.get::<_, i64>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, i64>(2)?,
+                row.get::<_, i64>(3)?,
+                row.get::<_, i64>(4)?,
+                row.get::<_, i64>(5)?,
+                row.get::<_, i64>(6)?,
+                row.get::<_, i64>(7)?,
+                row.get::<_, i64>(8)?,
+                row.get::<_, i64>(9)?,
+                row.get::<_, i64>(10)?,
+                row.get::<_, i64>(11)?,
+                row.get::<_, i64>(12)?,
+                row.get::<_, i64>(13)?,
+                row.get::<_, i64>(14)?,
+                row.get::<_, i64>(15)?,
+            ))
+        });
+
         let (
             ino,
             oid,
@@ -1175,43 +1253,13 @@ impl MetaDb {
             nlink,
             rdev,
             flags,
-        ): (
-            i64,
-            String,
-            i64,
-            i64,
-            i64,
-            i64,
-            i64,
-            i64,
-            i64,
-            i64,
-            i64,
-            i64,
-            i64,
-            i64,
-            i64,
-            i64,
-        ) = stmt.query_row(params![i64::try_from(target_ino)?], |row| {
-            Ok((
-                row.get(0)?,
-                row.get(1)?,
-                row.get(2)?,
-                row.get(3)?,
-                row.get(4)?,
-                row.get(5)?,
-                row.get(6)?,
-                row.get(7)?,
-                row.get(8)?,
-                row.get(9)?,
-                row.get(10)?,
-                row.get(11)?,
-                row.get(12)?,
-                row.get(13)?,
-                row.get(14)?,
-                row.get(15)?,
-            ))
-        })?;
+        ) = match res {
+            Ok(row) => row,
+            Err(rusqlite::Error::QueryReturnedNoRows) => {
+                return Ok(DbReturn::Missing);
+            }
+            Err(e) => return Err(e.into()),
+        };
 
         let oid = Oid::from_str(&oid)?;
         let ino_flag = u64::try_from(inode_flag)?;
@@ -1247,7 +1295,7 @@ impl MetaDb {
             flags: flags as u32,
         };
 
-        Ok(attr)
+        Ok(DbReturn::Found { value: attr })
     }
 
     pub fn get_builctx_metadata(
