@@ -261,9 +261,10 @@ fn test_rename_live_same_parent_dir() -> anyhow::Result<()> {
         |_| -> anyhow::Result<()> {
             let fs = get_fs();
 
-            let name = OsStr::new("new_repo");
+            let name = OsStr::new("new_repo1");
             fs.mkdir(ROOT_INO, name)?;
-            let live = live_ino(&fs)?;
+            let live_attr = fs.lookup(REPO_DIR_INO, OsStr::new("live"))?.unwrap();
+            let live = live_attr.ino;
 
             // Create dir: live/alpha
             let alpha = OsStr::new("alpha");
@@ -298,7 +299,7 @@ fn test_rename_live_across_parents() -> anyhow::Result<()> {
         |_| -> anyhow::Result<()> {
             let fs = get_fs();
 
-            let name = OsStr::new("new_repo");
+            let name = OsStr::new("new_repo2");
             fs.mkdir(ROOT_INO, name)?;
             let live = live_ino(&fs)?;
 
@@ -336,7 +337,7 @@ fn test_rename_live_noop_same_name() -> anyhow::Result<()> {
         |_| -> anyhow::Result<()> {
             let fs = get_fs();
 
-            let name = OsStr::new("new_repo");
+            let name = OsStr::new("new_repo3");
             fs.mkdir(ROOT_INO, name)?;
             let live = live_ino(&fs)?;
 
@@ -366,7 +367,7 @@ fn test_rename_live_overwrite_empty_dir() -> anyhow::Result<()> {
         |_| -> anyhow::Result<()> {
             let fs = get_fs();
 
-            let name = OsStr::new("new_repo");
+            let name = OsStr::new("new_repo4");
             fs.mkdir(ROOT_INO, name)?;
             let live = live_ino(&fs)?;
 
@@ -400,7 +401,7 @@ fn test_rename_live_overwrite_nonempty_dir_fails() -> anyhow::Result<()> {
         |_| -> anyhow::Result<()> {
             let fs = get_fs();
 
-            let name = OsStr::new("new_repo");
+            let name = OsStr::new("new_repo5");
             fs.mkdir(ROOT_INO, name)?;
             let live = live_ino(&fs)?;
 
@@ -439,7 +440,7 @@ fn test_rename_live_invalid_name_with_slash() -> anyhow::Result<()> {
         |_| -> anyhow::Result<()> {
             let fs = get_fs();
 
-            let name = OsStr::new("new_repo");
+            let name = OsStr::new("new_repo6");
             fs.mkdir(ROOT_INO, name)?;
             let live = live_ino(&fs)?;
 
@@ -472,7 +473,7 @@ fn test_rename_live_source_missing() -> anyhow::Result<()> {
         |_| -> anyhow::Result<()> {
             let fs = get_fs();
 
-            let name = OsStr::new("new_repo");
+            let name = OsStr::new("new_repo7");
             fs.mkdir(ROOT_INO, name)?;
             let live = live_ino(&fs)?;
 

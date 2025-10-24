@@ -40,7 +40,7 @@ pub fn link_live(
             len: 0,
         });
     }
-    fs.get_metadata(source_ino.to_norm_u64())
+    fs.get_metadata(source_ino.to_norm_u64())?.into()
 }
 
 pub fn link_git(
@@ -84,5 +84,5 @@ pub fn link_git(
             len: 0,
         });
     }
-    fs.get_metadata(source_ino.to_norm_u64())
+    fs.get_metadata(source_ino.to_norm_u64())?.into()
 }

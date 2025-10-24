@@ -3,6 +3,8 @@ use std::{collections::HashMap, fmt::Debug, num::NonZeroUsize};
 use anyhow::bail;
 use parking_lot::RwLock;
 
+use crate::fs::meta_db::DbReturn;
+
 type NodeId = usize;
 
 struct Entry<K: Debug, V> {
@@ -179,14 +181,16 @@ where
         }
     }
 
-    pub fn get(&self, key: &K) -> Option<V> {
+    pub fn get(&self, key: &K) -> DbReturn<V> {
         let mut guard = self.list.write();
-        let id = *guard.map.get(key)?;
+        let Some(&id) = guard.map.get(key) else {
+            return DbReturn::Missing;
+        };
         if guard.free.contains(&id) {
-            return None;
+            return DbReturn::Missing;
         }
         guard.unlink(id);
-        guard.push_front(id)
+        guard.push_front(id).into()
     }
 
     pub fn with_get_mut<R>(&self, key: &K, f: impl FnOnce(&mut V) -> R) -> Option<R> {
@@ -342,7 +346,7 @@ mod test {
         lru.insert(2, attr);
         lru.insert(3, attr);
 
-        assert!(lru.get(&1).is_some());
+        assert!(lru.get(&1).is_found());
 
         lru.insert(4, attr);
 
@@ -408,7 +412,7 @@ mod test {
     #[test]
     fn test_lru_get_miss_returns_none() {
         let lru: LruCache<u64, FileAttr> = LruCache::new(2);
-        assert!(lru.get(&9999).is_none());
+        assert!(!lru.get(&9999).is_found());
         assert!(lru.peek(&9999).is_none());
         assert!(lru.remove(&9999).is_none());
     }
@@ -421,7 +425,7 @@ mod test {
         lru.insert(1, attr);
         assert!(lru.peek(&1).is_some());
 
-        assert!(lru.get(&1).is_some());
+        assert!(lru.get(&1).is_found());
 
         lru.insert(2, attr);
         assert!(lru.peek(&1).is_none());
@@ -437,7 +441,7 @@ mod test {
         lru.insert(2, attr);
         lru.insert(3, attr);
 
-        assert!(lru.get(&2).is_some());
+        assert!(lru.get(&2).is_found());
 
         lru.insert(4, attr);
         assert!(lru.peek(&1).is_none());
@@ -455,9 +459,9 @@ mod test {
         lru.insert(2, attr);
         lru.insert(3, attr);
 
-        assert!(lru.get(&3).is_some());
-        assert!(lru.get(&3).is_some());
-        assert!(lru.get(&3).is_some());
+        assert!(lru.get(&3).is_found());
+        assert!(lru.get(&3).is_found());
+        assert!(lru.get(&3).is_found());
 
         lru.insert(4, attr);
         assert!(lru.peek(&1).is_none());
@@ -580,7 +584,7 @@ mod test {
 
         lru.insert(1, attr);
         lru.with_get_mut(&1, |a| a.size = 12);
-        let attr = lru.get(&1).unwrap();
+        let attr = lru.get(&1).try_unwrap();
         assert_eq!(attr.size, 12);
     }
 }
