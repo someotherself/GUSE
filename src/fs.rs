@@ -22,6 +22,7 @@ use crate::fs::fileattr::{
     dir_attr, file_attr,
 };
 use crate::fs::handles::FileHandles;
+use crate::fs::janitor::Jobs;
 use crate::fs::meta_db::{DbReturn, DbWriteMsg, MetaDb, oneshot, set_conn_pragmas, set_wal_once};
 use crate::fs::ops::readdir::{
     BuildCtxMetadata, DirectoryEntry, DirectoryEntryPlus, DirectoryStreamCookie,
@@ -146,6 +147,7 @@ pub struct GitFs {
     read_only: bool,
     vfile_entry: RwLock<HashMap<VirtualIno, VFileEntry>>,
     notifier: crossbeam_channel::Sender<InvalMsg>,
+    janitor: crossbeam_channel::Sender<Jobs>,
 }
 
 pub struct Handle {
@@ -264,7 +266,8 @@ impl GitFs {
         read_only: bool,
         notifier: Arc<OnceLock<fuser::Notifier>>,
     ) -> anyhow::Result<Arc<Self>> {
-        let (tx, rx) = crossbeam_channel::unbounded::<InvalMsg>();
+        let (tx_inval, rx_inval) = crossbeam_channel::unbounded::<InvalMsg>();
+        let (tx_jan, rx_jan) = crossbeam_channel::unbounded::<Jobs>();
 
         let fs = Self {
             repos_dir,
@@ -275,15 +278,24 @@ impl GitFs {
             handles: FileHandles::default(),
             next_inode: DashMap::new(),
             vfile_entry: RwLock::new(HashMap::new()),
-            notifier: tx.clone(),
+            notifier: tx_inval.clone(),
+            janitor: tx_jan.clone(),
         };
+
+        let fs = Arc::new(fs);
+        let fs_clone = Arc::downgrade(&fs);
+        std::thread::spawn(move || {
+            while let Ok(job) = rx_jan.recv() {
+                let _ = Jobs::run_job(fs_clone.clone(), job);
+            }
+        });
 
         std::thread::spawn(move || {
             while notifier.get().is_none() {
                 std::thread::sleep(std::time::Duration::from_millis(10));
             }
             let n = notifier.get().unwrap().clone();
-            for msg in rx.iter() {
+            for msg in rx_inval.iter() {
                 match msg {
                     InvalMsg::Entry { parent, name } => {
                         if let Err(e) = n.inval_entry(parent, &name) {
@@ -2695,6 +2707,17 @@ impl GitFs {
         } else {
             bail!("Could not find dentry in cache")
         }
+    }
+
+    // If not in cache, insert it in cache
+    fn set_entry_negative(&self, parent_ino: NormalIno, name: &OsStr) -> anyhow::Result<()> {
+        let repo = self.get_repo(parent_ino.into())?;
+        if let DbReturn::Found { value: _ } = repo.dentry_cache.set_inactive(parent_ino.into(), name) {
+            return Ok(())
+        };
+        // Else, check the DQ
+        // TODO
+        Ok(())
     }
 
     fn update_cache_record(

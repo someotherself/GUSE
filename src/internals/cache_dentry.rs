@@ -247,6 +247,20 @@ where
         Some(guard.push_front(id))
     }
 
+    pub fn set_inactive(&self, parent_ino: u64, target_name: &OsStr) -> DbReturn<()> {
+        let mut guard = self.list.write();
+        let Some(&id) = guard
+            .parent_ino_name_map
+            .get(&(parent_ino, target_name.to_os_string()))
+        else {
+            return DbReturn::Missing;
+        };
+
+        let entry = &mut guard.nodes[id];
+        entry.value.is_active = false;
+        DbReturn::Found { value: () }
+    }
+
     pub fn get_by_parent_and_name(&self, parent_ino: u64, target_name: &OsStr) -> DbReturn<Dentry> {
         let mut guard = self.list.write();
         let Some(&id) = guard

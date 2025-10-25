@@ -3,12 +3,56 @@ use std::ffi::{OsStr, OsString};
 use anyhow::bail;
 
 use crate::{
-    fs::{GitFs, meta_db::DbReturn},
+    fs::{GitFs, janitor::Jobs, meta_db::DbReturn},
     inodes::NormalIno,
     mount::InvalMsg,
 };
 
 pub fn rmdir_live(fs: &GitFs, parent: NormalIno, name: &OsStr) -> anyhow::Result<()> {
+    fs.remove_db_dentry(parent, name)?;
+    {
+        let _ = fs.notifier.try_send(InvalMsg::Entry {
+            parent: parent.into(),
+            name: OsString::from(name),
+        });
+        let _ = fs.notifier.try_send(InvalMsg::Inode {
+            ino: parent.into(),
+            off: 0,
+            len: 0,
+        });
+    }
+
+    let _ = fs.janitor.try_send(Jobs::RmdirLive {
+        parent_ino: parent.into(),
+        name: name.to_owned(),
+    });
+
+    Ok(())
+}
+
+pub fn rmdir_git(fs: &GitFs, parent: NormalIno, name: &OsStr) -> anyhow::Result<()> {
+    fs.remove_db_dentry(parent, name)?;
+    {
+        let _ = fs.notifier.try_send(InvalMsg::Entry {
+            parent: parent.to_norm_u64(),
+            name: OsString::from(name),
+        });
+        let _ = fs.notifier.try_send(InvalMsg::Inode {
+            ino: parent.to_norm_u64(),
+            off: 0,
+            len: 0,
+        });
+    }
+
+    let _ = fs.janitor.try_send(Jobs::RmdirGit {
+        parent_ino: parent.into(),
+        name: name.to_owned(),
+    });
+
+    Ok(())
+}
+
+pub fn rmdir_live_(fs: &GitFs, parent: NormalIno, name: &OsStr) -> anyhow::Result<()> {
     let target_ino = match fs.get_ino_from_db(parent.into(), name) {
         Ok(DbReturn::Found { value: ino }) => ino,
         _ => {
@@ -37,7 +81,7 @@ pub fn rmdir_live(fs: &GitFs, parent: NormalIno, name: &OsStr) -> anyhow::Result
     Ok(())
 }
 
-pub fn rmdir_git(fs: &GitFs, parent: NormalIno, name: &OsStr) -> anyhow::Result<()> {
+pub fn rmdir_git_(fs: &GitFs, parent: NormalIno, name: &OsStr) -> anyhow::Result<()> {
     let path = {
         let commit_oid = fs.get_oid_from_db(parent.into())?;
         let repo = fs.get_repo(parent.to_norm_u64())?;
