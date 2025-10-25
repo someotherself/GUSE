@@ -46,6 +46,7 @@ mod test;
 
 const META_STORE: &str = "fs_meta.db";
 const LIVE_FOLDER: &str = "live";
+const TRASH_FOLDER: &str = ".trash";
 pub const REPO_SHIFT: u8 = 48;
 pub const ROOT_INO: u64 = 1;
 pub const VDIR_BIT: u64 = 1u64 << 47;
@@ -266,11 +267,13 @@ impl GitFs {
         read_only: bool,
         notifier: Arc<OnceLock<fuser::Notifier>>,
     ) -> anyhow::Result<Arc<Self>> {
+        let _ = std::fs::create_dir(repos_dir.join(TRASH_FOLDER));
+
         let (tx_inval, rx_inval) = crossbeam_channel::unbounded::<InvalMsg>();
         let (tx_jan, rx_jan) = crossbeam_channel::unbounded::<Jobs>();
 
         let fs = Self {
-            repos_dir,
+            repos_dir: repos_dir.clone(),
             repos_list: DashMap::new(),
             conn_list: DashMap::new(),
             repos_map: DashMap::new(),
@@ -326,7 +329,7 @@ impl GitFs {
         });
 
         fs.ensure_base_dirs_exist()?;
-        for entry in fs.repos_dir.read_dir()? {
+        for entry in repos_dir.read_dir()? {
             let entry = entry?;
             let repo_name_os = entry.file_name();
             let repo_name = repo_name_os.to_str().context("Not a valid UTF-8 name")?;
@@ -342,7 +345,7 @@ impl GitFs {
             let repo_ino = GitFs::repo_id_to_ino(repo_id);
             let live_ino = GitFs::get_live_ino(repo_ino);
             let repo_name = repo.repo_dir.clone();
-            let live_path = fs.repos_dir.join(repo_name).join(LIVE_FOLDER);
+            let live_path = repos_dir.join(repo_name).join(LIVE_FOLDER);
 
             // Read contents of live
             fs.read_dir_to_db(&live_path, &fs, InoFlag::InsideLive, live_ino)?;
