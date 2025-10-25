@@ -220,7 +220,7 @@ fn spawn_repo_writer(
 
                     apply_msg(&tx_sql, first, &mut acks)?;
 
-                    for _ in 0..16 {
+                    for _ in 0..24 {
                         match rx.try_recv() {
                             Ok(m) => apply_msg(&tx_sql, m, &mut acks)?,
                             Err(crossbeam_channel::TryRecvError::Empty) => break,
@@ -461,8 +461,8 @@ impl MetaDb {
 
         let mut upd = tx.prepare(
             "UPDATE inode_map
-         SET nlink = (SELECT COUNT(*) FROM dentries d WHERE d.target_inode = inode_map.inode)
-         WHERE inode = ?1 AND is_active = 1",
+         SET nlink = (SELECT COUNT(*) FROM dentries d WHERE d.target_inode = inode_map.inode AND is_active = 1)
+         WHERE inode = ?1",
         )?;
         for ino in affected {
             upd.execute(params![ino])?;
@@ -914,8 +914,8 @@ impl MetaDb {
         let updated = tx.execute(
             r#"
             UPDATE inode_map
-            SET nlink = (SELECT COUNT(*) FROM dentries WHERE target_inode = ?1)
-            WHERE inode = ?1 AND is_active = 1
+            SET nlink = (SELECT COUNT(*) FROM dentries WHERE target_inode = ?1 AND is_active = 1)
+            WHERE inode = ?1
             "#,
             params![source_i64],
         )?;
@@ -1042,8 +1042,8 @@ impl MetaDb {
         tx.execute(
             r#"
         UPDATE inode_map
-        SET nlink = (SELECT COUNT(*) FROM dentries WHERE target_inode = ?1)
-        WHERE inode = ?1 AND is_active = 1
+        SET nlink = (SELECT COUNT(*) FROM dentries WHERE target_inode = ?1 AND is_active = 1)
+        WHERE inode = ?1
         "#,
             rusqlite::params![node.attr.ino as i64],
         )?;
