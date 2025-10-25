@@ -7,6 +7,7 @@ use crate::fs::meta_db::DbReturn;
 
 type NodeId = usize;
 
+#[derive(Clone)]
 struct Entry<K: Debug, V> {
     pub key: K,
     pub value: Option<V>,
@@ -27,7 +28,7 @@ impl<K: Debug, V> Entry<K, V> {
 
 pub struct Inner<K: Debug, V: Clone, S = ahash::RandomState> {
     map: HashMap<K, NodeId, S>,
-    nodes: Vec<Entry<K, V>>,
+    nodes: Vec<Option<Entry<K, V>>>,
     free: Vec<NodeId>,
     head: Option<NodeId>, // MRU
     tail: Option<NodeId>, // LRU
@@ -56,14 +57,19 @@ where
 
         {
             // Fix the prev and next of the new entry
-            let n = &mut self.nodes[id];
+            let Some(n) = &mut self.nodes[id] else {
+                // Value was already removed from cache
+                return None;
+            };
             n.prev = None;
             n.next = old_head;
         }
 
         // Fix the old_head entry
         if let Some(h) = old_head {
-            self.nodes[h].prev = Some(id);
+            if let Some(value) = self.nodes[h].as_mut() {
+                value.prev = Some(id);
+            }
         } else {
             // List was empty
             self.tail = Some(id);
@@ -71,25 +77,25 @@ where
 
         // Fix the head
         self.head = Some(id);
-        self.nodes[id].value.clone()
+        self.nodes[id].as_ref()?.value.clone()
     }
 
-    fn unlink(&mut self, id: NodeId) {
+    fn unlink(&mut self, id: NodeId) -> Option<()> {
         let (prev, next) = {
-            let n = &self.nodes[id];
+            let n = self.nodes[id].as_ref()?;
             (n.prev, n.next)
         };
 
         // Fix prev neighbor
         if let Some(p) = prev {
-            self.nodes[p].next = next;
+            self.nodes[p].as_mut()?.next = next;
         } else {
             // was head
             self.head = next;
         }
         // Fix next neighbor
         if let Some(n) = next {
-            self.nodes[n].prev = prev;
+            self.nodes[n].as_mut()?.prev = prev;
         } else {
             // was tail
             self.tail = prev;
@@ -97,10 +103,11 @@ where
 
         {
             // Fix the prev and next of the unlinked entry
-            let n = &mut self.nodes[id];
+            let n = &mut self.nodes[id].as_mut()?;
             n.next = None;
             n.prev = None;
         }
+        Some(())
     }
 
     fn evict(&mut self) -> Option<()> {
@@ -235,6 +242,7 @@ where
             while guard.map.len() >= guard.capacity.into() {
                 guard.evict();
             }
+        tracing::info!("Size of the attr cache {}", std::mem::size_of_val(&*guard.nodes));
 
             if let Some(&id) = guard.map.get(&key) {
                 guard.nodes[id].value.replace(value.clone());
