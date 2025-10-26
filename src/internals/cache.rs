@@ -1,6 +1,5 @@
 use std::{collections::HashMap, fmt::Debug, num::NonZeroUsize};
 
-use anyhow::bail;
 use parking_lot::RwLock;
 
 use crate::fs::meta_db::DbReturn;
@@ -10,7 +9,7 @@ type NodeId = usize;
 #[derive(Clone)]
 struct Entry<K: Debug, V> {
     pub key: K,
-    pub value: Option<V>,
+    pub value: V,
     pub next: Option<NodeId>, // towards the LRU (tail)
     pub prev: Option<NodeId>, // towards the MRU (head)
 }
@@ -19,7 +18,7 @@ impl<K: Debug, V> Entry<K, V> {
     pub fn new(key: K, value: V) -> Self {
         Self {
             key,
-            value: Some(value),
+            value,
             next: None,
             prev: None,
         }
@@ -77,60 +76,70 @@ where
 
         // Fix the head
         self.head = Some(id);
-        self.nodes[id].as_ref()?.value.clone()
+        Some(self.nodes[id].as_ref()?.value.clone())
     }
 
-    fn unlink(&mut self, id: NodeId) -> Option<()> {
-        let (prev, next) = {
-            let n = self.nodes[id].as_ref()?;
-            (n.prev, n.next)
+    fn unlink(&mut self, id: NodeId) -> bool {
+        // Find the entry and get its prev and next
+        // Early return if not found
+        let (prev, next) = match self
+            .nodes
+            .get(id)
+            .and_then(|e| e.as_ref().map(|e| (e.prev, e.next)))
+        {
+            Some(pn) => pn,
+            None => return false,
         };
 
-        // Fix prev neighbor
+        // Fix prev and next neighbors
+        // If not found, move along and assume entry was head / tail
         if let Some(p) = prev {
-            self.nodes[p].as_mut()?.next = next;
+            if let Some(pe) = self.nodes.get_mut(p).and_then(Option::as_mut) {
+                pe.next = next;
+            };
         } else {
             // was head
             self.head = next;
         }
-        // Fix next neighbor
         if let Some(n) = next {
-            self.nodes[n].as_mut()?.prev = prev;
+            if let Some(ne) = self.nodes.get_mut(n).and_then(Option::as_mut) {
+                ne.prev = prev
+            };
         } else {
             // was tail
             self.tail = prev;
         }
 
-        {
-            // Fix the prev and next of the unlinked entry
-            let n = &mut self.nodes[id].as_mut()?;
+        // Fix the prev and next of the unlinked entry. This shouldn't fail anymore
+        if let Some(n) = self.nodes.get_mut(id).and_then(Option::as_mut) {
             n.next = None;
             n.prev = None;
+            true
+        } else {
+            false
         }
-        Some(())
     }
 
     fn evict(&mut self) -> Option<()> {
+        // Get tail entry. If it's None, there is nothing to evict
         let tail = self.tail?;
+        let tail_e = self.nodes.get_mut(tail)?.take()?;
 
-        let prev = self.nodes[tail].prev;
-
-        if let Some(p) = prev {
-            let prev_entry = &mut self.nodes[p];
-            prev_entry.next = None;
-            self.tail = Some(p);
-        } else {
-            // was empty
-            self.head = None;
-            self.tail = None;
+        // Get entry prev to it
+        // If None, tail as also head. List is now empty
+        if let Some(prev_e_id) = tail_e.prev {
+            if let Some(prev_e) = self.nodes.get_mut(prev_e_id).and_then(Option::as_mut) {
+                prev_e.next = None;
+            } else {
+                self.head = None;
+                self.tail = None;
+            }
+            self.tail = Some(prev_e_id)
         }
 
-        let old_key = &self.nodes[tail].key;
-        self.map.remove_entry(old_key)?;
-        // Mark the entry as free
+        let old_tail = tail_e.key;
         self.free.push(tail);
-        // Remove the value from the entry
-        std::mem::take(&mut self.nodes[tail].value);
+        let _ = self.map.remove_entry(&old_tail);
         Some(())
     }
 
@@ -144,31 +153,35 @@ where
         // Get the index of the new entry.
         // Insert into nodes
         let index = if let Some(i) = self.free.pop() {
-            let _ = std::mem::replace(&mut self.nodes[i], entry);
+            let _ = self.nodes[i].replace(entry);
             i
         } else {
             let index = self.nodes.len() as NodeId;
-            self.nodes.push(entry);
+            self.nodes.push(Some(entry));
             index
         };
-        self.map.insert(key, index);
+        self.map.insert(key.clone(), index);
 
         // Handle old head, or if list is empty
         if let Some(h) = old_head {
-            let e = &mut self.nodes[h];
-            e.prev = Some(index);
+            if let Some(e) = &mut self.nodes.get_mut(h).and_then(Option::as_mut) {
+                e.prev = Some(index);
+            }
+            self.head = Some(index);
         } else {
             self.tail = Some(index);
         }
 
         // Set the new head
-        self.head = Some(index);
         index
     }
 
     #[allow(dead_code)]
     fn peek(&self, id: NodeId) -> Option<V> {
-        self.nodes[id].value.clone()
+        if let Some(entry) = self.nodes.get(id).and_then(Option::as_ref) {
+            return Some(entry.value.clone());
+        }
+        None
     }
 }
 
@@ -205,11 +218,13 @@ where
         if !guard.map.contains_key(key) {
             return None;
         }
-        let id = *guard.map.get(key)?;
+        let &id = guard.map.get(key)?;
+        if let Some(entry) = &mut guard.nodes[id] {
+            return Some(f(&mut entry.value));
+        }
         guard.unlink(id);
         guard.push_front(id);
-        let entry = &mut guard.nodes[id];
-        Some(f(entry.value.as_mut().unwrap()))
+        None
     }
 
     // Returns the old value if it already exists
@@ -222,10 +237,17 @@ where
         }
         if let Some(&id) = guard.map.get(&key) {
             // Entry already exists
-            let old = guard.nodes[id].value.replace(value);
-            guard.unlink(id);
-            guard.push_front(id);
-            old
+            if let Some(old_e) = &mut guard.nodes[id] {
+                let old = std::mem::replace(&mut old_e.value, value);
+                guard.unlink(id);
+                guard.push_front(id);
+                Some(old)
+            } else {
+                // Dangling entry. Should not happen in theory
+                let _ = guard.map.remove(&key);
+                guard.insert_front(key, value);
+                None
+            }
         } else {
             guard.insert_front(key, value);
             None
@@ -242,12 +264,18 @@ where
             while guard.map.len() >= guard.capacity.into() {
                 guard.evict();
             }
-        tracing::info!("Size of the attr cache {}", std::mem::size_of_val(&*guard.nodes));
 
             if let Some(&id) = guard.map.get(&key) {
-                guard.nodes[id].value.replace(value.clone());
-                guard.unlink(id);
-                guard.push_front(id);
+                // Entry already exists
+                if let Some(old_e) = &mut guard.nodes[id] {
+                    let _ = std::mem::replace(&mut old_e.value, value);
+                    guard.unlink(id);
+                    guard.push_front(id);
+                } else {
+                    // Dangling entry. Should not happen in theory
+                    let _ = guard.map.remove(&key);
+                    guard.insert_front(key, value);
+                }
             } else {
                 guard.insert_front(key, value);
             }
@@ -264,7 +292,9 @@ where
             // Mark the entry as free
             guard.free.push(p);
             // Remove the value from the entry
-            return std::mem::take(&mut guard.nodes[p].value);
+            if let Some(old_entry) = std::mem::take(&mut guard.nodes[p]) {
+                return Some(old_entry.value);
+            }
         }
         None
     }
@@ -272,37 +302,13 @@ where
     pub fn peek(&self, key: &K) -> Option<V> {
         let guard = self.list.read();
         if let Some(&id) = guard.map.get(key) {
-            let entry = guard.nodes.get(id)?;
-            entry.value.clone()
-        } else {
-            None
-        }
-    }
-
-    /// Takes the value out of the cache, without removing the entry
-    ///
-    /// Promotes the entry
-    pub fn take_and_promote(&self, key: &K) -> Option<V> {
-        let mut guard = self.list.write();
-        if let Some(&id) = guard.map.get(key) {
-            guard.push_front(id);
-            return std::mem::take(&mut guard.nodes[id].value);
+            if let Some(entry) = guard.nodes.get(id)? {
+                return Some(entry.value.clone());
+            } else {
+                return None;
+            }
         }
         None
-    }
-
-    /// Puts the value back
-    ///
-    /// Only called when value was take out with `take_and_promote`
-    pub fn put_back(&self, key: &K, value: V) -> anyhow::Result<()> {
-        let mut guard = self.list.write();
-        if let Some(&id) = guard.map.get(key)
-            && guard.nodes[id].value.is_none()
-        {
-            guard.nodes[id].value.replace(value);
-            return Ok(());
-        }
-        bail!("Could not find entry in cache")
     }
 }
 
@@ -483,16 +489,20 @@ mod test {
         let lru: LruCache<i32, i32> = LruCache::new(2);
 
         lru.insert(1, 10);
+        // 1(10) ->
         lru.insert(2, 20);
+        // 2(20) -> 1(10)
 
         let out = lru.with_get_mut(&1, |v| {
             *v += 5;
             *v
         });
+        // 1(15) -> 2(20)
         assert_eq!(out, Some(15));
         assert_eq!(lru.peek(&1), Some(15));
 
         lru.insert(3, 30);
+        // 3(30) -> 1(15)
         assert_eq!(lru.peek(&2), None);
         assert_eq!(lru.peek(&1), Some(15));
         assert_eq!(lru.peek(&3), Some(30));
