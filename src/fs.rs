@@ -36,7 +36,6 @@ use crate::namespec::NameSpec;
 pub mod builds;
 pub mod fileattr;
 pub mod handles;
-pub mod janitor;
 pub mod meta_db;
 pub mod ops;
 pub mod repo;
