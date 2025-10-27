@@ -44,7 +44,6 @@ fn main() -> anyhow::Result<()> {
 
 fn start_app(matches: &ArgMatches) -> anyhow::Result<()> {
     run_mount(matches)?;
-    // setup_tui(matches)?;
     Ok(())
 }
 
@@ -134,7 +133,6 @@ fn run_mount(matches: &ArgMatches) -> anyhow::Result<()> {
     let allow_other = matches.get_flag("allow-other");
     let allow_root = matches.get_flag("allow-root");
     let disable_socket = matches.get_flag("disable-socket");
-    tracing::info!("sock - {disable_socket}");
     let mount_point = guse::mount::MountPoint::new(
         mountpoint,
         repos_dir,
