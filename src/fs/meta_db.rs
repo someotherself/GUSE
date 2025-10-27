@@ -190,6 +190,11 @@ pub enum DbWriteMsg {
         target_ino: NormalIno,
         resp: Option<Resp<()>>,
     },
+    SetNegative {
+        parent_ino: NormalIno,
+        target_name: OsString,
+        resp: Option<Resp<()>>,
+    },
 }
 
 fn spawn_repo_writer(
@@ -358,6 +363,25 @@ where
         }
         DbWriteMsg::CleanupEntry { target_ino, resp } => {
             let res = MetaDb::cleanup_dentry(conn, target_ino.into());
+            match resp {
+                Some(tx) => {
+                    results.push(tx);
+                    Ok(())
+                }
+                None => {
+                    if let Err(e) = &res {
+                        tracing::warn!("db cleanup_dentry failed: {e}");
+                    }
+                    Ok(())
+                }
+            }
+        }
+        DbWriteMsg::SetNegative {
+            parent_ino,
+            target_name,
+            resp,
+        } => {
+            let res = MetaDb::set_entry_negative(conn, parent_ino.into(), &target_name);
             match resp {
                 Some(tx) => {
                     results.push(tx);
@@ -1101,6 +1125,30 @@ impl MetaDb {
             params![target_inode as i64],
         )?;
 
+        Ok(())
+    }
+
+    pub fn set_entry_negative<C>(tx: &C, parent_ino: u64, target_name: &OsStr) -> anyhow::Result<()>
+    where
+        C: std::ops::Deref<Target = rusqlite::Connection>,
+    {
+        let name = target_name.as_bytes();
+        let changed = tx.execute(
+            r#"
+        UPDATE dentries
+        SET is_active = 0
+        WHERE parent_inode = ?1 AND name = ?2
+        "#,
+            rusqlite::params![parent_ino, name],
+        )?;
+
+        if changed != 1 {
+            bail!(
+                "set_entry_negative: expected to update 1 row for ino {}, updated {}",
+                parent_ino,
+                changed
+            );
+        }
         Ok(())
     }
 
