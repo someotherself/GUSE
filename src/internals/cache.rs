@@ -259,7 +259,6 @@ where
         I: IntoIterator<Item = (K, V)>,
     {
         let mut guard = self.list.write();
-
         for (key, value) in entries {
             while guard.map.len() >= guard.capacity.into() {
                 guard.evict();

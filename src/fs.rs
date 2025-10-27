@@ -2556,6 +2556,7 @@ impl GitFs {
         let target_ino = self.get_ino_by_parent_cache(parent_ino, target_name)?;
         repo.dentry_cache.remove_by_parent(parent_ino, target_name);
         repo.attr_cache.remove(&target_ino);
+        repo.file_cache.remove(&target_ino);
         Ok(())
     }
 
