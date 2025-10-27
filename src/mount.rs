@@ -319,14 +319,11 @@ impl fuser::Filesystem for GitFsAdapter {
             Err(e) => {
                 if let Some(ioe) = e.downcast_ref::<std::io::Error>() {
                     if ioe.kind() == std::io::ErrorKind::NotFound {
-                        tracing::info!(
-                            "rm: cannot remove '{}': No such file or directory",
-                            name.display()
-                        );
                         return reply.error(ENOENT);
+                    } else {
+                        error!(e = %e, "UNLINK");
+                        reply.error(errno_from_anyhow(&e));
                     }
-                    error!(e = %e, "UNLINK");
-                    reply.error(errno_from_anyhow(&e));
                 }
             }
         }
@@ -347,14 +344,11 @@ impl fuser::Filesystem for GitFsAdapter {
             Err(e) => {
                 if let Some(ioe) = e.downcast_ref::<std::io::Error>() {
                     if ioe.kind() == std::io::ErrorKind::NotFound {
-                        tracing::info!(
-                            "rm: cannot remove '{}': No such file or directory",
-                            name.display()
-                        );
                         return reply.error(ENOENT);
+                    } else {
+                        error!(e = %e, "RMDIR");
+                        reply.error(errno_from_anyhow(&e));
                     }
-                    error!(e = %e, "RMDIR");
-                    reply.error(errno_from_anyhow(&e));
                 }
             }
         }
