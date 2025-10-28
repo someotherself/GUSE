@@ -190,6 +190,15 @@ pub enum DbWriteMsg {
         target_ino: NormalIno,
         resp: Option<Resp<()>>,
     },
+    SetNegative {
+        parent_ino: NormalIno,
+        target_name: OsString,
+        resp: Option<Resp<()>>,
+    },
+    CleanNegative {
+        entries: Vec<(u64, u64, OsString)>,
+        resp: Option<Resp<()>>,
+    },
 }
 
 fn spawn_repo_writer(
@@ -358,6 +367,40 @@ where
         }
         DbWriteMsg::CleanupEntry { target_ino, resp } => {
             let res = MetaDb::cleanup_dentry(conn, target_ino.into());
+            match resp {
+                Some(tx) => {
+                    results.push(tx);
+                    Ok(())
+                }
+                None => {
+                    if let Err(e) = &res {
+                        tracing::warn!("db cleanup_dentry failed: {e}");
+                    }
+                    Ok(())
+                }
+            }
+        }
+        DbWriteMsg::SetNegative {
+            parent_ino,
+            target_name,
+            resp,
+        } => {
+            let res = MetaDb::set_entry_negative(conn, parent_ino.into(), &target_name);
+            match resp {
+                Some(tx) => {
+                    results.push(tx);
+                    Ok(())
+                }
+                None => {
+                    if let Err(e) = &res {
+                        tracing::warn!("db cleanup_dentry failed: {e}");
+                    }
+                    Ok(())
+                }
+            }
+        }
+        DbWriteMsg::CleanNegative { entries, resp } => {
+            let res = MetaDb::cleanup_neg_entries(conn, &entries);
             match resp {
                 Some(tx) => {
                     results.push(tx);
@@ -720,6 +763,47 @@ impl MetaDb {
         }
 
         Ok(DbReturn::Found { value: child })
+    }
+
+    pub fn get_dentry_from_db(
+        conn: &rusqlite::Connection,
+        parent: u64,
+        name: &OsStr,
+    ) -> anyhow::Result<DbReturn<Dentry>> {
+        let sql = r#"
+            SELECT target_inode, is_active
+            FROM dentries
+            WHERE parent_inode = ?1 AND name = ?2
+            LIMIT 2
+        "#;
+
+        let mut stmt = conn.prepare_cached(sql)?;
+        let mut rows = stmt.query((parent as i64, name.as_bytes()))?;
+
+        let first = rows.next()?;
+        let Some(row) = first else {
+            return Ok(DbReturn::Missing);
+        };
+
+        let child_i64: i64 = row.get(0)?;
+        let is_active: bool = row.get(1)?;
+        let child = u64::try_from(child_i64)
+            .map_err(|_| anyhow!("child_ino out of range: {}", child_i64))?;
+
+        if rows.next()?.is_some() {
+            bail!(
+                "DB invariant violation: multiple dentries for ({parent}, {})",
+                name.display()
+            );
+        }
+        let dentry: Dentry = Dentry {
+            target_ino: child,
+            parent_ino: parent,
+            target_name: name.to_owned(),
+            is_active,
+        };
+
+        Ok(DbReturn::Found { value: dentry })
     }
 
     pub fn update_size_in_db<C>(tx: &C, ino: u64, new_size: u64) -> anyhow::Result<()>
@@ -1104,6 +1188,123 @@ impl MetaDb {
         Ok(())
     }
 
+    pub fn set_entry_negative<C>(tx: &C, parent_ino: u64, target_name: &OsStr) -> anyhow::Result<()>
+    where
+        C: std::ops::Deref<Target = rusqlite::Connection>,
+    {
+        let name = target_name.as_bytes();
+        let changed = tx.execute(
+            r#"
+        UPDATE dentries
+        SET is_active = 0
+        WHERE parent_inode = ?1 AND name = ?2
+        "#,
+            rusqlite::params![parent_ino, name],
+        )?;
+
+        if changed != 1 {
+            bail!(
+                "set_entry_negative: expected to update 1 row for ino {}, updated {}",
+                parent_ino,
+                changed
+            );
+        }
+        Ok(())
+    }
+
+    pub fn get_inactive_dentries(conn: &rusqlite::Connection) -> anyhow::Result<Vec<Dentry>> {
+        let mut stmt = conn
+            .prepare(
+                r#"
+            SELECT parent_inode, target_inode, name, is_active
+            FROM dentries
+            WHERE is_active = 0
+            "#,
+            )
+            .context("failed to prepare statement for inactive dentries")?;
+
+        let rows = stmt
+            .query_map([], |row| {
+                let parent_inode: i64 = row.get(0)?;
+                let target_inode: i64 = row.get(1)?;
+                let name_blob: Vec<u8> = row.get(2)?;
+                let is_active: i64 = row.get(3)?;
+
+                Ok(Dentry {
+                    parent_ino: parent_inode as u64,
+                    target_ino: target_inode as u64,
+                    target_name: OsString::from_vec(name_blob),
+                    is_active: is_active != 0,
+                })
+            })
+            .context("failed to map inactive dentries")?;
+
+        let mut dentries = Vec::new();
+        for row in rows {
+            dentries.push(row?);
+        }
+
+        Ok(dentries)
+    }
+
+    /// `(parent_ino, target_ino, target_name)`
+    ///
+    /// Will also check nlinks and clean `inode_map` table where `nlink == 0`
+    /// 1 - Clean dentries with is_active = 0
+    /// 2 - Update nlinks in inode_map for the target_ino
+    /// 3 - Clean entries in inode_map with nlink = 0
+    pub fn cleanup_neg_entries<C>(conn: &C, entries: &[(u64, u64, OsString)]) -> anyhow::Result<()>
+    where
+        C: std::ops::Deref<Target = rusqlite::Connection>,
+    {
+        if entries.is_empty() {
+            return Ok(());
+        }
+
+        let mut affected: HashSet<i64> = HashSet::with_capacity(entries.len());
+
+        let mut stmt = conn.prepare(
+            r#"
+            DELETE FROM dentries
+            WHERE parent_inode = ?1
+              AND name = ?2
+              AND is_active = 0
+            "#,
+        )?;
+
+        for (parent_ino, target_ino, name) in entries {
+            let p = i64::try_from(*parent_ino)?;
+            let t = i64::try_from(*target_ino)?;
+            affected.insert(t);
+
+            let name_bytes = name.as_bytes();
+
+            stmt.execute(params![p, name_bytes])?;
+        }
+
+        let mut upd = conn.prepare(
+            "UPDATE inode_map
+        SET nlink = (SELECT COUNT(*) FROM dentries WHERE target_inode = ?1 AND is_active = 1)
+        WHERE inode = ?1",
+        )?;
+
+        for inode in &affected {
+            upd.execute(params![inode])?;
+        }
+
+        let mut q_prune = conn
+            .prepare("DELETE FROM inode_map WHERE inode = ?1 AND nlink = 0")
+            .context("prepare DELETE inode_map nlink=0")?;
+
+        for inode in &affected {
+            q_prune
+                .execute(params![inode])
+                .with_context(|| format!("delete inode_map row for inode {inode} with nlink=0"))?;
+        }
+
+        Ok(())
+    }
+
     pub fn cleanup_dentry<C>(tx: &C, target_ino: u64) -> anyhow::Result<()>
     where
         C: std::ops::Deref<Target = rusqlite::Connection>,
@@ -1186,10 +1387,31 @@ impl MetaDb {
         MetaDb::get_metadata(conn, target_ino)
     }
 
+    /// Looks into the dentries table and checks if the `target_ino` has any entries with is_active = true
+    fn check_active_inode(conn: &rusqlite::Connection, target_ino: u64) -> anyhow::Result<bool> {
+        let ino = i64::try_from(target_ino)?;
+
+        let exists: i64 = conn.query_row(
+            "SELECT EXISTS(
+             SELECT 1
+             FROM dentries
+             WHERE target_inode = ?1 AND is_active = 1
+         )",
+            params![ino],
+            |row| row.get(0),
+        )?;
+
+        Ok(exists != 0)
+    }
+
     pub fn get_metadata(
         conn: &rusqlite::Connection,
         target_ino: u64,
     ) -> anyhow::Result<DbReturn<FileAttr>> {
+        if let Ok(false) = MetaDb::check_active_inode(conn, target_ino) {
+            return Ok(DbReturn::Negative);
+        };
+
         let mut stmt = conn.prepare(
             r#"
         SELECT

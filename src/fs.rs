@@ -22,6 +22,7 @@ use crate::fs::fileattr::{
     dir_attr, file_attr,
 };
 use crate::fs::handles::FileHandles;
+use crate::fs::janitor::Jobs;
 use crate::fs::meta_db::{DbReturn, DbWriteMsg, MetaDb, oneshot, set_conn_pragmas, set_wal_once};
 use crate::fs::ops::readdir::{
     BuildCtxMetadata, DirectoryEntry, DirectoryEntryPlus, DirectoryStreamCookie,
@@ -36,6 +37,7 @@ use crate::namespec::NameSpec;
 pub mod builds;
 pub mod fileattr;
 pub mod handles;
+pub mod janitor;
 pub mod meta_db;
 pub mod ops;
 pub mod repo;
@@ -45,6 +47,7 @@ mod test;
 
 const META_STORE: &str = "fs_meta.db";
 const LIVE_FOLDER: &str = "live";
+const TRASH_FOLDER: &str = ".trash";
 pub const REPO_SHIFT: u8 = 48;
 pub const ROOT_INO: u64 = 1;
 pub const VDIR_BIT: u64 = 1u64 << 47;
@@ -264,10 +267,13 @@ impl GitFs {
         read_only: bool,
         notifier: Arc<OnceLock<fuser::Notifier>>,
     ) -> anyhow::Result<Arc<Self>> {
-        let (tx, rx) = crossbeam_channel::unbounded::<InvalMsg>();
+        let _ = std::fs::remove_dir_all(repos_dir.join(TRASH_FOLDER));
+        let _ = std::fs::create_dir(repos_dir.join(TRASH_FOLDER));
+
+        let (tx_inval, rx_inval) = crossbeam_channel::unbounded::<InvalMsg>();
 
         let fs = Self {
-            repos_dir,
+            repos_dir: repos_dir.clone(),
             repos_list: DashMap::new(),
             conn_list: DashMap::new(),
             repos_map: DashMap::new(),
@@ -275,15 +281,19 @@ impl GitFs {
             handles: FileHandles::default(),
             next_inode: DashMap::new(),
             vfile_entry: RwLock::new(HashMap::new()),
-            notifier: tx.clone(),
+            notifier: tx_inval.clone(),
         };
+
+        let fs = Arc::new(fs);
+        let fs_clone = Arc::downgrade(&fs);
+        Jobs::spawn_worker(fs_clone);
 
         std::thread::spawn(move || {
             while notifier.get().is_none() {
                 std::thread::sleep(std::time::Duration::from_millis(10));
             }
             let n = notifier.get().unwrap().clone();
-            for msg in rx.iter() {
+            for msg in rx_inval.iter() {
                 match msg {
                     InvalMsg::Entry { parent, name } => {
                         if let Err(e) = n.inval_entry(parent, &name) {
@@ -314,7 +324,7 @@ impl GitFs {
         });
 
         fs.ensure_base_dirs_exist()?;
-        for entry in fs.repos_dir.read_dir()? {
+        for entry in repos_dir.read_dir()? {
             let entry = entry?;
             let repo_name_os = entry.file_name();
             let repo_name = repo_name_os.to_str().context("Not a valid UTF-8 name")?;
@@ -330,12 +340,12 @@ impl GitFs {
             let repo_ino = GitFs::repo_id_to_ino(repo_id);
             let live_ino = GitFs::get_live_ino(repo_ino);
             let repo_name = repo.repo_dir.clone();
-            let live_path = fs.repos_dir.join(repo_name).join(LIVE_FOLDER);
+            let live_path = repos_dir.join(repo_name).join(LIVE_FOLDER);
 
             // Read contents of live
             fs.read_dir_to_db(&live_path, &fs, InoFlag::InsideLive, live_ino)?;
         }
-        Ok(Arc::from(fs))
+        Ok(fs)
     }
 
     fn new_repo_connection(&self, repo_name: &str, tmpdir: &Path) -> anyhow::Result<u16> {
@@ -1975,12 +1985,12 @@ impl GitFs {
         let attr = MetaDb::get_metadata(&conn, target_ino)?;
 
         // Cache attr on miss
-        let attr: anyhow::Result<FileAttr> = attr.into();
-        let attr = attr?;
-        let repo = self.get_repo(target_ino)?;
-        repo.attr_cache.insert(target_ino, attr);
+        if let DbReturn::Found { value: attr } = attr {
+            let repo = self.get_repo(target_ino)?;
+            repo.attr_cache.insert(target_ino, attr);
+        }
 
-        Ok(DbReturn::Found { value: attr })
+        Ok(attr)
     }
 
     fn get_builctx_metadata(&self, ino: NormalIno) -> anyhow::Result<BuildCtxMetadata> {
@@ -2075,15 +2085,6 @@ impl GitFs {
             .ok_or_else(|| anyhow::anyhow!("no db for get_ino_from_db - repo {}", repo_id))?;
         let conn = repo_db.ro_pool.get()?;
         let target_ino = MetaDb::get_ino_from_db(&conn, parent, name)?;
-
-        if let DbReturn::Found { value } = target_ino {
-            repo.dentry_cache.insert(Dentry {
-                target_ino: value,
-                parent_ino: parent,
-                target_name: name.to_owned(),
-                is_active: true,
-            });
-        }
 
         Ok(target_ino)
     }
@@ -2695,6 +2696,96 @@ impl GitFs {
         } else {
             bail!("Could not find dentry in cache")
         }
+    }
+
+    // If not in cache, insert it in cache
+    fn set_entry_negative(&self, parent_ino: NormalIno, name: &OsStr) -> anyhow::Result<()> {
+        let repo = self.get_repo(parent_ino.into())?;
+        let cache_res = repo
+            .dentry_cache
+            .set_inactive(parent_ino.into(), name)
+            .is_found();
+
+        let repo_id = GitFs::ino_to_repo_id(parent_ino.into());
+        let writer_tx = {
+            let guard = self
+                .conn_list
+                .get(&repo_id)
+                .ok_or_else(|| anyhow::anyhow!("No db for repo id {repo_id}"))?;
+            guard.writer_tx.clone()
+        };
+
+        let (tx, rx) = oneshot::<()>();
+        let tx = if cache_res { None } else { Some(tx) };
+        let msg = DbWriteMsg::SetNegative {
+            parent_ino,
+            target_name: name.to_owned(),
+            resp: tx,
+        };
+
+        writer_tx
+            .send(msg)
+            .context("writer_tx error on write_dentry")?;
+
+        if !cache_res {
+            rx.recv().context("writer_rx disc on write_inodes")??;
+
+            let repo_db = self
+                .conn_list
+                .get(&repo_id)
+                .ok_or_else(|| anyhow::anyhow!("no db"))?;
+            let conn = repo_db.ro_pool.get()?;
+            if let DbReturn::Found { value: dentry } =
+                MetaDb::get_dentry_from_db(&conn, parent_ino.into(), name)?
+            {
+                repo.dentry_cache.insert(dentry);
+            }
+        }
+
+        Ok(())
+    }
+
+    // `(target_ino, parent_ino, target_name)`
+    fn cleanup_neg_entries(
+        &self,
+        entries: &[(u64, u64, &OsStr)],
+        repo_id: u16,
+    ) -> anyhow::Result<()> {
+        let repo = self.get_repo(GitFs::repo_id_to_ino(repo_id))?;
+
+        let mut attr_targets = Vec::with_capacity(entries.len());
+        let mut cache_dentries = Vec::with_capacity(entries.len());
+        let mut db_entries = Vec::with_capacity(entries.len());
+
+        for &(target_ino, parent_ino, name) in entries {
+            attr_targets.push(target_ino);
+            cache_dentries.push((parent_ino, name));
+            db_entries.push((parent_ino, target_ino, name.to_os_string()));
+        }
+
+        repo.attr_cache.remove_many(&attr_targets);
+        // Dentries can only be uniquely identified by (parent_ino, target_name)
+        repo.dentry_cache.remove_many_by_parent(&cache_dentries);
+
+        let writer_tx = {
+            let guard = self
+                .conn_list
+                .get(&repo_id)
+                .ok_or_else(|| anyhow::anyhow!("No db for repo id {repo_id}"))?;
+            guard.writer_tx.clone()
+        };
+
+        // Dentries can only be uniquely identified by (parent_ino, target_name)
+        let msg = DbWriteMsg::CleanNegative {
+            entries: db_entries,
+            resp: None,
+        };
+
+        writer_tx
+            .send(msg)
+            .context("writer_tx error on write_dentry")?;
+
+        Ok(())
     }
 
     fn update_cache_record(
