@@ -369,6 +369,30 @@ where
         None
     }
 
+    pub fn remove_many_by_parent(&self, entries: &[(u64, &OsStr)]) {
+        let mut guard = self.list.write();
+
+        for (parent_ino, target_name) in entries {
+            if let Some(&p) = guard
+                .parent_ino_name_map
+                .get(&(*parent_ino, target_name.to_os_string()))
+            {
+                let value = guard.nodes[p].value.clone();
+                guard.unlink(p);
+                guard.target_ino_map.remove(&value.target_ino);
+                guard
+                    .target_ino_name_map
+                    .remove(&(value.target_ino, value.target_name.clone()));
+                guard
+                    .parent_ino_name_map
+                    .remove(&(*parent_ino, target_name.to_os_string()));
+                guard.free.push(p);
+            } else {
+                continue;
+            }
+        }
+    }
+
     /// key: (`target_ino`, `target_name`)
     pub fn peek(&self, target_ino: u64, target_name: &OsStr) -> Option<Dentry> {
         let guard = self.list.read();

@@ -281,6 +281,25 @@ where
         }
     }
 
+    pub fn remove_many(&self, entries: &[K]) {
+        let mut guard = self.list.write();
+
+        for target in entries {
+            if let Some(&p) = guard.map.get(target) {
+                // Fix the neighbors
+                guard.unlink(p);
+                // Remove from the map
+                guard.map.remove(target);
+                // Mark the entry as free
+                guard.free.push(p);
+                // Remove the value from the entry
+                let _ = std::mem::take(&mut guard.nodes[p]);
+            } else {
+                continue;
+            }
+        }
+    }
+
     pub fn remove(&self, key: &K) -> Option<V> {
         let mut guard = self.list.write();
         if let Some(&p) = guard.map.get(key) {
