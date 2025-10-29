@@ -32,7 +32,7 @@ pub struct DentryInner<S = ahash::RandomState> {
     parent_ino_name_map: HashMap<(u64, OsString), NodeId, S>,
     target_ino_name_map: HashMap<(u64, OsString), NodeId, S>,
     /// <(`target_inode`, `target_name`), Dentry>
-    nodes: Vec<Entry>,
+    nodes: Vec<Option<Entry>>,
     free: Vec<NodeId>,
     head: Option<NodeId>, // MRU
     tail: Option<NodeId>, // LRU
@@ -56,19 +56,23 @@ where
         }
     }
 
-    fn push_front(&mut self, id: NodeId) -> Dentry {
+    fn push_front(&mut self, id: NodeId) {
         let old_head = self.head;
 
         {
             // Fix the prev and next of the new entry
-            let n = &mut self.nodes[id];
+            let Some(n) = &mut self.nodes[id] else {
+                return;
+            };
             n.prev = None;
             n.next = old_head;
         }
 
         // Fix the old_head entry
         if let Some(h) = old_head {
-            self.nodes[h].prev = Some(id);
+            if let Some(value) = self.nodes[h].as_mut() {
+                value.prev = Some(id)
+            }
         } else {
             // List was empty
             self.tail = Some(id);
@@ -76,35 +80,46 @@ where
 
         // Fix the head
         self.head = Some(id);
-        self.nodes[id].value.clone()
     }
 
-    fn unlink(&mut self, id: NodeId) {
-        let (prev, next) = {
-            let n = &self.nodes[id];
-            (n.prev, n.next)
+    fn unlink(&mut self, id: NodeId) -> bool {
+        // Find the entry and get its prev and next
+        // Early return if not found
+        let (prev, next) = match self
+            .nodes
+            .get(id)
+            .and_then(|e| e.as_ref().map(|e| (e.prev, e.next)))
+        {
+            Some(pn) => pn,
+            None => return false,
         };
 
-        // Fix prev neighbor
+        // Fix prev and next neighbors
+        // If not found, move along and assume entry was head / tail
         if let Some(p) = prev {
-            self.nodes[p].next = next;
+            if let Some(pe) = self.nodes.get_mut(p).and_then(Option::as_mut) {
+                pe.next = next;
+            };
         } else {
             // was head
             self.head = next;
         }
-        // Fix next neighbor
         if let Some(n) = next {
-            self.nodes[n].prev = prev;
+            if let Some(ne) = self.nodes.get_mut(n).and_then(Option::as_mut) {
+                ne.prev = prev
+            };
         } else {
             // was tail
             self.tail = prev;
         }
 
-        {
-            // Fix the prev and next of the unlinked entry
-            let n = &mut self.nodes[id];
+        // Fix the prev and next of the unlinked entry. This shouldn't fail anymore
+        if let Some(n) = self.nodes.get_mut(id).and_then(Option::as_mut) {
             n.next = None;
             n.prev = None;
+            true
+        } else {
+            false
         }
     }
 
@@ -114,7 +129,7 @@ where
         let mut seen = HashSet::with_capacity(ids.len());
         for id in ids.iter().filter(|&id| seen.insert(id)) {
             let in_list = {
-                let n = &self.nodes[*id];
+                let Some(n) = &self.nodes[*id] else { continue };
                 n.prev.is_some()
                     || n.next.is_some()
                     || self.head == Some(*id)
@@ -130,20 +145,23 @@ where
 
     fn evict(&mut self) -> Option<()> {
         let tail = self.tail?;
+        let tail_e = self.nodes.get_mut(tail)?.take()?;
 
-        let prev = self.nodes[tail].prev;
-
-        if let Some(p) = prev {
-            let prev_entry = &mut self.nodes[p];
-            prev_entry.next = None;
-            self.tail = Some(p);
+        if let Some(p) = tail_e.prev {
+            if let Some(prev_entry) = &mut self.nodes[p] {
+                prev_entry.next = None;
+                self.tail = Some(p);
+            } else {
+                self.head = None;
+                self.tail = None;
+            }
         } else {
             // was empty
             self.head = None;
             self.tail = None;
         }
 
-        let dentry = &self.nodes[tail].value;
+        let dentry = tail_e.value;
         self.target_ino_map.remove(&dentry.target_ino);
         self.parent_ino_name_map
             .remove(&(dentry.parent_ino, dentry.target_name.clone()));
@@ -165,11 +183,11 @@ where
         // Get the index of the new entry.
         // Insert into nodes
         let index = if let Some(i) = self.free.pop() {
-            let _ = std::mem::replace(&mut self.nodes[i], entry);
+            let _ = self.nodes[i].replace(entry);
             i
         } else {
             let index = self.nodes.len() as NodeId;
-            self.nodes.push(entry);
+            self.nodes.push(Some(entry));
             index
         };
         if let Some(vec) = self.target_ino_map.get_mut(&value.target_ino) {
@@ -184,11 +202,13 @@ where
 
         // Handle old head, or if list is empty
         if let Some(h) = old_head {
-            let e = &mut self.nodes[h];
-            e.prev = Some(index);
+            if let Some(e) = &mut self.nodes[h] {
+                e.prev = Some(index);
+            }
         } else {
             self.tail = Some(index);
         }
+        self.head = Some(index);
 
         // Set the new head
         self.head = Some(index);
@@ -197,8 +217,11 @@ where
 
     // TODO: Value could be missing (maybe?)
     #[allow(dead_code)]
-    fn peek(&self, id: NodeId) -> Dentry {
-        self.nodes[id].value.clone()
+    fn peek(&self, id: NodeId) -> Option<Dentry> {
+        if let Some(entry) = self.nodes.get(id).and_then(Option::as_ref) {
+            return Some(entry.value.clone());
+        }
+        None
     }
 }
 
@@ -224,7 +247,10 @@ where
         guard.unlink_all(&ids);
         let mut values = vec![];
         for id in ids {
-            values.push(guard.push_front(id));
+            guard.push_front(id);
+            if let Some(e) = guard.peek(id) {
+                values.push(e);
+            }
         }
         Some(values)
     }
@@ -234,7 +260,12 @@ where
         let mut ids = guard.target_ino_map.get(&target_ino)?.clone();
 
         guard.unlink_all(&ids);
-        ids.pop().map(|id| guard.push_front(id))
+        if let Some(id) = ids.pop() {
+            guard.push_front(id);
+            guard.peek(id)
+        } else {
+            None
+        }
     }
 
     pub fn get_by_target_and_name(&self, target_ino: u64, target_name: &OsStr) -> Option<Dentry> {
@@ -244,7 +275,8 @@ where
             .get(&(target_ino, target_name.to_os_string()))?;
 
         guard.unlink(id);
-        Some(guard.push_front(id))
+        guard.push_front(id);
+        guard.peek(id)
     }
 
     pub fn set_inactive(&self, parent_ino: u64, target_name: &OsStr) -> DbReturn<()> {
@@ -256,9 +288,12 @@ where
             return DbReturn::Missing;
         };
 
-        let entry = &mut guard.nodes[id];
-        entry.value.is_active = false;
-        DbReturn::Found { value: () }
+        if let Some(entry) = &mut guard.nodes[id] {
+            entry.value.is_active = false;
+            DbReturn::Found { value: () }
+        } else {
+            DbReturn::Missing
+        }
     }
 
     pub fn get_by_parent_and_name(&self, parent_ino: u64, target_name: &OsStr) -> DbReturn<Dentry> {
@@ -271,7 +306,8 @@ where
         };
 
         guard.unlink(id);
-        guard.push_front(id).into()
+        guard.push_front(id);
+        guard.peek(id).into()
     }
 
     pub fn insert(&self, value: Dentry) -> Option<Dentry> {
@@ -285,14 +321,23 @@ where
         let key = (value.target_ino, value.target_name.clone());
         if let Some(&id) = guard.target_ino_name_map.get(&key) {
             // Entry already exists
-            let old = std::mem::replace(&mut guard.nodes[id].value, value);
-            guard.unlink(id);
-            guard.push_front(id);
-            Some(old)
-        } else {
-            guard.insert_front(value);
-            None
+            if let Some(e) = &mut guard.nodes[id] {
+                let old = std::mem::replace(&mut e.value, value);
+                guard.unlink(id);
+                guard.push_front(id);
+                return Some(old);
+            } else {
+                guard.target_ino_map.remove(&value.target_ino);
+                guard
+                    .parent_ino_name_map
+                    .remove(&(value.parent_ino, value.target_name.clone()));
+                guard
+                    .target_ino_name_map
+                    .remove(&(value.target_ino, value.target_name.clone()));
+            }
         }
+        guard.insert_front(value);
+        None
     }
 
     pub fn insert_many<I>(&self, entries: I)
@@ -308,9 +353,11 @@ where
             let key = (entry.target_ino, entry.target_name.clone());
 
             if let Some(&id) = guard.target_ino_name_map.get(&key) {
-                let _ = std::mem::replace(&mut guard.nodes[id].value, entry);
-                guard.unlink(id);
-                guard.push_front(id);
+                if let Some(old_e) = &mut guard.nodes[id] {
+                    let _ = std::mem::replace(&mut old_e.value, entry);
+                    guard.unlink(id);
+                    guard.push_front(id);
+                }
             } else {
                 guard.insert_front(entry);
             }
@@ -324,8 +371,9 @@ where
         if let Some(&p) = guard
             .parent_ino_name_map
             .get(&(parent_ino, target_name.to_os_string()))
+            && let Some(mut entry) = guard.nodes[p].take()
         {
-            let value = guard.nodes[p].value.clone();
+            let value = &mut entry.value;
             // Fix the neighbors
             guard.unlink(p);
             // Remove from the map
@@ -338,7 +386,7 @@ where
                 .remove(&(parent_ino, target_name.to_os_string()));
             // Mark the entry as free
             guard.free.push(p);
-            return Some(value);
+            return Some(value.clone());
         }
         None
     }
@@ -350,8 +398,9 @@ where
         if let Some(&p) = guard
             .parent_ino_name_map
             .get(&(target_ino, target_name.to_os_string()))
+            && let Some(mut entry) = guard.nodes[p].take()
         {
-            let value = guard.nodes[p].value.clone();
+            let value = &mut entry.value;
             // Fix the neighbors
             guard.unlink(p);
             // Remove from the map
@@ -364,7 +413,7 @@ where
                 .remove(&(value.parent_ino, value.target_name.clone()));
             // Mark the entry as free
             guard.free.push(p);
-            return Some(value);
+            return Some(value.clone());
         }
         None
     }
@@ -377,16 +426,18 @@ where
                 .parent_ino_name_map
                 .get(&(*parent_ino, target_name.to_os_string()))
             {
-                let value = guard.nodes[p].value.clone();
-                guard.unlink(p);
-                guard.target_ino_map.remove(&value.target_ino);
-                guard
-                    .target_ino_name_map
-                    .remove(&(value.target_ino, value.target_name.clone()));
-                guard
-                    .parent_ino_name_map
-                    .remove(&(*parent_ino, target_name.to_os_string()));
-                guard.free.push(p);
+                if let Some(mut entry) = guard.nodes[p].take() {
+                    let value = &mut entry.value;
+                    guard.unlink(p);
+                    guard.target_ino_map.remove(&value.target_ino);
+                    guard
+                        .target_ino_name_map
+                        .remove(&(value.target_ino, value.target_name.clone()));
+                    guard
+                        .parent_ino_name_map
+                        .remove(&(*parent_ino, target_name.to_os_string()));
+                    guard.free.push(p);
+                }
             } else {
                 continue;
             }
@@ -399,12 +450,11 @@ where
         if let Some(&id) = guard
             .target_ino_name_map
             .get(&(target_ino, target_name.to_os_string()))
+            && let Some(entry) = guard.nodes.get(id)?
         {
-            let entry = guard.nodes.get(id)?;
-            Some(entry.value.clone())
-        } else {
-            None
-        }
+            return Some(entry.value.clone());
+        };
+        None
     }
 
     pub fn get_all_parents(&self, target_ino: u64) -> Option<Vec<u64>> {
@@ -413,7 +463,7 @@ where
         let ids = guard.target_ino_map.get(&target_ino)?;
         Some(
             ids.iter()
-                .map(|&e| guard.nodes[e].value.parent_ino)
+                .filter_map(|&e| guard.nodes[e].as_ref().map(|entry| entry.value.parent_ino))
                 .collect::<Vec<u64>>(),
         )
     }
