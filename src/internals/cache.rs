@@ -51,14 +51,14 @@ where
     }
 
     /// Move an existing entry as MRU
-    fn push_front(&mut self, id: NodeId) -> Option<V> {
+    fn push_front(&mut self, id: NodeId) {
         let old_head = self.head;
 
         {
             // Fix the prev and next of the new entry
             let Some(n) = &mut self.nodes[id] else {
                 // Value was already removed from cache
-                return None;
+                return;
             };
             n.prev = None;
             n.next = old_head;
@@ -76,7 +76,6 @@ where
 
         // Fix the head
         self.head = Some(id);
-        Some(self.nodes[id].as_ref()?.value.clone())
     }
 
     fn unlink(&mut self, id: NodeId) -> bool {
@@ -130,16 +129,20 @@ where
         if let Some(prev_e_id) = tail_e.prev {
             if let Some(prev_e) = self.nodes.get_mut(prev_e_id).and_then(Option::as_mut) {
                 prev_e.next = None;
+                self.tail = Some(prev_e_id)
             } else {
                 self.head = None;
                 self.tail = None;
             }
             self.tail = Some(prev_e_id)
+        } else {
+            self.head = None;
+            self.tail = None;
         }
 
         let old_tail = tail_e.key;
-        self.free.push(tail);
         let _ = self.map.remove_entry(&old_tail);
+        self.free.push(tail);
         Some(())
     }
 
@@ -167,10 +170,10 @@ where
             if let Some(e) = &mut self.nodes.get_mut(h).and_then(Option::as_mut) {
                 e.prev = Some(index);
             }
-            self.head = Some(index);
         } else {
             self.tail = Some(index);
         }
+        self.head = Some(index);
 
         // Set the new head
         index
@@ -210,7 +213,8 @@ where
             return DbReturn::Missing;
         }
         guard.unlink(id);
-        guard.push_front(id).into()
+        guard.push_front(id);
+        guard.peek(id).into()
     }
 
     pub fn with_get_mut<R>(&self, key: &K, f: impl FnOnce(&mut V) -> R) -> Option<R> {
@@ -220,10 +224,11 @@ where
         }
         let &id = guard.map.get(key)?;
         if let Some(entry) = &mut guard.nodes[id] {
-            return Some(f(&mut entry.value));
+            let res = f(&mut entry.value);
+            guard.unlink(id);
+            guard.push_front(id);
+            return Some(res);
         }
-        guard.unlink(id);
-        guard.push_front(id);
         None
     }
 
@@ -241,17 +246,14 @@ where
                 let old = std::mem::replace(&mut old_e.value, value);
                 guard.unlink(id);
                 guard.push_front(id);
-                Some(old)
+                return Some(old);
             } else {
                 // Dangling entry. Should not happen in theory
                 let _ = guard.map.remove(&key);
-                guard.insert_front(key, value);
-                None
             }
-        } else {
-            guard.insert_front(key, value);
-            None
-        }
+        };
+        guard.insert_front(key, value);
+        None
     }
 
     pub fn insert_many<I>(&self, entries: I)
