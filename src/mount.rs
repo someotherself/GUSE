@@ -185,8 +185,8 @@ impl fuser::Filesystem for GitFsAdapter {
 
         config.set_max_readahead(128 * 1024).unwrap();
         config.set_max_write(4 * 1024 * 1024).unwrap();
-        config.set_max_background(1024).unwrap();
-        config.set_congestion_threshold(384).unwrap();
+        config.set_max_background(4096).unwrap();
+        config.set_congestion_threshold(1384).unwrap();
         config.add_capabilities(capabilities).unwrap();
         Ok(())
     }
@@ -319,7 +319,7 @@ impl fuser::Filesystem for GitFsAdapter {
             Err(e) => {
                 if let Some(ioe) = e.downcast_ref::<std::io::Error>() {
                     if ioe.kind() == std::io::ErrorKind::NotFound {
-                        return reply.error(ENOENT);
+                        reply.error(ENOENT)
                     } else {
                         error!(e = %e, "UNLINK");
                         reply.error(errno_from_anyhow(&e));
@@ -344,7 +344,7 @@ impl fuser::Filesystem for GitFsAdapter {
             Err(e) => {
                 if let Some(ioe) = e.downcast_ref::<std::io::Error>() {
                     if ioe.kind() == std::io::ErrorKind::NotFound {
-                        return reply.error(ENOENT);
+                        reply.error(ENOENT)
                     } else {
                         error!(e = %e, "RMDIR");
                         reply.error(errno_from_anyhow(&e));
