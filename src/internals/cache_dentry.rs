@@ -215,8 +215,6 @@ where
         index
     }
 
-    // TODO: Value could be missing (maybe?)
-    #[allow(dead_code)]
     fn peek(&self, id: NodeId) -> Option<Dentry> {
         if let Some(entry) = self.nodes.get(id).and_then(Option::as_ref) {
             return Some(entry.value.clone());
