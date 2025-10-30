@@ -183,7 +183,7 @@ pub fn open_vfile(fs: &GitFs, ino: Inodes, read: bool, write: bool) -> anyhow::R
     }
 }
 
-/// Saved the file in the vfile_entry and returns the size of the content
+/// Saves the file in the vfile_entry and returns the size of the content
 pub fn create_vfile_entry(fs: &GitFs, ino: VirtualIno) -> anyhow::Result<u64> {
     let metadata = fs.get_builctx_metadata(ino.to_norm())?;
     let res = classify_inode(&metadata)?;
