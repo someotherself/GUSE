@@ -157,6 +157,7 @@ pub struct Handle {
     write: bool,
 }
 
+/// Used by `Handle` to hold various data, like files/blobs and directory entries (readdir)
 #[derive(Clone)]
 pub enum SourceTypes {
     RealFile(Arc<File>),
@@ -164,8 +165,15 @@ pub enum SourceTypes {
         oid: Oid,
         data: Arc<Vec<u8>>,
     },
+    /// Created by opendir, populated readdir with directory entries
     DirSnapshot {
         entries: Arc<Mutex<DirectoryStreamCookie>>,
+    },
+    /// Created and populated by opendir when opening a blob file as a vdir. Used by readdir_vdir
+    ///
+    /// Bash example: cd src/main.rs@
+    FileCommits {
+        entries: BTreeMap<OsString, (u64, ObjectAttr)>,
     },
     Closed,
 }
@@ -175,12 +183,14 @@ pub enum SourceTypes {
 /// These files are made usign commit data.
 /// Data generated during getattr/lookup, served during open/read, deleted at release.
 ///
-/// To read the files correctly, getattr and lookup needs the content size
+/// To read the files correctly, getattr and lookup need the content file size
+#[derive(Clone)]
 enum VFile {
     Month,
     Commit,
 }
 
+#[derive(Clone)]
 struct VFileEntry {
     kind: VFile,
     len: u64,
