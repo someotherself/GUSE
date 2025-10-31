@@ -483,8 +483,7 @@ fn test_rename_live_source_missing() -> anyhow::Result<()> {
                 .unwrap_err();
             let msg = format!("{err:#}");
             assert!(
-                msg.contains("Source does not exist")
-                    | msg.contains("Source i_do_not_exist does not exist")
+                msg.contains("Source does not exist") | msg.contains("No such file or directory")
             );
 
             Ok(())

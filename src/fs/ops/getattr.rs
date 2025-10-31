@@ -6,7 +6,11 @@ use crate::{
 };
 
 pub fn getattr_live_dir(fs: &GitFs, ino: NormalIno) -> anyhow::Result<FileAttr> {
-    fs.refresh_metadata_from_disk(ino) // TODO: Update DB?
+    if let DbReturn::Found { value: attr } = fs.get_metadata(ino.to_norm_u64())? {
+        Ok(attr)
+    } else {
+        bail!(std::io::Error::from_raw_os_error(libc::ENOENT))
+    }
 }
 
 pub fn getattr_git_dir(fs: &GitFs, ino: NormalIno) -> anyhow::Result<FileAttr> {

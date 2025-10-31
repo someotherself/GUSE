@@ -33,6 +33,7 @@ pub fn rmdir_git(fs: &GitFs, parent: NormalIno, name: &OsStr) -> anyhow::Result<
         let session = repo.get_or_init_build_session(commit_oid, build_root)?;
         session.finish_path(fs, parent)?.join(name)
     };
+    // TODO: Check open count before rename.
     rename_to_trash(fs, &from, name)?;
     fs.set_entry_negative(parent, name)?;
     {

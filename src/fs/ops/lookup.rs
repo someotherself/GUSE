@@ -82,13 +82,7 @@ pub fn lookup_live(
 ) -> anyhow::Result<Option<FileAttr>> {
     match fs.get_metadata_by_name(parent, name)? {
         DbReturn::Found { value } => Ok(Some(value)),
-        DbReturn::Missing | DbReturn::Negative => {
-            fs::ops::readdir::readdir_live_dir(fs, parent)?;
-            match fs.get_metadata_by_name(parent, name)? {
-                DbReturn::Found { value } => Ok(Some(value)),
-                DbReturn::Missing | DbReturn::Negative => Ok(None),
-            }
-        }
+        DbReturn::Missing | DbReturn::Negative => Ok(None),
     }
 }
 

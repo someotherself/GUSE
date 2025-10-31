@@ -302,10 +302,16 @@ where
         else {
             return DbReturn::Missing;
         };
+        let Some(dentry) = guard.peek(id) else {
+            return DbReturn::Missing;
+        };
+        if !dentry.is_active {
+            return DbReturn::Negative;
+        }
 
         guard.unlink(id);
         guard.push_front(id);
-        guard.peek(id).into()
+        DbReturn::Found { value: dentry }
     }
 
     pub fn insert(&self, value: Dentry) -> Option<Dentry> {

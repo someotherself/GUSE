@@ -1,7 +1,4 @@
-use std::ffi::OsString;
-
 use anyhow::bail;
-use libc::EPERM;
 
 use crate::fs::builds::BuildOperationCtx;
 use crate::fs::fileattr::{FileAttr, StorageNode};
@@ -82,7 +79,7 @@ pub fn mkdir_git(
     create_attr: CreateFileAttr,
 ) -> anyhow::Result<FileAttr> {
     let Some(ctx) = BuildOperationCtx::new(fs, parent)? else {
-        bail!(std::io::Error::from_raw_os_error(EPERM))
+        bail!(std::io::Error::from_raw_os_error(libc::EPERM))
     };
     let dir_path = ctx.path().join(name);
 
@@ -106,10 +103,6 @@ pub fn mkdir_git(
         ino: new_ino,
         off: 0,
         data: Vec::new(),
-    });
-    let _ = fs.notifier.try_send(InvalMsg::Entry {
-        parent: parent.to_norm_u64(),
-        name: OsString::from(name),
     });
     let _ = fs.notifier.try_send(InvalMsg::Inode {
         ino: parent.to_norm_u64(),

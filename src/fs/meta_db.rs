@@ -600,7 +600,7 @@ impl MetaDb {
                 r#"
                 SELECT parent_inode
                 FROM dentries
-                WHERE target_inode = ?1
+                WHERE target_inode = ?1 AND is_active = 1
                 ORDER BY parent_inode
                 LIMIT 1
                 "#,
@@ -620,7 +620,7 @@ impl MetaDb {
             r#"
             SELECT parent_inode
             FROM dentries
-            WHERE target_inode = ?1
+            WHERE target_inode = ?1 AND is_active = 1
             ORDER BY parent_inode
             "#,
         )?;
@@ -756,10 +756,7 @@ impl MetaDb {
             .map_err(|_| anyhow!("child_ino out of range: {}", child_i64))?;
 
         if rows.next()?.is_some() {
-            bail!(
-                "DB invariant violation: multiple dentries for ({parent}, {})",
-                name.display()
-            );
+            bail!("Multiple dentries for ({parent}, {})", name.display());
         }
 
         Ok(DbReturn::Found { value: child })
@@ -904,7 +901,7 @@ impl MetaDb {
     pub fn get_name_from_db(conn: &rusqlite::Connection, ino: u64) -> anyhow::Result<OsString> {
         let mut stmt = conn.prepare(
             r#"
-            SELECT name
+            SELECT name, is_active
             FROM dentries
             WHERE target_inode = ?1
             "#,
@@ -1021,7 +1018,7 @@ impl MetaDb {
             r#"
             SELECT parent_inode, name
             FROM dentries
-            WHERE target_inode = ?1
+            WHERE target_inode = ?1 AND is_active = 1
             LIMIT 1
             "#,
         )?;
@@ -1038,7 +1035,7 @@ impl MetaDb {
             target_ino,
             parent_ino,
             target_name,
-            is_active: true, // TODO: Fix the hard coding
+            is_active: true,
         })
     }
 
@@ -1531,7 +1528,7 @@ impl MetaDb {
             m.inode_flag, -- 2
             (SELECT d.name
                FROM dentries d
-               WHERE d.target_inode = m.inode
+               WHERE d.target_inode = m.inode AND d.is_active = 1
                LIMIT 1) AS name -- 3
         FROM inode_map m
         WHERE m.inode = ?1

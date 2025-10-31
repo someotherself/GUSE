@@ -1,11 +1,11 @@
 use std::ffi::{OsStr, OsString};
 
-use anyhow::{anyhow, bail};
+use anyhow::bail;
 
 use crate::{
     fs::{
-        self, FileAttr, GitFs,
-        fileattr::{FileType, InoFlag, StorageNode, dir_attr, file_attr},
+        GitFs,
+        fileattr::{InoFlag, StorageNode},
         meta_db::DbReturn,
     },
     inodes::NormalIno,
@@ -25,18 +25,22 @@ pub fn rename_live(
         bail!(format!("New parent {} not allowed", new_parent));
     }
 
-    let src_attr = fs::ops::lookup::lookup_live(fs, old_parent, old_name)?
-        .ok_or_else(|| anyhow!("Source does not exist"))?;
+    let src_attr = match fs.get_metadata_by_name(old_parent, old_name)? {
+        DbReturn::Found { value } => value,
+        _ => bail!(std::io::Error::from_raw_os_error(libc::ENOENT)),
+    };
 
     let mut dest_exists = false;
 
-    if let Some(dest_attr) = fs::ops::lookup::lookup_live(fs, new_parent, new_name)? {
+    if let Ok(res) = fs.get_metadata_by_name(new_parent, new_name)
+        && let DbReturn::Found { value } = res
+    {
         dest_exists = true;
 
-        if dest_attr.kind != src_attr.kind {
+        if value.kind != src_attr.kind {
             bail!("Source and destination are not the same type")
         }
-    }
+    };
 
     let src = fs.build_full_path(old_parent)?.join(old_name);
     let dest = fs.build_full_path(new_parent)?.join(new_name);
@@ -55,10 +59,7 @@ pub fn rename_live(
         bail!("Invalid location")
     };
 
-    let mut new_attr: FileAttr = match src_attr.kind {
-        FileType::Directory => dir_attr(ino_flag).into(),
-        _ => file_attr(ino_flag).into(),
-    };
+    let mut new_attr = GitFs::attr_from_path(ino_flag, &dest.clone())?;
     new_attr.ino = src_attr.ino;
 
     let node = StorageNode {
