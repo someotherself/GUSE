@@ -1,5 +1,4 @@
 use std::{
-    collections::btree_map::Entry,
     ffi::{OsStr, OsString},
     path::{Path, PathBuf},
     sync::Arc,
@@ -474,89 +473,24 @@ fn objects_to_dir_entries(
     Ok(dir_entries)
 }
 
-fn log_entries(
-    fs: &GitFs,
-    ino: u64,
-    origin_oid: Oid,
-) -> anyhow::Result<Vec<(OsString, (u64, ObjectAttr))>> {
-    let repo = fs.get_repo(ino)?;
-    let entries = repo.blob_history_objects(origin_oid)?;
-
-    let mut log_entries: Vec<(OsString, (u64, ObjectAttr))> = vec![];
-    for e in entries {
-        let new_ino = fs.next_inode_checked(ino)?;
-        log_entries.push((e.name.clone(), (new_ino, e)));
-    }
-    Ok(log_entries)
-}
-
 pub fn read_virtual_dir(fs: &GitFs, ino: VirtualIno) -> anyhow::Result<Vec<DirectoryEntry>> {
     let repo = fs.get_repo(u64::from(ino))?;
+
+    let mut dir_entries = vec![];
+
     let v_node_opt = repo.with_state(|s| s.vdir_cache.get(&ino).cloned());
-    drop(repo);
     let v_node = match v_node_opt {
         Some(o) => o,
         None => bail!("Oid missing"),
     };
-    let origin_oid = v_node.oid;
-    let is_empty = v_node.log.is_empty();
-
-    let mut dir_entries = vec![];
-    let parent = fs.get_path_from_db(ino.to_norm())?;
-    let file_ext = match parent.extension().unwrap_or_default().to_str() {
-        Some(e) => format!(".{e}"),
-        None => String::new(),
-    };
-
-    if is_empty {
-        let mut nodes: Vec<StorageNode> = vec![];
-        let log_entries = log_entries(fs, ino.to_norm_u64(), origin_oid)?;
-        let repo = fs.get_repo(u64::from(ino))?;
-        let v_node_opt = repo.with_state(|s| s.vdir_cache.get(&ino).cloned());
-        drop(repo);
-        let mut v_node = match v_node_opt {
-            Some(o) => o,
-            None => bail!("Oid missing"),
-        };
-        for (name, entry) in log_entries {
-            let name = OsString::from(format!("{}{file_ext}", name.display()));
-            if let Entry::Vacant(e) = v_node.log.entry(name.clone()) {
-                e.insert(entry.clone());
-                let attr =
-                    fs.object_to_file_attr(entry.0, &entry.1.clone(), InoFlag::InsideSnap)?;
-                nodes.push(StorageNode {
-                    parent_ino: ino.to_norm_u64(),
-                    name: name.clone(),
-                    attr,
-                });
-            }
-            dir_entries.push(DirectoryEntry::new(
-                entry.0,
-                entry.1.oid,
-                name,
-                FileType::RegularFile,
-                entry.1.git_mode,
-            ));
-        }
-        fs.write_inodes_to_db(nodes)?;
-    } else {
-        let repo = fs.get_repo(u64::from(ino))?;
-        let v_node_opt = repo.with_state(|s| s.vdir_cache.get(&ino).cloned());
-        drop(repo);
-        let v_node = match v_node_opt {
-            Some(o) => o,
-            None => bail!("Oid missing"),
-        };
-        for (ino, entry) in v_node.log.values() {
-            let name = format!("{}{file_ext}", entry.name.display());
-            dir_entries.push(DirectoryEntry::new(
-                *ino,
-                entry.oid,
-                OsString::from(name),
-                FileType::RegularFile,
-                entry.git_mode,
-            ));
-        }
+    for (name, (ino, entry)) in v_node.log.iter() {
+        dir_entries.push(DirectoryEntry::new(
+            *ino,
+            entry.oid,
+            name.clone(),
+            FileType::RegularFile,
+            entry.git_mode,
+        ));
     }
     Ok(dir_entries)
 }

@@ -6,7 +6,7 @@ use std::path::Path;
 use std::sync::{Arc, Mutex, OnceLock, RwLock};
 use std::time::{Duration, UNIX_EPOCH};
 use std::{
-    collections::{BTreeMap, HashMap, HashSet, btree_map::Entry},
+    collections::{BTreeMap, HashMap, HashSet},
     path::PathBuf,
     sync::atomic::{AtomicU64, Ordering},
     time::SystemTime,
@@ -27,7 +27,7 @@ use crate::fs::meta_db::{DbReturn, DbWriteMsg, MetaDb, oneshot, set_conn_pragmas
 use crate::fs::ops::readdir::{
     BuildCtxMetadata, DirectoryEntry, DirectoryEntryPlus, DirectoryStreamCookie,
 };
-use crate::fs::repo::{GitRepo, State, VirtualNode};
+use crate::fs::repo::{GitRepo, State};
 use crate::inodes::{Inodes, NormalIno, VirtualIno};
 use crate::internals::cache::LruCache;
 use crate::internals::cache_dentry::DentryLru;
@@ -169,12 +169,6 @@ pub enum SourceTypes {
     DirSnapshot {
         entries: Arc<Mutex<DirectoryStreamCookie>>,
     },
-    /// Created and populated by opendir when opening a blob file as a vdir. Used by readdir_vdir
-    ///
-    /// Bash example: cd src/main.rs@
-    FileCommits {
-        entries: BTreeMap<OsString, (u64, ObjectAttr)>,
-    },
     Closed,
 }
 
@@ -231,12 +225,7 @@ impl SourceTypes {
         match self {
             Self::RealFile(file) => Ok(file.metadata()?.size()),
             Self::RoBlob { oid: _, data } => Ok(data.len() as u64),
-            Self::DirSnapshot { entries: _ } => {
-                bail!(std::io::Error::from_raw_os_error(libc::EROFS))
-            }
-            Self::Closed => {
-                bail!(std::io::Error::from_raw_os_error(libc::EROFS))
-            }
+            _ => bail!(std::io::Error::from_raw_os_error(libc::EROFS)),
         }
     }
 }
@@ -255,17 +244,14 @@ impl FileExt for SourceTypes {
                 buf[..src.len()].copy_from_slice(src);
                 Ok(src.len())
             }
-            Self::DirSnapshot { entries: _ } => Err(std::io::Error::from_raw_os_error(libc::EROFS)),
-            Self::Closed => Err(std::io::Error::from_raw_os_error(libc::EROFS)),
+            _ => Err(std::io::Error::from_raw_os_error(libc::EROFS)),
         }
     }
 
     fn write_at(&self, buf: &[u8], offset: u64) -> std::io::Result<usize> {
         match self {
             Self::RealFile(file) => file.write_at(buf, offset),
-            Self::RoBlob { oid: _, data: _ } => Err(std::io::Error::from_raw_os_error(libc::EROFS)),
-            Self::DirSnapshot { entries: _ } => Err(std::io::Error::from_raw_os_error(libc::EROFS)),
-            Self::Closed => Err(std::io::Error::from_raw_os_error(libc::EROFS)),
+            _ => Err(std::io::Error::from_raw_os_error(libc::EROFS)),
         }
     }
 }
@@ -766,9 +752,6 @@ impl GitFs {
         if write && self.read_only {
             bail!("Filesystem is in read only");
         }
-        if self.is_dir(ino)? {
-            bail!("Target is a directory");
-        }
 
         let parent = self.get_single_parent(ino.to_u64_n())?;
         let par_mode = self.get_mode_from_db(parent.into())?;
@@ -838,8 +821,18 @@ impl GitFs {
         match ctx? {
             FsOperationContext::Root => ops::opendir::opendir_root(self, ino.to_norm()),
             FsOperationContext::RepoDir => ops::opendir::opendir_repo(self, ino.to_norm()),
-            FsOperationContext::InsideLiveDir => ops::opendir::opendir_live(self, ino.to_norm()),
-            FsOperationContext::InsideGitDir => ops::opendir::opendir_git(self, ino.to_norm()),
+            FsOperationContext::InsideLiveDir => match ino {
+                Inodes::NormalIno(_) => ops::opendir::opendir_live(self, ino.to_norm()),
+                Inodes::VirtualIno(_) => {
+                    ops::opendir::opendir_vdir_file_commits(self, ino.to_virt())
+                }
+            },
+            FsOperationContext::InsideGitDir => match ino {
+                Inodes::NormalIno(_) => ops::opendir::opendir_git(self, ino.to_norm()),
+                Inodes::VirtualIno(_) => {
+                    ops::opendir::opendir_vdir_file_commits(self, ino.to_virt())
+                }
+            },
         }
     }
 
@@ -1012,7 +1005,7 @@ impl GitFs {
                     let attr = ops::getattr::getattr_live_dir(self, ino.to_norm())?;
                     let ino: Inodes = attr.ino.into();
                     match attr.kind {
-                        // If original is a file, create a virtual directory
+                        // If original is a file, create a virtual directory attr
                         // Used when trying to cd into a file
                         FileType::RegularFile => self.prepare_virtual_folder(attr),
                         // If original is a directory, create a virtual file
@@ -1330,7 +1323,6 @@ impl GitFs {
         // Check if name if a virtual dir
         // If not, check if the parent is a virtual dir
         // If not, treat as regular
-        // If the parent a virtual directory
 
         let spec = NameSpec::parse(name);
         let name = if spec.is_virtual() { spec.name } else { name };
@@ -1357,13 +1349,14 @@ impl GitFs {
                 Ok(Some(attr))
             }
             FsOperationContext::InsideLiveDir => {
-                // If the target has is a virtual, either File or Dir
+                // If the target is a virtual File or Dir
                 if spec.is_virtual() {
                     let Some(attr) = ops::lookup::lookup_live(self, parent.to_norm(), name)? else {
                         return Ok(None);
                     };
                     let ino: Inodes = attr.ino.into();
                     match attr.kind {
+                        // User is trying to cd into a file. Prepare an attr for the virt dir
                         FileType::RegularFile => {
                             return Ok(Some(self.prepare_virtual_folder(attr)?));
                         }
@@ -1373,7 +1366,7 @@ impl GitFs {
                         _ => bail!("Invalid attr"),
                     }
                 }
-                // If the parent has is a virtual. Only supports dir parents
+                // If the parent dir is virtual
                 match parent {
                     Inodes::NormalIno(_) => {
                         let Some(attr) = ops::lookup::lookup_live(self, parent.to_norm(), name)?
@@ -1402,13 +1395,7 @@ impl GitFs {
                     }
                 }
                 match parent {
-                    Inodes::NormalIno(_) => {
-                        let Some(attr) = ops::lookup::lookup_git(self, parent.to_norm(), name)?
-                        else {
-                            return Ok(None);
-                        };
-                        Ok(Some(attr))
-                    }
+                    Inodes::NormalIno(_) => ops::lookup::lookup_git(self, parent.to_norm(), name),
                     Inodes::VirtualIno(_) => ops::lookup::lookup_vdir(self, parent.to_virt(), name),
                 }
             }
@@ -1447,54 +1434,14 @@ impl GitFs {
     }
 
     pub fn prepare_virtual_folder(&self, attr: FileAttr) -> anyhow::Result<FileAttr> {
-        let repo = self.get_repo(attr.ino)?;
         let mut new_attr = attr;
-        let ino: Inodes = attr.ino.into();
-        let v_ino = ino.to_u64_v();
-
-        // Check if the entry is alread saved in vdir_cache
-        {
-            let cached = repo.with_state(|s| s.vdir_cache.get(&ino.to_virt()).cloned());
-
-            if let Some(entry) = cached {
-                new_attr.ino = entry.ino;
-                new_attr.perm = 0o555;
-                new_attr.size = 0;
-                new_attr.kind = FileType::Directory;
-                new_attr.nlink = 2;
-                debug_assert!(self.is_virtual(new_attr.ino));
-                return Ok(new_attr);
-            }
-        }
-
-        // If not, create it and save the VirtualNode in vdir_cache
-        {
-            repo.with_state_mut(|s| {
-                match s.vdir_cache.entry(ino.to_virt()) {
-                    Entry::Occupied(e) => {
-                        // Another thread alread inserted an entry
-                        let v = e.get();
-                        new_attr.ino = v.ino;
-                    }
-                    Entry::Vacant(slot) => {
-                        let v_node = VirtualNode {
-                            real: ino.to_u64_n(),
-                            ino: v_ino,
-                            oid: attr.oid,
-                            log: BTreeMap::new(),
-                        };
-                        slot.insert(v_node);
-                        new_attr.ino = v_ino;
-                    }
-                }
-            });
-            new_attr.kind = FileType::Directory;
-            new_attr.perm = 0o555;
-            new_attr.size = 0;
-            new_attr.nlink = 2;
-
-            Ok(new_attr)
-        }
+        let v_ino: VirtualIno = attr.ino.into();
+        new_attr.ino = v_ino.to_virt_u64();
+        new_attr.perm = 0o555;
+        new_attr.size = 0;
+        new_attr.kind = FileType::Directory;
+        new_attr.nlink = 2;
+        Ok(new_attr)
     }
 }
 
@@ -2387,17 +2334,18 @@ impl GitFs {
     }
 
     fn inode_exists(&self, ino: u64) -> anyhow::Result<bool> {
-        let repo = self.get_repo(ino)?;
+        let ino: Inodes = ino.into();
+        let repo = self.get_repo(ino.to_u64_n())?;
         if repo.attr_cache.get(&ino).is_found() {
             return Ok(true);
         }
-        let repo_id = GitFs::ino_to_repo_id(ino);
+        let repo_id = GitFs::ino_to_repo_id(ino.to_u64_n());
         let repo_db = self
             .conn_list
             .get(&repo_id)
             .ok_or_else(|| anyhow::anyhow!("no db"))?;
         let conn = repo_db.ro_pool.get()?;
-        MetaDb::inode_exists(&conn, ino)
+        MetaDb::inode_exists(&conn, ino.to_u64_n())
     }
 
     pub fn get_ino_flag_from_db(&self, ino: NormalIno) -> anyhow::Result<InoFlag> {
