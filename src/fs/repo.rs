@@ -29,9 +29,9 @@ pub struct GitRepo {
     pub state: RwLock<State>,
     /// LruCache<target_ino, FileAttr>
     pub attr_cache: LruCache<u64, FileAttr>,
-    /// LruCache<(parent, target_name), Dentry>
+    /// LruCache<Dentry>
     pub dentry_cache: DentryLru,
-    /// LruCache<ino, >
+    /// LruCache<ino, SourceTypes::RealFile>
     pub file_cache: LruCache<u64, SourceTypes>,
 }
 
@@ -785,10 +785,13 @@ impl GitRepo {
 }
 
 /// If the name supplied follows the format:
-///      --> github.tokio-rs.tokio.git <br>
-/// It will parse it and return the fetch url. <br>
+/// github.tokio-rs.tokio.git
+/// 
+/// It will parse it and return the fetch url.
+/// 
 /// Otherwise, it will return None
-/// This will signal that we create a normal folder <br>
+/// 
+/// This will signal that we create a normal folder
 pub fn parse_mkdir_url(name: &str) -> anyhow::Result<Option<(String, String)>> {
     if (!name.starts_with("github.") || !name.starts_with("gitlab.")) && !name.ends_with(".git") {
         return Ok(None);
