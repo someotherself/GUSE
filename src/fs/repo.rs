@@ -16,7 +16,7 @@ use std::{
 };
 
 use crate::{
-    fs::{ObjectAttr, SourceTypes, builds::BuildSession, fileattr::FileAttr},
+    fs::{GitFs, LIVE_FOLDER, ObjectAttr, SourceTypes, builds::BuildSession, fileattr::FileAttr},
     inodes::VirtualIno,
     internals::{cache::LruCache, cache_dentry::DentryLru},
 };
@@ -603,7 +603,6 @@ impl GitRepo {
 
         let mut diff_opts = git2::DiffOptions::new();
         diff_opts.include_typechange(true);
-        // Do NOT pathspec-limit here; it can hide the "old" side needed for rename pairing.
 
         let mut diff =
             repo.diff_tree_to_tree(Some(parent_tree), Some(tree), Some(&mut diff_opts))?;
@@ -752,6 +751,36 @@ impl GitRepo {
                 Ok(session)
             }
         })
+    }
+
+    pub fn print_commit_summary(fs: &GitFs, repo_id: u16, oid: Oid) -> anyhow::Result<Vec<u8>> {
+        let repo = fs
+            .repos_list
+            .get(&repo_id)
+            .ok_or_else(|| anyhow!("Repo name not found"))?;
+
+        let repo_root = std::fs::canonicalize(fs.repos_dir.join(&repo.repo_dir))?;
+        let live_path = repo_root.join(LIVE_FOLDER);
+
+        let output = std::process::Command::new("git")
+            .arg("-C")
+            .arg(&repo_root)
+            .arg("--work-tree")
+            .arg(&live_path)
+            .arg("show")
+            .arg("--patch")
+            .arg("--color=always")
+            .arg(oid.to_string())
+            .output()?;
+
+        if !output.status.success() {
+            return Err(anyhow!(
+                "git failed: {}",
+                String::from_utf8_lossy(&output.stderr)
+            ));
+        }
+
+        Ok(output.stdout)
     }
 }
 

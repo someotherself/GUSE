@@ -13,6 +13,7 @@ use crate::{
         GitFs, Handle, SourceTypes, VFileEntry,
         fileattr::{InoFlag, ObjectAttr},
         ops::readdir::{DirCase, build_dot_git_path, classify_inode},
+        repo::GitRepo,
     },
     inodes::{Inodes, NormalIno, VirtualIno},
     namespec,
@@ -161,12 +162,8 @@ pub fn open_vfile(fs: &GitFs, ino: Inodes, read: bool, write: bool) -> anyhow::R
             };
             if contents.is_none() {
                 let repo = fs.get_repo(ino.to_u64_n())?;
-                let summary = repo.with_repo(|r| -> anyhow::Result<String> {
-                    let commit = r.find_commit(oid)?;
-                    let summary = commit.summary().unwrap_or_default().to_owned();
-                    Ok(summary)
-                })?;
-                contents = Some(Arc::new(Vec::from(summary.as_bytes())));
+                let summary = GitRepo::print_commit_summary(fs, repo.repo_id, oid)?;
+                contents = Some(Arc::new(summary));
             }
             let data = contents.ok_or_else(|| anyhow!("No data"))?;
             let blob_file = SourceTypes::RoBlob {
@@ -204,15 +201,12 @@ pub fn create_vfile_entry(fs: &GitFs, ino: VirtualIno) -> anyhow::Result<u64> {
             };
             (entry, len)
         }
+        // User is in a MONTH folder and runs a git summary on a snap folder
+        // Example: cat Snap001_0c24236@
         DirCase::Commit { oid } => {
             let repo = fs.get_repo(ino.into())?;
-            let summary = repo.with_repo(|r| -> anyhow::Result<String> {
-                let commit = r.find_commit(oid)?;
-                let summary = commit.summary().unwrap_or_default().to_owned();
-                Ok(summary)
-            })?;
+            let len = GitRepo::print_commit_summary(fs, repo.repo_id, oid)?.len() as u64;
             let data = OnceLock::new();
-            let len = summary.len() as u64;
             let entry = VFileEntry {
                 kind: crate::fs::VFile::Commit,
                 len,
