@@ -152,6 +152,9 @@ pub fn open_vfile(fs: &GitFs, ino: Inodes, read: bool, write: bool) -> anyhow::R
             };
             fs.handles.open(handle)
         }
+        // User is in a MONTH folder and runs a git summary on a snap folder
+        // Example: cat Snap001_0c24236@
+        // Data gets saved into the file
         DirCase::Commit { oid } => {
             let mut contents = {
                 let map = fs
@@ -203,6 +206,7 @@ pub fn create_vfile_entry(fs: &GitFs, ino: VirtualIno) -> anyhow::Result<u64> {
         }
         // User is in a MONTH folder and runs a git summary on a snap folder
         // Example: cat Snap001_0c24236@
+        // Only save the length of the data at this point
         DirCase::Commit { oid } => {
             let repo = fs.get_repo(ino.into())?;
             let len = GitRepo::print_commit_summary(fs, repo.repo_id, oid)?.len() as u64;
