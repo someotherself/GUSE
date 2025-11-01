@@ -37,10 +37,14 @@ pub struct GitRepo {
 
 pub struct State {
     pub head: Option<Oid>,
-    /// i64 -> commit_time -> seconds since EPOCH
+    /// i64 -> commit_time -> seconds since EPOCH. Used to create MONTH and Snap folders
     ///
     /// Vec<Oid> -> Vec<commit_oid> -> In case commits are made at the same time
     pub snapshots: BTreeMap<i64, Vec<Oid>>,
+    /// Used to connect a commit to it's Snap folder
+    /// 
+    /// <commit oid, Filename of MONTH folder>
+    pub commits: BTreeMap<Oid, String>,
     /// Used inodes to prevent reading from DB
     pub res_inodes: HashSet<u64>,
     /// key: inode of the virtual directory

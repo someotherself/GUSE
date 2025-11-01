@@ -367,6 +367,7 @@ impl GitFs {
         let state: State = State {
             head: None,
             snapshots: BTreeMap::new(),
+            commits: BTreeMap::new(),
             res_inodes: HashSet::new(),
             vdir_cache: BTreeMap::new(),
             build_sessions: HashMap::new(),
@@ -412,6 +413,7 @@ impl GitFs {
         let state: State = State {
             head: None,
             snapshots: BTreeMap::new(),
+            commits: BTreeMap::new(),
             res_inodes: HashSet::new(),
             vdir_cache: BTreeMap::new(),
             build_sessions: HashMap::new(),
