@@ -25,7 +25,7 @@ impl<K: Debug, V> Entry<K, V> {
     }
 }
 
-pub struct Inner<K: Debug, V: Clone, S = ahash::RandomState> {
+pub struct Inner<K: Debug, V: Clone, S = std::hash::DefaultHasher> {
     map: HashMap<K, NodeId, S>,
     nodes: Vec<Option<Entry<K, V>>>,
     free: Vec<NodeId>,
@@ -188,7 +188,7 @@ where
     }
 }
 
-pub struct LruCache<K: Debug, V: Clone, S = ahash::RandomState> {
+pub struct LruCache<K: Debug, V: Clone, S = std::hash::RandomState> {
     list: RwLock<Inner<K, V, S>>,
 }
 

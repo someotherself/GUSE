@@ -27,7 +27,7 @@ impl Entry {
     }
 }
 
-pub struct DentryInner<S = ahash::RandomState> {
+pub struct DentryInner<S = std::hash::RandomState> {
     target_ino_map: HashMap<u64, Vec<NodeId>, S>,
     parent_ino_name_map: HashMap<(u64, OsString), NodeId, S>,
     target_ino_name_map: HashMap<(u64, OsString), NodeId, S>,
@@ -223,7 +223,7 @@ where
     }
 }
 
-pub struct DentryLru<S = ahash::RandomState> {
+pub struct DentryLru<S = std::hash::RandomState> {
     list: RwLock<DentryInner<S>>,
 }
 

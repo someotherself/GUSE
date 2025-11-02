@@ -49,7 +49,7 @@ pub struct State {
     pub build_sessions: HashMap<Oid, Arc<BuildSession>>,
 }
 
-/// Insert/get a node during getattr/lookup
+/// Create the Virtual Node during opendir
 ///
 /// Fill log during readdir
 #[derive(Debug, Clone)]
