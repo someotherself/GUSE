@@ -133,7 +133,7 @@ pub fn new_repo_db<P: AsRef<Path>>(db_path: P) -> anyhow::Result<std::sync::Arc<
         .with_init(|c| set_conn_pragmas(c));
 
     let ro_pool = Pool::builder()
-        .max_size(12_u32)
+        .max_size(num_cpus::get() as u32 * 2)
         .min_idle(Some(2))
         .build(ro_mgr)?;
 

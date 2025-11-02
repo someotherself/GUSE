@@ -786,11 +786,11 @@ impl GitRepo {
 
 /// If the name supplied follows the format:
 /// github.tokio-rs.tokio.git
-/// 
+///
 /// It will parse it and return the fetch url.
-/// 
+///
 /// Otherwise, it will return None
-/// 
+///
 /// This will signal that we create a normal folder
 pub fn parse_mkdir_url(name: &str) -> anyhow::Result<Option<(String, String)>> {
     if (!name.starts_with("github.") || !name.starts_with("gitlab.")) && !name.ends_with(".git") {
