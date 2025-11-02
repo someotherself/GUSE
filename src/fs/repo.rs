@@ -16,7 +16,11 @@ use std::{
 };
 
 use crate::{
-    fs::{GitFs, LIVE_FOLDER, ObjectAttr, SourceTypes, builds::BuildSession, fileattr::FileAttr},
+    fs::{
+        GitFs, LIVE_FOLDER, ObjectAttr, SourceTypes,
+        builds::BuildSession,
+        fileattr::FileAttr,
+    },
     inodes::VirtualIno,
     internals::{cache::LruCache, cache_dentry::DentryLru},
 };
@@ -42,7 +46,7 @@ pub struct State {
     /// Vec<Oid> -> Vec<commit_oid> -> In case commits are made at the same time
     pub snapshots: BTreeMap<i64, Vec<Oid>>,
     /// Used to connect a commit to it's Snap folder
-    /// 
+    ///
     /// <commit oid, Filename of MONTH folder>
     pub commits: BTreeMap<Oid, String>,
     /// Used inodes to prevent reading from DB
@@ -51,6 +55,14 @@ pub struct State {
     pub vdir_cache: BTreeMap<VirtualIno, VirtualNode>,
     /// Oid = Commit Oid
     pub build_sessions: HashMap<Oid, Arc<BuildSession>>,
+    /// MONTH folders. Refreshed during refresh_snapshots
+    ///
+    /// <folder name, objectattr>
+    pub months_folders: BTreeMap<OsString, ObjectAttr>,
+    /// Map of the Snap and Month folders
+    ///
+    /// <folder name, (MONTH name, Snap name)>
+    pub snaps_map: HashMap<Oid, (OsString, OsString)>,
 }
 
 /// Create the Virtual Node during opendir
@@ -119,6 +131,24 @@ impl GitRepo {
             }
             Ok(())
         })?;
+
+        // Save the MONTH folders into the State
+        let months_map = self.month_folders()?;
+        let months_names = months_map
+            .iter()
+            .map(|e| e.0.clone())
+            .collect::<Vec<OsString>>();
+        self.with_state_mut(|s| s.months_folders = months_map);
+        for name in months_names {
+            let str_name = name
+                .to_str()
+                .ok_or_else(|| anyhow!("Not valid UTF-8 name"))?;
+            let snaps = self.month_oid(str_name)?;
+            for snap in snaps {
+                self.with_state_mut(|s| s.snaps_map.insert(snap.0, (name.clone(), snap.1)));
+            }
+        }
+
         Ok(())
     }
 
@@ -150,11 +180,8 @@ impl GitRepo {
         buckets
     }
 
-    pub fn month_folders(&self) -> anyhow::Result<Vec<ObjectAttr>> {
-        let mut out = Vec::new();
-
-        // Refresh snapshots
-        self.refresh_snapshots()?;
+    pub fn month_folders(&self) -> anyhow::Result<BTreeMap<OsString, ObjectAttr>> {
+        let mut out: BTreeMap<OsString, ObjectAttr> = BTreeMap::new();
 
         self.with_state(|s| {
             for secs in s.snapshots.keys() {
@@ -162,18 +189,21 @@ impl GitRepo {
                     .unwrap_or_else(|| chrono::DateTime::from_timestamp(0, 0).unwrap());
                 let folder_name = OsString::from(format!("{:04}-{:02}", dt.year(), dt.month()));
 
-                if out.iter().any(|attr: &ObjectAttr| attr.name == folder_name) {
+                if out.iter().any(|(_, attr)| attr.name == folder_name) {
                     continue;
                 }
 
-                out.push(ObjectAttr {
-                    name: folder_name,
-                    oid: Oid::zero(),
-                    kind: ObjectType::Tree,
-                    git_mode: 0o040000,
-                    size: 0,
-                    commit_time: git2::Time::new(*secs, 0),
-                });
+                out.insert(
+                    folder_name.clone(),
+                    ObjectAttr {
+                        name: folder_name,
+                        oid: Oid::zero(),
+                        kind: ObjectType::Tree,
+                        git_mode: 0o040000,
+                        size: 0,
+                        commit_time: git2::Time::new(*secs, 0),
+                    },
+                );
             }
         });
 
@@ -185,9 +215,36 @@ impl GitRepo {
         Some((y.parse().ok()?, m.parse().ok()?))
     }
 
+    /// Similar to month_commits, but only returns the Oid and folder name of each commit instead of ObjectAttr
+    fn month_oid(&self, month_key: &str) -> anyhow::Result<Vec<(Oid, OsString)>> {
+        let (year, month) =
+            Self::parse_month_key(month_key).ok_or_else(|| anyhow!("Invalid input"))?;
+
+        let mut out: Vec<(Oid, OsString)> = Vec::new();
+        let mut commit_num = 0;
+
+        self.with_state(|s| {
+            for (&secs_utc, oids) in &s.snapshots {
+                for commit_oid in oids {
+                    let dt = DateTime::from_timestamp(secs_utc, 0)
+                        .unwrap_or_else(|| DateTime::from_timestamp(0, 0).unwrap());
+
+                    if dt.year() != year || dt.month() != month {
+                        continue;
+                    }
+
+                    commit_num += 1;
+                    let folder_name =
+                        OsString::from(format!("Snap{commit_num:03}_{commit_oid:.7}"));
+
+                    out.push((*commit_oid, folder_name));
+                }
+            }
+        });
+        Ok(out)
+    }
+
     pub fn month_commits(&self, month_key: &str) -> anyhow::Result<Vec<ObjectAttr>> {
-        // let (year, month, day) =
-        //     Self::parse_day_key(day_key).ok_or_else(|| anyhow!("Invalid input"))?;
         let (year, month) =
             Self::parse_month_key(month_key).ok_or_else(|| anyhow!("Invalid input"))?;
 

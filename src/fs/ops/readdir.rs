@@ -102,6 +102,8 @@ pub fn readdir_root_dir(fs: &GitFs) -> anyhow::Result<Vec<DirectoryEntry>> {
     Ok(entries)
 }
 
+// We are in repo root. This should show:
+// . .. MONTH MONTH MONTH live build
 pub fn readdir_repo_dir(fs: &GitFs, parent: NormalIno) -> anyhow::Result<Vec<DirectoryEntry>> {
     let parent = parent.to_norm_u64();
     let repo_id = GitFs::ino_to_repo_id(parent);
@@ -143,12 +145,14 @@ pub fn readdir_repo_dir(fs: &GitFs, parent: NormalIno) -> anyhow::Result<Vec<Dir
 
     let object_entries = {
         let repo = fs.get_repo(parent)?;
-        repo.month_folders()?
+        // Refresh the snapshots every time we cd into repo root
+        repo.refresh_snapshots()?;
+        repo.with_state(|s| s.months_folders.clone())
     };
 
     let mut nodes: Vec<StorageNode> = vec![];
     if !object_entries.is_empty() {
-        for month in object_entries {
+        for (_, month) in object_entries {
             let dir_entry = match fs.exists_by_name(parent, &month.name)? {
                 DbReturn::Found { value: i } => DirectoryEntry::new(
                     i,
