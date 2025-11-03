@@ -1,9 +1,6 @@
 use anyhow::{Context, anyhow, bail};
 use chrono::{DateTime, Datelike};
-use git2::{
-    Commit, Delta, Direction, FileMode, ObjectType, Oid, Repository, Sort, Time, Tree,
-    TreeWalkResult,
-};
+use git2::{Commit, Delta, Direction, FileMode, ObjectType, Oid, Repository, Time, Tree};
 use parking_lot::{Mutex, RwLock};
 use std::{
     collections::{BTreeMap, HashMap, HashSet, hash_map::Entry},
@@ -16,11 +13,7 @@ use std::{
 };
 
 use crate::{
-    fs::{
-        GitFs, LIVE_FOLDER, ObjectAttr, SourceTypes,
-        builds::BuildSession,
-        fileattr::FileAttr,
-    },
+    fs::{GitFs, LIVE_FOLDER, ObjectAttr, SourceTypes, builds::BuildSession, fileattr::FileAttr},
     inodes::VirtualIno,
     internals::{cache::LruCache, cache_dentry::DentryLru},
 };
@@ -55,10 +48,10 @@ pub struct State {
     pub vdir_cache: BTreeMap<VirtualIno, VirtualNode>,
     /// Oid = Commit Oid
     pub build_sessions: HashMap<Oid, Arc<BuildSession>>,
-    /// MONTH folders. Refreshed during refresh_snapshots
-    ///
-    /// <folder name, objectattr>
-    pub months_folders: BTreeMap<OsString, ObjectAttr>,
+    // /// MONTH folders. Refreshed during refresh_snapshots
+    // ///
+    // /// <folder name, objectattr>
+    // pub months_folders: BTreeMap<OsString, ObjectAttr>,
     /// Map of the Snap and Month folders
     ///
     /// <folder name, (MONTH name, Snap name)>
@@ -138,7 +131,7 @@ impl GitRepo {
             .iter()
             .map(|e| e.0.clone())
             .collect::<Vec<OsString>>();
-        self.with_state_mut(|s| s.months_folders = months_map);
+        // self.with_state_mut(|s| s.months_folders = months_map);
         for name in months_names {
             let str_name = name
                 .to_str()
@@ -150,34 +143,6 @@ impl GitRepo {
         }
 
         Ok(())
-    }
-
-    pub fn months_from_cache(&self, use_offset: bool) -> BTreeMap<String, Vec<git2::Oid>> {
-        let mut buckets: BTreeMap<String, Vec<git2::Oid>> = BTreeMap::new();
-
-        self.with_state(|s| {
-            for (&secs, oids) in s.snapshots.iter() {
-                let adj = if use_offset {
-                    let t = self.with_repo(|r| {
-                        r.find_commit(oids[0])
-                            .ok()
-                            .map(|c| c.time().offset_minutes())
-                            .unwrap_or(0)
-                    });
-                    secs + (t as i64) * 60
-                } else {
-                    secs
-                };
-
-                let dt = DateTime::from_timestamp(adj, 0)
-                    .unwrap_or_else(|| DateTime::from_timestamp(0, 0).unwrap());
-
-                let key = format!("{:04}-{:02}", dt.year(), dt.month());
-
-                buckets.entry(key).or_default().extend(oids.iter().copied());
-            }
-        });
-        buckets
     }
 
     pub fn month_folders(&self) -> anyhow::Result<BTreeMap<OsString, ObjectAttr>> {
@@ -280,7 +245,7 @@ impl GitRepo {
     }
 
     pub fn fetch_anon(&self, url: &str) -> anyhow::Result<()> {
-        // Set up the anonymous remote and callbacks self
+        // Set up the anonymous remote and callbacks
         let repo = self.inner.lock();
         let mut remote = repo.remote_anonymous(url)?;
         let mut cbs = git2::RemoteCallbacks::new();
@@ -391,146 +356,6 @@ impl GitRepo {
                 git_mode: entry.filemode() as u32,
                 size,
                 commit_time: Time::new(0, 0),
-            });
-        }
-        Ok(entries)
-    }
-
-    pub fn find_by_name(&self, tree_oid: Oid, name: &str) -> anyhow::Result<ObjectAttr> {
-        let repo = self.inner.lock();
-        let tree = repo.find_tree(tree_oid)?;
-
-        let entry = tree
-            .get_name(name)
-            .ok_or_else(|| anyhow!(format!("{name} not found in tree {tree_oid}")))?;
-        let size = match entry.kind().ok_or_else(|| anyhow!("Invalid object"))? {
-            ObjectType::Blob => entry
-                .to_object(&repo)
-                .map_err(|_| anyhow!("Invalid object"))?
-                .into_blob()
-                .map_err(|_| anyhow!("Invalid object"))?
-                .size(),
-            _ => 0,
-        };
-        let commit = repo.head()?.peel_to_commit()?;
-        let commit_time = commit.time();
-        Ok(ObjectAttr {
-            name: name.into(),
-            oid: entry.id(),
-            kind: entry.kind().ok_or_else(|| anyhow!("Invalid object"))?,
-            git_mode: entry.filemode() as u32,
-            size: size as u64,
-            commit_time,
-        })
-    }
-
-    pub fn find_in_commit(&self, commit_id: Oid, oid: Oid) -> anyhow::Result<ObjectAttr> {
-        let repo = self.inner.lock();
-        let commit_obj = repo.find_commit(commit_id)?;
-        let commit_time = commit_obj.time();
-        let tree = commit_obj.tree()?;
-
-        if commit_id == oid {
-            return Ok(ObjectAttr {
-                name: ".".into(),
-                oid,
-                kind: ObjectType::Tree,
-                git_mode: 0o040000,
-                size: 0,
-                commit_time,
-            });
-        }
-        let mut found: Option<ObjectAttr> = None;
-        let walk_res = tree.walk(git2::TreeWalkMode::PreOrder, |root, entry| {
-            if entry.id() == oid {
-                let mut name = OsString::from(root);
-                name.push(entry.name().unwrap_or("<non-utf8>"));
-                found = Some(ObjectAttr {
-                    name,
-                    oid,
-                    kind: entry.kind().unwrap_or(ObjectType::Any),
-                    git_mode: entry.filemode() as u32,
-                    size: if entry.kind() == Some(ObjectType::Blob) {
-                        repo.find_blob(entry.id())
-                            .map(|b| b.size() as u64)
-                            .unwrap_or(0)
-                    } else {
-                        0
-                    },
-                    commit_time,
-                });
-                return TreeWalkResult::Abort;
-            }
-            TreeWalkResult::Ok
-        });
-
-        if let Err(e) = walk_res
-            && !(e.class() == git2::ErrorClass::Callback && e.code() == git2::ErrorCode::User)
-        {
-            return Err(e.into());
-        }
-        found.ok_or_else(|| {
-            anyhow!(format!(
-                "oid {} not found in commit {}",
-                oid,
-                commit_obj.id()
-            ))
-        })
-    }
-
-    pub fn read_log(&self) -> anyhow::Result<Vec<ObjectAttr>> {
-        let repo = self.inner.lock();
-        let limit = 20;
-        let head_commit = self.head_commit()?;
-
-        let mut walk = repo.revwalk()?;
-        walk.set_sorting(Sort::TOPOLOGICAL | Sort::TIME)?;
-        walk.push(head_commit)?;
-
-        let mut out = Vec::with_capacity(limit.min(256));
-        for (i, oid_res) in walk.enumerate() {
-            if out.len() >= limit {
-                break;
-            }
-            let oid = oid_res?;
-            let commit = repo.find_commit(oid)?;
-
-            let mut commit_name = OsString::from("snap");
-            commit_name.push((i + 1).to_string());
-            commit_name.push("_");
-            commit_name.push(&commit.id().to_string()[..7]);
-
-            out.push(ObjectAttr {
-                name: commit_name,
-                oid,
-                kind: ObjectType::Commit,
-                git_mode: 0u32,
-                size: 0u64,
-                commit_time: commit.time(),
-            });
-        }
-        Ok(out)
-    }
-
-    pub fn readdir_commit(&self) -> anyhow::Result<Vec<ObjectAttr>> {
-        let mut entries: Vec<ObjectAttr> = vec![];
-        let commit_oid = self.head_commit()?;
-        let repo = self.inner.lock();
-        let commit = repo.find_commit(commit_oid)?;
-        let root_tree = commit.tree()?;
-        for entry in root_tree.iter() {
-            let oid = entry.id();
-            let kind = entry.kind().ok_or_else(|| anyhow!("Invalid object"))?;
-            let git_mode = entry.filemode() as u32;
-            let name = OsString::from(entry.name().unwrap_or(""));
-            let commit_time = commit.time();
-            entries.push(ObjectAttr {
-                name,
-                oid,
-                kind,
-                git_mode,
-                size: 0,
-                commit_time,
             });
         }
         Ok(entries)
