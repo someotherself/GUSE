@@ -6,6 +6,8 @@ use std::{
 use git2::Oid;
 use tempfile::TempDir;
 
+pub mod inject;
+
 use crate::{
     fs::{
         GitFs,

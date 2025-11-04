@@ -11,6 +11,7 @@ use git2::{Oid, Time};
 use crate::{
     fs::{
         GitFs, Handle, SourceTypes, VFileEntry,
+        builds::inject::BlobView,
         fileattr::{InoFlag, ObjectAttr},
         ops::readdir::{DirCase, build_dot_git_path, classify_inode},
         repo::GitRepo,
@@ -105,9 +106,10 @@ pub fn open_git(
                 let mut contents: Vec<u8> = vec![];
                 contents.extend_from_slice(commit.as_bytes());
                 contents.push(b'\n');
-                SourceTypes::RoBlob {
+                let data = BlobView::new_original(contents.into());
+                SourceTypes::Blob {
                     oid: metadata.oid,
-                    data: Arc::new(contents),
+                    data,
                 }
             };
             let handle = Handle {
@@ -140,8 +142,8 @@ pub fn open_vfile(fs: &GitFs, ino: Inodes, read: bool, write: bool) -> anyhow::R
                 };
                 contents = Some(build_commits_text(fs, entries, ino.to_u64_n())?);
             }
-            let data = contents.ok_or_else(|| anyhow!("No data"))?;
-            let blob_file = SourceTypes::RoBlob {
+            let data = BlobView::new_original(contents.ok_or_else(|| anyhow!("No data"))?);
+            let blob_file = SourceTypes::Blob {
                 oid: Oid::zero(),
                 data,
             };
@@ -166,10 +168,10 @@ pub fn open_vfile(fs: &GitFs, ino: Inodes, read: bool, write: bool) -> anyhow::R
             if contents.is_none() {
                 let repo = fs.get_repo(ino.to_u64_n())?;
                 let summary = GitRepo::print_commit_summary(fs, repo.repo_id, oid)?;
-                contents = Some(Arc::new(summary));
+                contents = Some(summary.into());
             }
-            let data = contents.ok_or_else(|| anyhow!("No data"))?;
-            let blob_file = SourceTypes::RoBlob {
+            let data = BlobView::new_original(contents.ok_or_else(|| anyhow!("No data"))?);
+            let blob_file = SourceTypes::Blob {
                 oid: Oid::zero(),
                 data,
             };
@@ -258,10 +260,8 @@ fn open_blob(fs: &GitFs, oid: Oid, ino: u64, read: bool) -> anyhow::Result<u64> 
             Ok(blob.content().to_vec())
         })?
     };
-    let blob_file = SourceTypes::RoBlob {
-        oid,
-        data: Arc::new(buf),
-    };
+    let data = BlobView::new_original(buf.into());
+    let blob_file = SourceTypes::Blob { oid, data };
     let handle = Handle {
         ino,
         source: blob_file,
@@ -282,11 +282,7 @@ fn git_commit_time(t: Time) -> String {
     dt.to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
 }
 
-fn build_commits_text(
-    fs: &GitFs,
-    entries: Vec<ObjectAttr>,
-    ino: u64,
-) -> anyhow::Result<Arc<Vec<u8>>> {
+fn build_commits_text(fs: &GitFs, entries: Vec<ObjectAttr>, ino: u64) -> anyhow::Result<Arc<[u8]>> {
     let mut contents: Vec<u8> = Vec::new();
 
     for e in entries {
@@ -310,6 +306,5 @@ fn build_commits_text(
         );
         contents.extend_from_slice(row.as_bytes());
     }
-
-    Ok(Arc::new(contents))
+    Ok(contents.into())
 }

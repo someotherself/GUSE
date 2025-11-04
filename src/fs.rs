@@ -17,6 +17,7 @@ use dashmap::DashMap;
 use git2::{FileMode, ObjectType, Oid};
 use tracing::{Level, field, info, instrument};
 
+use crate::fs::builds::inject::BlobView;
 use crate::fs::fileattr::{
     CreateFileAttr, Dentry, FileAttr, FileType, InoFlag, ObjectAttr, SetFileAttr, StorageNode,
     dir_attr, file_attr,
@@ -161,9 +162,9 @@ pub struct Handle {
 #[derive(Clone)]
 pub enum SourceTypes {
     RealFile(Arc<File>),
-    RoBlob {
+    Blob {
         oid: Oid,
-        data: Arc<Vec<u8>>,
+        data: BlobView,
     },
     /// Created by opendir, populated readdir with directory entries
     DirSnapshot {
@@ -188,7 +189,7 @@ enum VFile {
 struct VFileEntry {
     kind: VFile,
     len: u64,
-    data: OnceLock<Arc<Vec<u8>>>,
+    data: OnceLock<Arc<[u8]>>,
 }
 
 impl SourceTypes {
@@ -199,7 +200,7 @@ impl SourceTypes {
 
     #[inline]
     pub fn is_blob(&self) -> bool {
-        matches!(self, SourceTypes::RoBlob { oid: _, data: _ })
+        matches!(self, SourceTypes::Blob { oid: _, data: _ })
     }
 
     #[inline]
@@ -224,7 +225,7 @@ impl SourceTypes {
     pub fn size(&self) -> anyhow::Result<u64> {
         match self {
             Self::RealFile(file) => Ok(file.metadata()?.size()),
-            Self::RoBlob { oid: _, data } => Ok(data.len() as u64),
+            Self::Blob { oid: _, data } => Ok(data.len() as u64),
             _ => bail!(std::io::Error::from_raw_os_error(libc::EROFS)),
         }
     }
@@ -234,13 +235,13 @@ impl FileExt for SourceTypes {
     fn read_at(&self, buf: &mut [u8], offset: u64) -> std::io::Result<usize> {
         match self {
             Self::RealFile(file) => file.read_at(buf, offset),
-            Self::RoBlob { oid: _, data } => {
+            Self::Blob { oid: _, data } => {
                 let start = offset as usize;
                 if start >= data.len() {
                     return Ok(0);
                 }
                 let end = (start + buf.len()).min(data.len());
-                let src = &data[start..end];
+                let src = &data.as_ref()[start..end];
                 buf[..src.len()].copy_from_slice(src);
                 Ok(src.len())
             }
