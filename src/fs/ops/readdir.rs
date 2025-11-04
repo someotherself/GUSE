@@ -147,7 +147,7 @@ pub fn readdir_repo_dir(fs: &GitFs, parent: NormalIno) -> anyhow::Result<Vec<Dir
         let repo = fs.get_repo(parent)?;
         // Refresh the snapshots every time we cd into repo root
         repo.refresh_snapshots()?;
-        repo.with_state(|s| s.months_folders.clone())
+        repo.month_folders()?
     };
 
     let mut nodes: Vec<StorageNode> = vec![];

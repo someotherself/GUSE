@@ -371,7 +371,6 @@ impl GitFs {
             res_inodes: HashSet::new(),
             vdir_cache: BTreeMap::new(),
             build_sessions: HashMap::new(),
-            months_folders: BTreeMap::new(),
             snaps_map: HashMap::new(),
         };
 
@@ -419,7 +418,6 @@ impl GitFs {
             res_inodes: HashSet::new(),
             vdir_cache: BTreeMap::new(),
             build_sessions: HashMap::new(),
-            months_folders: BTreeMap::new(),
             snaps_map: HashMap::new(),
         };
 

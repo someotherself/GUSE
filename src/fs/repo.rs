@@ -96,6 +96,8 @@ impl GitRepo {
         f(&mut guard)
     }
 
+    // Updates the State snapshots and snaps_map
+    // Runs every time a user cd's into the repo root
     pub fn refresh_snapshots(&self) -> anyhow::Result<()> {
         let head_oid = self.with_repo(|r| match r.head() {
             Ok(h) => h.target(),
@@ -126,12 +128,12 @@ impl GitRepo {
         })?;
 
         // Save the MONTH folders into the State
-        let months_map = self.month_folders()?;
-        let months_names = months_map
+        let months_names = self
+            .month_folders()?
             .iter()
             .map(|e| e.0.clone())
             .collect::<Vec<OsString>>();
-        // self.with_state_mut(|s| s.months_folders = months_map);
+
         for name in months_names {
             let str_name = name
                 .to_str()
