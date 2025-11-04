@@ -49,6 +49,7 @@ mod test;
 const META_STORE: &str = "fs_meta.db";
 const LIVE_FOLDER: &str = "live";
 const TRASH_FOLDER: &str = ".trash";
+const TEMP_FOLDER: &str = ".temp";
 pub const REPO_SHIFT: u8 = 48;
 pub const ROOT_INO: u64 = 1;
 pub const VDIR_BIT: u64 = 1u64 << 47;
@@ -476,9 +477,12 @@ impl GitFs {
         // Clean the build folder
         let build_name = OsString::from("build");
         let build_path = repo_path.join(&build_name);
-        if build_path.exists() {
-            std::fs::remove_dir_all(&build_path)?;
-        }
+        let _ = std::fs::remove_dir_all(&build_path);
+
+        // Create the temp folder
+        let temp_path = repo_path.join(TEMP_FOLDER);
+        let _ = std::fs::remove_dir_all(&temp_path);
+        std::fs::create_dir(&temp_path)?;
 
         // Prepare the live and build folders
         let live_ino = self.next_inode_raw(repo_ino)?;
@@ -613,6 +617,11 @@ impl GitFs {
 
         // Create build folder on disk
         std::fs::create_dir(tmp_path.join("build"))?;
+
+        // Create the temp folder
+        let temp_path = tmp_path.join(TEMP_FOLDER);
+        let _ = std::fs::remove_dir_all(&temp_path);
+        std::fs::create_dir(&temp_path)?;
 
         let repo = self.get_repo(repo_ino)?;
         repo.with_state_mut(|s| {
