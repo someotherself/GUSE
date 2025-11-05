@@ -248,9 +248,7 @@ pub fn classify_inode(meta: &BuildCtxMetadata) -> anyhow::Result<DirCase> {
 fn read_build_dir(fs: &GitFs, ino: NormalIno) -> anyhow::Result<Vec<DirectoryEntry>> {
     let mut out = Vec::new();
 
-    let Some(ctx) = BuildOperationCtx::new(fs, ino)? else {
-        return Ok(out);
-    };
+    let ctx = BuildOperationCtx::new(fs, ino)?;
 
     let entries = populate_build_entries(fs, ino, &ctx.path())?;
     out.extend(entries);

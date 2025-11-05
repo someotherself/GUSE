@@ -78,9 +78,7 @@ pub fn mkdir_git(
     name: &str,
     create_attr: CreateFileAttr,
 ) -> anyhow::Result<FileAttr> {
-    let Some(ctx) = BuildOperationCtx::new(fs, parent)? else {
-        bail!(std::io::Error::from_raw_os_error(libc::EPERM))
-    };
+    let ctx = BuildOperationCtx::new(fs, parent)?;
     let dir_path = ctx.path().join(name);
 
     std::fs::create_dir(&dir_path)?;

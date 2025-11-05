@@ -3,17 +3,14 @@ use std::{
     sync::atomic::{AtomicBool, AtomicUsize},
 };
 
+use anyhow::bail;
 use git2::Oid;
 use tempfile::TempDir;
 
 pub mod inject;
 
 use crate::{
-    fs::{
-        GitFs,
-        fileattr::InoFlag,
-        ops::readdir::{DirCase, classify_inode},
-    },
+    fs::{GitFs, fileattr::InoFlag},
     inodes::NormalIno,
 };
 
@@ -64,28 +61,23 @@ pub struct BuildOperationCtx {
 }
 
 impl BuildOperationCtx {
-    pub fn new(fs: &GitFs, ino: NormalIno) -> anyhow::Result<Option<Self>> {
+    pub fn new(fs: &GitFs, ino: NormalIno) -> anyhow::Result<Self> {
         let metadata = fs.get_builctx_metadata(ino)?;
-        let case = classify_inode(&metadata)?;
-
-        let DirCase::Commit { oid } = case else {
-            return Ok(None);
-        };
 
         let target = if metadata.ino_flag == InoFlag::SnapFolder
             || metadata.ino_flag == InoFlag::InsideBuild
         {
-            oid
+            metadata.oid
         } else {
-            return Ok(None);
+            bail!(std::io::Error::from_raw_os_error(libc::EPERM))
         };
 
         let repo = fs.get_repo(ino.to_norm_u64())?;
         let build_root = &repo.build_dir;
-        let build_session = repo.get_or_init_build_session(oid, build_root)?;
+        let build_session = repo.get_or_init_build_session(metadata.oid, build_root)?;
         let full_path = build_session.finish_path(fs, ino)?;
 
-        Ok(Some(Self { target, full_path }))
+        Ok(Self { target, full_path })
     }
 
     #[inline]

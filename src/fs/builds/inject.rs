@@ -24,19 +24,18 @@ impl InjectedMetadata {
             .join(TEMP_FOLDER)
             .join(&filename);
         let file = OpenOptions::new()
-            .read(true)
             .write(true)
             .truncate(true)
             .create(true)
             .open(&path)?;
 
-        let blob = repo.with_repo(|r| -> anyhow::Result<Vec<u8>> {
+        repo.with_repo(|r| -> anyhow::Result<()> {
             let blob = r.find_blob(oid)?;
-            Ok(blob.content().to_vec())
+            file.write_at(blob.content(), 0)?;
+            Ok(())
         })?;
-        file.write_at(blob.as_slice(), 0)?;
 
-        let metadata: InjectedMetadata = InjectedMetadata {
+        let metadata = InjectedMetadata {
             modified: InjectedFile {
                 name: filename,
                 path,

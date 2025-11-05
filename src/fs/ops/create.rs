@@ -1,8 +1,5 @@
 use std::{ffi::OsStr, sync::Arc};
 
-use anyhow::bail;
-use libc::EPERM;
-
 use crate::{
     fs::{
         GitFs, SourceTypes,
@@ -53,9 +50,7 @@ pub fn create_git(
     name: &OsStr,
     write: bool,
 ) -> anyhow::Result<(FileAttr, u64)> {
-    let Some(ctx) = BuildOperationCtx::new(fs, parent)? else {
-        bail!(std::io::Error::from_raw_os_error(EPERM))
-    };
+    let ctx = BuildOperationCtx::new(fs, parent)?;
 
     let file_path = ctx.path().join(name);
     let ino = fs.next_inode_checked(parent.to_norm_u64())?;
