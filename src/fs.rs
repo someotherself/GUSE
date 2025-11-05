@@ -2529,8 +2529,12 @@ impl GitFs {
     }
 
     fn remove_inode_from_cache(&self, parent_ino: u64, target_name: &OsStr) -> anyhow::Result<()> {
-        let repo = self.get_repo(parent_ino)?;
-        let target_ino = self.get_ino_by_parent_cache(parent_ino, target_name)?;
+        let Ok(repo) = self.get_repo(parent_ino) else {
+            return Ok(());
+        };
+        let Ok(target_ino) = self.get_ino_by_parent_cache(parent_ino, target_name) else {
+            return Ok(());
+        };
         repo.dentry_cache.remove_by_parent(parent_ino, target_name);
         repo.attr_cache.remove(&target_ino);
         repo.file_cache.remove(&target_ino);
@@ -2670,7 +2674,7 @@ impl GitFs {
         if let DbReturn::Found { value: dentry } = dentry {
             Ok(dentry.target_ino)
         } else {
-            bail!("Could not find dentry in cache")
+            bail!("Could not find dentry in cache {}", target_name.display());
         }
     }
 
