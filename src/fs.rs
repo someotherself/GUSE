@@ -2116,7 +2116,7 @@ impl GitFs {
     /// Send and forget but will log errors as `tracing::error!`
     fn remove_db_dentry(&self, parent_ino: NormalIno, target_name: &OsStr) -> anyhow::Result<()> {
         let repo_id = GitFs::ino_to_repo_id(parent_ino.into());
-        self.remove_inode_from_cache(parent_ino.into(), target_name)?;
+        self.remove_inode_from_cache(parent_ino.into(), target_name);
         let writer_tx = {
             let guard = self
                 .conn_list
@@ -2528,17 +2528,16 @@ impl GitFs {
         Ok(())
     }
 
-    fn remove_inode_from_cache(&self, parent_ino: u64, target_name: &OsStr) -> anyhow::Result<()> {
+    fn remove_inode_from_cache(&self, parent_ino: u64, target_name: &OsStr) {
         let Ok(repo) = self.get_repo(parent_ino) else {
-            return Ok(());
+            return;
         };
         let Ok(target_ino) = self.get_ino_by_parent_cache(parent_ino, target_name) else {
-            return Ok(());
+            return;
         };
         repo.dentry_cache.remove_by_parent(parent_ino, target_name);
         repo.attr_cache.remove(&target_ino);
         repo.file_cache.remove(&target_ino);
-        Ok(())
     }
 
     pub fn update_attr_in_cache(&self, attr: &SetFileAttr) -> anyhow::Result<FileAttr> {
