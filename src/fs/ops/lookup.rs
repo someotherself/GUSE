@@ -82,7 +82,8 @@ pub fn lookup_live(
 ) -> anyhow::Result<Option<FileAttr>> {
     match fs.get_metadata_by_name(parent, name)? {
         DbReturn::Found { value } => Ok(Some(value)),
-        DbReturn::Missing | DbReturn::Negative => {
+        DbReturn::Negative => Ok(None),
+        DbReturn::Missing => {
             fs::ops::readdir::readdir_live_dir(fs, parent)?;
             match fs.get_metadata_by_name(parent, name)? {
                 DbReturn::Found { value } => Ok(Some(value)),
@@ -95,7 +96,8 @@ pub fn lookup_live(
 pub fn lookup_git(fs: &GitFs, parent: NormalIno, name: &OsStr) -> anyhow::Result<Option<FileAttr>> {
     match fs.get_metadata_by_name(parent, name)? {
         DbReturn::Found { value } => Ok(Some(value)),
-        DbReturn::Missing | DbReturn::Negative => {
+        DbReturn::Negative => Ok(None),
+        DbReturn::Missing => {
             let p_flag = fs.get_ino_flag_from_db(parent)?;
             if p_flag == InoFlag::InsideSnap
                 || p_flag == InoFlag::InsideDotGit
