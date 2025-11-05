@@ -17,7 +17,6 @@ use dashmap::DashMap;
 use git2::{FileMode, ObjectType, Oid};
 use tracing::{Level, field, info, instrument};
 
-use crate::fs::builds::inject::BlobView;
 use crate::fs::fileattr::{
     CreateFileAttr, Dentry, FileAttr, FileType, InoFlag, ObjectAttr, SetFileAttr, StorageNode,
     dir_attr, file_attr,
@@ -88,17 +87,19 @@ impl FsOperationContext {
 
 // Real disk structure
 // MOUNT_POINT/
+// repos/.trash/
 // repos/repo_dir1/
-//---------├── .git/
-//---------├── build/           <- contents will show under each Snap folder
-//---------------└── build_HASH/    <- Will show in the Snap folder
-//---------------------└── target/    <- Will show in the Snap folder for HASH (commit oid)
+//---------├── .temp                <- used for storing temp files created during a session
+//---------├── live/.git
+//---------├── build/               <- contents will show under each Snap folder
+//---------------└── build_<commit_oid>/    <- Will show in the Snap folder
+//---------------------└── target/  <- Will show in the Snap folder for HASH (commit oid)
 //---------└── meta_fs.db
 //---------All other contents will show under /live
 //
 // Perceived disk structure
 // repos/repo_dir1/
-//---------├── live/            <- everything in repo_dir1 except for .git and fs_meta.db
+//---------├── live/            <- everything in repo_dir1 including for .git
 //---------├── build/           <- used for running builds
 //---------├── YYYY-MM/         <- List month groups where commits were made
 //---------------├── Snaps_on_MM.DD.YYYY/   <- List day  groups where commits were made
@@ -128,8 +129,9 @@ impl FsOperationContext {
 // Virtual inodes
 // The 48th bit is reserved for virtual inoded.
 // A normal (Inodes::NormalIno) ino will have it set to 0
-// If inode 0000000000000001000000000....0111 is a real file
-// Inode    0000000000000001100000000....0111 will be a virtual directory
+//                          <16bits repo-id><48 bits for ino>
+// An ino of a real file    0000000000000001000000000....0111
+// The Ino of the virt dir  0000000000000001100000000....0111
 // The virtual directory can be accessed by adding @ at the end of the name
 // and it is used for example, when trying to use cat on a file (or cd on a folder)
 
@@ -165,7 +167,7 @@ pub enum SourceTypes {
     RealFile(Arc<File>),
     Blob {
         oid: Oid,
-        data: BlobView,
+        data: Arc<[u8]>,
     },
     /// Created by opendir, populated readdir with directory entries
     DirSnapshot {
@@ -385,6 +387,7 @@ impl GitFs {
             attr_cache: LruCache::new(ATTR_LRU),
             dentry_cache: DentryLru::new(DENTRY_LRU),
             file_cache: LruCache::new(FILE_LRU),
+            injected_files: DashMap::new(),
         };
 
         let repo_rc = Arc::from(git_repo);
@@ -432,6 +435,7 @@ impl GitFs {
             attr_cache: LruCache::new(ATTR_LRU),
             dentry_cache: DentryLru::new(DENTRY_LRU),
             file_cache: LruCache::new(FILE_LRU),
+            injected_files: DashMap::new(),
         };
 
         // Find HEAD in the git repo

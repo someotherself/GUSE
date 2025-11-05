@@ -1,5 +1,6 @@
 use anyhow::{Context, anyhow, bail};
 use chrono::{DateTime, Datelike};
+use dashmap::DashMap;
 use git2::{Commit, Delta, Direction, FileMode, ObjectType, Oid, Repository, Time, Tree};
 use parking_lot::{Mutex, RwLock};
 use std::{
@@ -13,7 +14,11 @@ use std::{
 };
 
 use crate::{
-    fs::{GitFs, LIVE_FOLDER, ObjectAttr, SourceTypes, builds::BuildSession, fileattr::FileAttr},
+    fs::{
+        GitFs, LIVE_FOLDER, ObjectAttr, SourceTypes,
+        builds::{BuildSession, inject::InjectedMetadata},
+        fileattr::FileAttr,
+    },
     inodes::VirtualIno,
     internals::{cache::LruCache, cache_dentry::DentryLru},
 };
@@ -30,6 +35,7 @@ pub struct GitRepo {
     pub dentry_cache: DentryLru,
     /// LruCache<ino, SourceTypes::RealFile>
     pub file_cache: LruCache<u64, SourceTypes>,
+    pub injected_files: DashMap<u64, InjectedMetadata>,
 }
 
 pub struct State {

@@ -6,12 +6,13 @@ use std::{
 };
 
 use anyhow::{anyhow, bail};
+use dashmap::Entry;
 use git2::{Oid, Time};
 
 use crate::{
     fs::{
         GitFs, Handle, SourceTypes, VFileEntry,
-        builds::inject::BlobView,
+        builds::inject::InjectedMetadata,
         fileattr::{InoFlag, ObjectAttr},
         ops::readdir::{DirCase, build_dot_git_path, classify_inode},
         repo::GitRepo,
@@ -106,10 +107,9 @@ pub fn open_git(
                 let mut contents: Vec<u8> = vec![];
                 contents.extend_from_slice(commit.as_bytes());
                 contents.push(b'\n');
-                let data = BlobView::new_original(contents.into());
                 SourceTypes::Blob {
                     oid: metadata.oid,
-                    data,
+                    data: contents.into(),
                 }
             };
             let handle = Handle {
@@ -119,7 +119,10 @@ pub fn open_git(
             };
             fs.handles.open(handle)
         }
-        _ => open_blob(fs, metadata.oid, ino.to_norm_u64(), read),
+        // If write == true, copy blob to temp folder and open as SourceType::ReadlFile
+        // If write == false, open the blob as SourceType::Blob
+        _ if write => open_modified_blob(fs, metadata.oid, ino.to_norm_u64()),
+        _ => open_blob(fs, metadata.oid, ino.to_norm_u64()),
     }
 }
 
@@ -142,7 +145,7 @@ pub fn open_vfile(fs: &GitFs, ino: Inodes, read: bool, write: bool) -> anyhow::R
                 };
                 contents = Some(build_commits_text(fs, entries, ino.to_u64_n())?);
             }
-            let data = BlobView::new_original(contents.ok_or_else(|| anyhow!("No data"))?);
+            let data = contents.ok_or_else(|| anyhow!("No data"))?;
             let blob_file = SourceTypes::Blob {
                 oid: Oid::zero(),
                 data,
@@ -170,7 +173,7 @@ pub fn open_vfile(fs: &GitFs, ino: Inodes, read: bool, write: bool) -> anyhow::R
                 let summary = GitRepo::print_commit_summary(fs, repo.repo_id, oid)?;
                 contents = Some(summary.into());
             }
-            let data = BlobView::new_original(contents.ok_or_else(|| anyhow!("No data"))?);
+            let data = contents.ok_or_else(|| anyhow!("No data"))?;
             let blob_file = SourceTypes::Blob {
                 oid: Oid::zero(),
                 data,
@@ -249,10 +252,10 @@ pub fn open_vdir(
         bail!("File not found!")
     };
     let oid = object.oid;
-    open_blob(fs, oid, ino.into(), read)
+    open_blob(fs, oid, ino.into())
 }
 
-fn open_blob(fs: &GitFs, oid: Oid, ino: u64, read: bool) -> anyhow::Result<u64> {
+fn open_blob(fs: &GitFs, oid: Oid, ino: u64) -> anyhow::Result<u64> {
     let buf = {
         let repo = fs.get_repo(ino)?;
         repo.with_repo(|r| -> anyhow::Result<Vec<u8>> {
@@ -260,14 +263,48 @@ fn open_blob(fs: &GitFs, oid: Oid, ino: u64, read: bool) -> anyhow::Result<u64> 
             Ok(blob.content().to_vec())
         })?
     };
-    let data = BlobView::new_original(buf.into());
-    let blob_file = SourceTypes::Blob { oid, data };
+    let blob_file = SourceTypes::Blob {
+        oid,
+        data: buf.into(),
+    };
     let handle = Handle {
         ino,
         source: blob_file,
         write: false,
     };
     fs.handles.open(handle)
+}
+
+fn open_modified_blob(fs: &GitFs, oid: Oid, ino: u64) -> anyhow::Result<u64> {
+    let repo = fs.get_repo(ino)?;
+    match repo.injected_files.entry(ino) {
+        Entry::Occupied(e) => {
+            let metadata = e.get();
+            let handle = open_injected_file(metadata, ino)?;
+            fs.handles.open(handle)
+        }
+        Entry::Vacant(s) => {
+            let metadata = InjectedMetadata::create_modified(fs, oid, ino)?;
+            let handle = open_injected_file(&metadata, ino)?;
+            s.insert(metadata);
+            fs.handles.open(handle)
+        }
+    }
+}
+
+fn open_injected_file(metadata: &InjectedMetadata, ino: u64) -> anyhow::Result<Handle> {
+    let path = if let Some(build_meta) = &metadata.build {
+        build_meta.path.as_path()
+    } else {
+        metadata.modified.path.as_path()
+    };
+    // TODO: If file is missing on disk, add fallback to create new.
+    let file = OpenOptions::new().read(true).write(true).open(path)?;
+    Ok(Handle {
+        ino,
+        source: SourceTypes::RealFile(Arc::new(file)),
+        write: true,
+    })
 }
 
 fn short_oid(oid: Oid) -> String {
