@@ -34,6 +34,16 @@ fn main() -> anyhow::Result<()> {
                 tracing::error!("Wrong command!")
             }
         },
+        Some(("chase", r)) => {
+            let repo = r
+                .get_one::<String>("repo")
+                .ok_or_else(|| anyhow!("Cannot parse argument"))?;
+            let build = r
+                .get_one::<String>("build")
+                .ok_or_else(|| anyhow!("Cannot parse argument"))?;
+            tracing::info!("Test message for guse chase repo: {repo} and build {build}");
+            println!("Test message for guse chase repo: {repo} and build {build}");
+        }
         _ => {
             dbg!("Wrong command!");
             tracing::error!("Wrong command!")
@@ -110,12 +120,29 @@ fn handle_cli_args() -> ArgMatches {
                 .about("Manage repositories in the running daemon")
                 .subcommand_required(true)
                 .arg_required_else_help(true)
-                .short_flag('p')
                 .subcommand(
                     Command::new("remove")
                         .about("Delete a repository by name")
                         .arg(Arg::new("repo-name").value_name("REPO_NAME").global(true)),
                 ),
+        )
+        .subcommand(
+            Command::new("chase")
+            .about("Run an automated build for a repo")
+            .arg_required_else_help(true)
+            .arg(
+                Arg::new("repo")
+                    .value_name("REPO")
+                    .required(true)
+                    .help("The repo to run the automated build on")
+            )
+            .arg(
+                Arg::new("build")
+                    .value_name("BUILD")
+                    .help("The name of the automated build")
+                    .required(true)
+                    .requires("repo")
+            )
         )
         .get_matches()
 }
