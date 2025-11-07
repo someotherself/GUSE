@@ -54,13 +54,10 @@ pub struct State {
     pub vdir_cache: BTreeMap<VirtualIno, VirtualNode>,
     /// Oid = Commit Oid
     pub build_sessions: HashMap<Oid, Arc<BuildSession>>,
-    // /// MONTH folders. Refreshed during refresh_snapshots
-    // ///
-    // /// <folder name, objectattr>
-    // pub months_folders: BTreeMap<OsString, ObjectAttr>,
     /// Map of the Snap and Month folders
     ///
     /// <folder name, (MONTH name, Snap name)>
+    /// TODO: remove and add to snapshots
     pub snaps_map: HashMap<Oid, (OsString, OsString)>,
 }
 
@@ -622,6 +619,23 @@ impl GitRepo {
         })
     }
 
+    /// Similar to `get_or_init_build_session` but does not insert into build_sessions map
+    pub fn new_build_session(
+        &self,
+        commit_oid: Oid,
+        build_folder: &Path,
+    ) -> anyhow::Result<Arc<BuildSession>> {
+        let folder = tempfile::Builder::new()
+            .prefix(&format!("build_{}", &commit_oid.to_string()[..=7]))
+            .tempdir_in(build_folder)?;
+        let session = Arc::new(BuildSession {
+            folder,
+            open_count: AtomicUsize::new(0),
+            pinned: AtomicBool::new(false),
+        });
+        Ok(session)
+    }
+
     pub fn get_or_init_build_session(
         &self,
         commit_oid: Oid,
@@ -645,6 +659,30 @@ impl GitRepo {
                 Ok(session)
             }
         })
+    }
+
+    /// Changes the target commit for an existing build session.
+    ///
+    /// If a build session already exists for the new commit, it will return the old session for it.
+    pub fn move_build_session(
+        &self,
+        commit_oid: Oid,
+        new_commit_oid: Oid,
+        build_folder: &Path,
+    ) -> anyhow::Result<(Arc<BuildSession>, Option<Arc<BuildSession>>)> {
+        let ctx = self.with_state_mut(
+            |s| -> anyhow::Result<(Arc<BuildSession>, Option<Arc<BuildSession>>)> {
+                let Some(entry) = s.build_sessions.remove(&commit_oid) else {
+                    bail!(
+                        "Build session does not exist for {commit_oid:?} and {}",
+                        build_folder.display()
+                    )
+                };
+                let old = s.build_sessions.insert(new_commit_oid, entry.clone());
+                Ok((entry, old))
+            },
+        )?;
+        Ok(ctx)
     }
 
     pub fn print_commit_summary(fs: &GitFs, repo_id: u16, oid: Oid) -> anyhow::Result<Vec<u8>> {
