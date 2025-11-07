@@ -122,11 +122,7 @@ impl From<CreateFileAttr> for FileAttr {
             kind: value.kind,
             perm: value.perm,
             git_mode: value.mode,
-            nlink: if value.kind == FileType::Directory {
-                2
-            } else {
-                1
-            },
+            nlink: 1,
             uid: unsafe { libc::getuid() },
             gid: unsafe { libc::getgid() },
             rdev: value.rdev,
