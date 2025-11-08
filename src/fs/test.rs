@@ -6,7 +6,7 @@ use std::{
 use anyhow::anyhow;
 
 use crate::{
-    fs::{FileType, GitFs, REPO_SHIFT},
+    fs::{FileType, GitFs, LIVE_FOLDER, REPO_SHIFT},
     inodes::Inodes,
     test_setup::{FuseTestSetup, GitFsTestSetup, get_fs, run_fuse_fs_test, run_git_fs_test},
 };
@@ -55,7 +55,7 @@ fn test_mkdir_fetch() -> anyhow::Result<()> {
 
             // READ DIR REPO_DIR
             let read_dir_repo = fs.readdir(REPO_DIR_INO)?;
-            assert_eq!(read_dir_repo[0].name, "live");
+            assert_eq!(read_dir_repo[0].name, LIVE_FOLDER);
             assert_eq!(read_dir_repo.len(), 4);
             let snap_1_parent = &read_dir_repo[2];
             let snap_1_parent_name = &snap_1_parent.name.clone();
@@ -123,7 +123,7 @@ fn test_mkdir_fetch() -> anyhow::Result<()> {
             }
 
             // FIND BY NAME REPO_DIR
-            let live_attr = fs.lookup(REPO_DIR_INO, OsStr::new("live"))?;
+            let live_attr = fs.lookup(REPO_DIR_INO, OsStr::new(LIVE_FOLDER))?;
             assert!(live_attr.is_some());
             let live_attr = live_attr.unwrap();
             assert_eq!(live_attr.ino, LIVE_DIR_INO);
@@ -166,7 +166,7 @@ fn test_mkdir_normal() -> anyhow::Result<()> {
             assert_eq!(repo_attr.ino, REPO_DIR_INO);
 
             // FIND BY NAME
-            let live_attr = fs.lookup(REPO_DIR_INO, OsStr::new("live"))?;
+            let live_attr = fs.lookup(REPO_DIR_INO, OsStr::new(LIVE_FOLDER))?;
             assert!(live_attr.is_some());
             let live_attr = live_attr.unwrap();
             assert_eq!(live_attr.ino, LIVE_DIR_INO);
@@ -181,7 +181,7 @@ fn test_mkdir_normal() -> anyhow::Result<()> {
             let read_dir = fs.readdir(REPO_DIR_INO)?;
             assert_eq!(read_dir.len(), 2);
 
-            assert_eq!(read_dir[0].name, "live");
+            assert_eq!(read_dir[0].name, LIVE_FOLDER);
 
             let dir_name1 = OsStr::new("dir_in_live_1");
             let dir1_attr = fs.mkdir(live_attr.ino, dir_name1)?;
@@ -242,7 +242,7 @@ fn test_mkdir_normal() -> anyhow::Result<()> {
 
 /// Helper to get the ino of the "live" dir under the repo-dir.
 fn live_ino(fs: &GitFs) -> anyhow::Result<u64> {
-    fs.lookup(REPO_DIR_INO, OsStr::new("live"))?
+    fs.lookup(REPO_DIR_INO, OsStr::new(LIVE_FOLDER))?
         .map(|a| a.ino)
         .ok_or_else(|| anyhow!("live not found"))
 }
@@ -260,7 +260,7 @@ fn test_rename_live_same_parent_dir() -> anyhow::Result<()> {
 
             let name = OsStr::new("new_repo1");
             fs.mkdir(ROOT_INO, name)?;
-            let live_attr = fs.lookup(REPO_DIR_INO, OsStr::new("live"))?.unwrap();
+            let live_attr = fs.lookup(REPO_DIR_INO, OsStr::new(LIVE_FOLDER))?.unwrap();
             let live = live_attr.ino;
 
             // Create dir: live/alpha
@@ -512,7 +512,7 @@ fn prepare_repo_for_test(repo_name: &str, root: &Path) -> anyhow::Result<RepoLoc
     let repo_path = root.join(repo_name);
     std::fs::create_dir(&repo_path)?;
 
-    let live = repo_path.join("live");
+    let live = repo_path.join(LIVE_FOLDER);
     Ok(RepoLocations {
         live,
         repo_snap: None,

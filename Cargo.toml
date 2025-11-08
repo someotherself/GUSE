@@ -35,3 +35,4 @@ memchr = "2.7.6"
 parking_lot = "0.12.5"
 rand = "0.9.2"
 num_cpus = "1.17.0"
+mlua = { version = "0.11.4", features = ["lua54", "vendored"] }
