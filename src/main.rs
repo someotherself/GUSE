@@ -18,15 +18,13 @@ fn main() -> anyhow::Result<()> {
 
             start_app(m)?;
         }
-        Some(("repo", r)) => match r.subcommand() {
+        Some(("repo", m)) => match m.subcommand() {
             Some(("remove", rm)) => {
                 let repo_name = rm
                     .get_one::<String>("repo-name")
                     .ok_or_else(|| anyhow!("Cannot parse argument"))?;
                 let sock = socket_path()?;
-                let req = ControlReq::RepoDelete {
-                    name: repo_name.clone(),
-                };
+                let req = ControlReq::RepoDelete { name: repo_name };
                 send_req(&sock, &req)?;
             }
             _ => {
@@ -34,15 +32,16 @@ fn main() -> anyhow::Result<()> {
                 tracing::error!("Wrong command!")
             }
         },
-        Some(("chase", r)) => {
-            let repo = r
+        Some(("chase", m)) => {
+            let sock = socket_path()?;
+            let repo = m
                 .get_one::<String>("repo")
                 .ok_or_else(|| anyhow!("Cannot parse argument"))?;
-            let build = r
+            let build = m
                 .get_one::<String>("build")
                 .ok_or_else(|| anyhow!("Cannot parse argument"))?;
-            tracing::info!("Test message for guse chase repo: {repo} and build {build}");
-            println!("Test message for guse chase repo: {repo} and build {build}");
+            let req = ControlReq::Chase { repo, build };
+            send_req(&sock, &req)?;
         }
         _ => {
             dbg!("Wrong command!");
