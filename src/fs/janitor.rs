@@ -92,6 +92,7 @@ impl Jobs {
     }
 }
 
+// Creates a random string 6 characters long and alphanumerical
 pub fn random_string() -> String {
     rand::rng()
         .sample_iter(&Alphanumeric)

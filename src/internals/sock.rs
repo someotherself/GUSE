@@ -11,7 +11,7 @@ use std::{
 use anyhow::{Context, anyhow};
 use serde::{Deserialize, Serialize};
 
-use crate::mount::GitFsAdapter;
+use crate::{fs::builds::chase::start_chase, mount::GitFsAdapter};
 
 pub fn socket_path() -> anyhow::Result<PathBuf> {
     let home = std::env::var_os("HOME").map_or(PathBuf::from("/tmp"), PathBuf::from);
@@ -22,9 +22,10 @@ pub fn socket_path() -> anyhow::Result<PathBuf> {
 
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(tag = "cmd", rename_all = "snake_case")]
-pub enum ControlReq {
+pub enum ControlReq<'a> {
     RepoList,
-    RepoDelete { name: String },
+    RepoDelete { name: &'a str },
+    Chase { repo: &'a str, build: &'a str },
     Status,
 }
 
@@ -63,11 +64,10 @@ pub fn start_control_server(
     Ok(())
 }
 
-#[allow(unused_variables)]
 fn handle_client(
     inner: &GitFsAdapter,
     mut stream: UnixStream,
-    mount_point: &str,
+    _mount_point: &str,
 ) -> anyhow::Result<()> {
     let mut buf = Vec::new();
     stream.read_to_end(&mut buf)?;
@@ -77,7 +77,7 @@ fn handle_client(
         match req {
             ControlReq::RepoDelete { name } => {
                 // TODO. Make a 2 step process, with confirmation.
-                let name = name.strip_suffix("/").unwrap_or(&name);
+                let name = name.strip_suffix("/").unwrap_or(name);
                 let fs = inner.getfs();
                 let Ok(()) = fs.delete_repo(name) else {
                     return Ok(ControlRes::Ok);
@@ -94,6 +94,14 @@ fn handle_client(
             ControlReq::RepoList => {
                 dbg!("Not implemented!");
                 tracing::info!("Not implemented!");
+                Ok(ControlRes::Ok)
+            }
+            ControlReq::Chase { repo, build } => {
+                let repo = repo.strip_suffix("/").unwrap_or(repo);
+                let fs = inner.getfs();
+                tracing::info!("Running chase");
+                println!("Running chase");
+                start_chase(&fs, repo, build)?;
                 Ok(ControlRes::Ok)
             }
             ControlReq::Status => {

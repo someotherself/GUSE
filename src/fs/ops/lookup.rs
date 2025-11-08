@@ -2,7 +2,7 @@ use std::ffi::{OsStr, OsString};
 
 use crate::{
     fs::{
-        self, FileAttr, GitFs,
+        self, CHASE_FOLDER, FileAttr, GitFs, LIVE_FOLDER,
         fileattr::{InoFlag, dir_attr},
         meta_db::DbReturn,
     },
@@ -38,25 +38,25 @@ pub fn lookup_repo(
         Some(repo) => repo,
         None => return Ok(None),
     };
-    let attr = if name == "live" {
+    let attr = if name == LIVE_FOLDER {
         let DbReturn::Found { value: live_ino } =
-            fs.get_ino_from_db(parent.into(), OsStr::new("live"))?
+            fs.get_ino_from_db(parent.into(), OsStr::new(LIVE_FOLDER))?
         else {
             return Ok(None);
         };
-        let path = fs.repos_dir.join(&repo.repo_dir).join("live");
+        let path = fs.repos_dir.join(&repo.repo_dir).join(LIVE_FOLDER);
         let mut attr = GitFs::attr_from_path(InoFlag::LiveRoot, &path)?;
         attr.ino = live_ino;
         attr
-    } else if name == "build" {
-        let DbReturn::Found { value: build_ino } =
-            fs.get_ino_from_db(parent.into(), OsStr::new("build"))?
+    } else if name == CHASE_FOLDER {
+        let DbReturn::Found { value: chase_ino } =
+            fs.get_ino_from_db(parent.into(), OsStr::new(CHASE_FOLDER))?
         else {
             return Ok(None);
         };
-        let path = fs.repos_dir.join(&repo.repo_dir).join("build");
-        let mut attr = GitFs::attr_from_path(InoFlag::BuildRoot, &path)?;
-        attr.ino = build_ino;
+        let path = fs.repos_dir.join(&repo.repo_dir).join(CHASE_FOLDER);
+        let mut attr = GitFs::attr_from_path(InoFlag::ChaseRoot, &path)?;
+        attr.ino = chase_ino;
         attr
     } else {
         // It will always be a yyyy-mm folder

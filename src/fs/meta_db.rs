@@ -1430,7 +1430,6 @@ impl MetaDb {
             flags
         FROM inode_map
         WHERE inode = ?1
-        LIMIT 1
         "#,
         )?;
 

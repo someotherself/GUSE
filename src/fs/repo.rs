@@ -25,7 +25,10 @@ use crate::{
 
 pub struct GitRepo {
     pub repo_dir: String,
+    /// Used for generating storing files created in a Snap folder (and builds, compilations...)
     pub build_dir: PathBuf,
+    /// Used for guse chase templates, configuration and results
+    pub chase_dir: PathBuf,
     pub repo_id: u16,
     pub inner: Mutex<Repository>,
     pub state: RwLock<State>,
@@ -76,6 +79,15 @@ pub struct VirtualNode {
     ///
     /// key: full file name, values: <file entry_ino, ObjectAttr>
     pub log: BTreeMap<OsString, (u64, ObjectAttr)>,
+}
+
+/// Used to identify where a Snap folder is based on a commit oid
+///
+/// Used instead of checking storage, to avoid discovery issues.
+struct CommitCtx {
+    snap: OsString,
+    month: OsString,
+    branch: String,
 }
 
 impl GitRepo {

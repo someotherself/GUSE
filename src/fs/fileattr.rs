@@ -197,6 +197,8 @@ pub enum InoFlag {
     DotGitRoot = 1 << 10,
     InsideDotGit = 1 << 11,
     HeadFile = 1 << 12,
+    ChaseRoot = 1 << 13,
+    InsideChase = 1 << 14,
 }
 impl InoFlag {
     pub const fn as_str(&self) -> &'static str {
@@ -214,6 +216,8 @@ impl InoFlag {
             InoFlag::DotGitRoot => "DotGitRoot",
             InoFlag::InsideDotGit => "InsideDotGit",
             InoFlag::HeadFile => "HeadFile",
+            InoFlag::ChaseRoot => "ChaseRoot",
+            InoFlag::InsideChase => "InsideChase",
         }
     }
 }
@@ -239,6 +243,8 @@ impl TryFrom<u64> for InoFlag {
             x if x == InoFlag::DotGitRoot as u64 => Ok(InoFlag::DotGitRoot),
             x if x == InoFlag::InsideDotGit as u64 => Ok(InoFlag::InsideDotGit),
             x if x == InoFlag::HeadFile as u64 => Ok(InoFlag::HeadFile),
+            x if x == InoFlag::ChaseRoot as u64 => Ok(InoFlag::ChaseRoot),
+            x if x == InoFlag::InsideChase as u64 => Ok(InoFlag::InsideChase),
             _ => bail!("Unknown InoFlag valueL {v:#x}"),
         }
     }

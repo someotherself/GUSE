@@ -9,7 +9,7 @@ use git2::{FileMode, ObjectType, Oid};
 
 use crate::{
     fs::{
-        FileAttr, GitFs, LIVE_FOLDER,
+        CHASE_FOLDER, FileAttr, GitFs, LIVE_FOLDER,
         builds::BuildOperationCtx,
         fileattr::{FileType, InoFlag, ObjectAttr, StorageNode, dir_attr, file_attr},
         meta_db::DbReturn,
@@ -103,7 +103,7 @@ pub fn readdir_root_dir(fs: &GitFs) -> anyhow::Result<Vec<DirectoryEntry>> {
 }
 
 // We are in repo root. This should show:
-// . .. MONTH MONTH MONTH live build
+// . .. MONTH MONTH MONTH live
 pub fn readdir_repo_dir(fs: &GitFs, parent: NormalIno) -> anyhow::Result<Vec<DirectoryEntry>> {
     let parent = parent.to_norm_u64();
     let repo_id = GitFs::ino_to_repo_id(parent);
@@ -114,7 +114,8 @@ pub fn readdir_repo_dir(fs: &GitFs, parent: NormalIno) -> anyhow::Result<Vec<Dir
 
     let mut entries: Vec<DirectoryEntry> = vec![];
 
-    let DbReturn::Found { value: live_ino } = fs.get_ino_from_db(parent, OsStr::new("live"))?
+    let DbReturn::Found { value: live_ino } =
+        fs.get_ino_from_db(parent, OsStr::new(LIVE_FOLDER))?
     else {
         tracing::error!("Live entry not found");
         bail!(std::io::Error::from_raw_os_error(libc::ENOENT))
@@ -122,26 +123,27 @@ pub fn readdir_repo_dir(fs: &GitFs, parent: NormalIno) -> anyhow::Result<Vec<Dir
     let live_entry = DirectoryEntry::new(
         live_ino,
         Oid::zero(),
-        OsString::from("live"),
+        OsString::from(LIVE_FOLDER),
         FileType::Directory,
         libc::S_IFDIR,
     );
 
-    let DbReturn::Found { value: build_ino } = fs.get_ino_from_db(parent, OsStr::new("build"))?
+    let DbReturn::Found { value: chase_ino } =
+        fs.get_ino_from_db(parent, OsStr::new(CHASE_FOLDER))?
     else {
-        tracing::error!("Build entry not found");
+        tracing::error!("Chase entry not found");
         bail!(std::io::Error::from_raw_os_error(libc::ENOENT))
     };
-    let build_entry = DirectoryEntry::new(
-        build_ino,
+    let chase_entry = DirectoryEntry::new(
+        chase_ino,
         Oid::zero(),
-        OsString::from("build"),
+        OsString::from(CHASE_FOLDER),
         FileType::Directory,
         libc::S_IFDIR,
     );
 
     entries.push(live_entry);
-    entries.push(build_entry);
+    entries.push(chase_entry);
 
     let object_entries = {
         let repo = fs.get_repo(parent)?;
@@ -250,18 +252,47 @@ fn read_build_dir(fs: &GitFs, ino: NormalIno) -> anyhow::Result<Vec<DirectoryEnt
 
     let ctx = BuildOperationCtx::new(fs, ino)?;
 
-    let entries = populate_build_entries(fs, ino, &ctx.path())?;
+    let entries = populate_entries_by_path(fs, ino, &ctx.path())?;
     out.extend(entries);
     Ok(out)
 }
 
-fn populate_build_entries(
+pub fn build_chase_path(fs: &GitFs, ino: NormalIno) -> anyhow::Result<PathBuf> {
+    let repo = fs.get_repo(ino.into())?;
+    let chase_folder = repo.chase_dir.as_path();
+
+    let mut out: Vec<OsString> = vec![];
+
+    let mut cur_ino = ino.to_norm_u64();
+    let mut cur_flag = fs.get_ino_flag_from_db(cur_ino.into())?;
+    let mut cur_name = fs.get_name_from_db(cur_ino)?;
+
+    if cur_flag == InoFlag::ChaseRoot {
+        return Ok(chase_folder.to_path_buf());
+    }
+
+    let max_loops = 1000;
+    for _ in 0..max_loops {
+        out.push(cur_name.clone());
+        cur_ino = fs.get_single_parent(cur_ino)?;
+        cur_flag = fs.get_ino_flag_from_db(cur_ino.into())?;
+        cur_name = fs.get_name_from_db(cur_ino)?;
+        if cur_flag == InoFlag::ChaseRoot {
+            break;
+        }
+    }
+
+    out.reverse();
+    Ok(chase_folder.join(out.iter().collect::<PathBuf>()))
+}
+
+fn populate_entries_by_path(
     fs: &GitFs,
     ino: NormalIno,
-    build_path: &Path,
+    path: &Path,
 ) -> anyhow::Result<Vec<DirectoryEntry>> {
     let mut out: Vec<DirectoryEntry> = Vec::new();
-    for node in build_path.read_dir()? {
+    for node in path.read_dir()? {
         let node = node?;
         let node_name = node.file_name();
         let (kind, filemode) = if node.file_type()?.is_dir() {
@@ -420,10 +451,14 @@ pub fn readdir_git_dir(fs: &GitFs, parent: NormalIno) -> anyhow::Result<Vec<Dire
                 .unwrap_or_default();
             objects_to_dir_entries(fs, parent, objects, InoFlag::InsideSnap)?
         }
-        InoFlag::InsideBuild | InoFlag::BuildRoot => {
+        InoFlag::InsideBuild => {
             // Only contains the build folder
-            // InoFlag::BuildRoot - only happens when accessing the build folder from RepoRoot
             read_build_dir(fs, parent)?
+        }
+        InoFlag::InsideChase | InoFlag::ChaseRoot => {
+            // read_chase_dir(fs, parent)?
+            let path = build_chase_path(fs, parent)?;
+            populate_entries_by_path(fs, parent, &path)?
         }
         InoFlag::DotGitRoot | InoFlag::InsideDotGit => read_inside_dot_git(fs, parent)?,
         _ => {
@@ -437,7 +472,7 @@ pub fn readdir_git_dir(fs: &GitFs, parent: NormalIno) -> anyhow::Result<Vec<Dire
 
 /// Takes in Vec<ObjectAttr> and converts them to Vec<DirectoryEntry>
 ///
-///  Checks if they exist in DB and assigns ino according.
+/// Checks if they exist in DB and assigns ino according.
 fn objects_to_dir_entries(
     fs: &GitFs,
     parent: NormalIno,

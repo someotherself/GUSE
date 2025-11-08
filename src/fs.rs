@@ -47,13 +47,15 @@ mod test;
 
 const META_STORE: &str = "fs_meta.db";
 const LIVE_FOLDER: &str = "live";
+const BUILD_FOLDER: &str = "build";
+const CHASE_FOLDER: &str = "chase";
 const TRASH_FOLDER: &str = ".trash";
 const TEMP_FOLDER: &str = ".temp";
 pub const REPO_SHIFT: u8 = 48;
 pub const ROOT_INO: u64 = 1;
 pub const VDIR_BIT: u64 = 1u64 << 47;
-const ATTR_LRU: usize = 25000;
-const DENTRY_LRU: usize = 25000;
+const ATTR_LRU: usize = 12000;
+const DENTRY_LRU: usize = 12000;
 const FILE_LRU: usize = 800;
 
 enum FsOperationContext {
@@ -340,59 +342,20 @@ impl GitFs {
             let repo_ino = GitFs::repo_id_to_ino(repo_id);
             let live_ino = GitFs::get_live_ino(repo_ino);
             let repo_name = repo.repo_dir.clone();
-            let live_path = repos_dir.join(repo_name).join(LIVE_FOLDER);
+            let live_path = repos_dir.join(&repo_name).join(LIVE_FOLDER);
+            let chase_path = repos_dir.join(&repo_name).join(CHASE_FOLDER);
 
             // Read contents of live
             fs.read_dir_to_db(&live_path, &fs, InoFlag::InsideLive, live_ino)?;
+
+            // Read contents of chase
+            if let DbReturn::Found { value: chase_ino } =
+                fs.exists_by_name(repo_ino, OsStr::new(CHASE_FOLDER))?
+            {
+                fs.read_dir_to_db(&chase_path, &fs, InoFlag::InsideChase, chase_ino)?;
+            }
         }
         Ok(fs)
-    }
-
-    fn new_repo_connection(&self, repo_name: &str, tmpdir: &Path) -> anyhow::Result<u16> {
-        // Assign repo id
-        let repo_id = self.next_repo_id();
-        let repo_ino = (repo_id as u64) << REPO_SHIFT;
-        self.next_inode
-            .insert(repo_id, AtomicU64::from(repo_ino + 1));
-
-        let db_path = tmpdir.join(META_STORE);
-        // Initialize the database (create file and schema)
-        self.init_meta_db(&db_path)?;
-        // Initialize the ro_pool and writer_tx
-        let db_conn = meta_db::new_repo_db(&db_path)?;
-        self.conn_list.insert(repo_id, db_conn);
-
-        // Create the live folder on disk
-        let live_path = tmpdir.join(LIVE_FOLDER);
-        let build_dir = self.repos_dir.join(repo_name).join("build");
-        std::fs::create_dir(&live_path)?;
-        let repo = git2::Repository::init(live_path)?;
-
-        let state: State = State {
-            head: None,
-            snapshots: BTreeMap::new(),
-            commits: BTreeMap::new(),
-            res_inodes: HashSet::new(),
-            vdir_cache: BTreeMap::new(),
-            build_sessions: HashMap::new(),
-            snaps_map: HashMap::new(),
-        };
-
-        let git_repo = GitRepo {
-            repo_dir: repo_name.to_owned(),
-            build_dir,
-            repo_id,
-            inner: parking_lot::Mutex::new(repo),
-            state: parking_lot::RwLock::new(state),
-            attr_cache: LruCache::new(ATTR_LRU),
-            dentry_cache: DentryLru::new(DENTRY_LRU),
-            file_cache: LruCache::new(FILE_LRU),
-            injected_files: DashMap::new(),
-        };
-
-        let repo_rc = Arc::from(git_repo);
-        self.insert_repo(&repo_rc, repo_name, repo_id)?;
-        Ok(repo_id)
     }
 
     /// Loads the repo with empty database.
@@ -413,8 +376,12 @@ impl GitFs {
         self.conn_list.insert(repo_id, db_conn);
 
         let live_path = repo_path.join(LIVE_FOLDER);
+        let build_dir = repo_path.join(BUILD_FOLDER);
+        let chase_dir = repo_path.join(CHASE_FOLDER);
         let repo = git2::Repository::init(live_path)?;
-        let build_dir = repo_path.join("build");
+
+        let _ = std::fs::create_dir(&build_dir);
+        let _ = std::fs::create_dir(&chase_dir);
 
         let state: State = State {
             head: None,
@@ -429,6 +396,7 @@ impl GitFs {
         let git_repo = GitRepo {
             repo_dir: repo_name.to_owned(),
             build_dir,
+            chase_dir,
             repo_id,
             inner: parking_lot::Mutex::new(repo),
             state: parking_lot::RwLock::new(state),
@@ -479,9 +447,10 @@ impl GitFs {
         self.write_inodes_to_db(nodes)?;
 
         // Clean the build folder
-        let build_name = OsString::from("build");
+        let build_name = OsString::from(BUILD_FOLDER);
         let build_path = repo_path.join(&build_name);
         let _ = std::fs::remove_dir_all(&build_path);
+        let chase_name = OsString::from(CHASE_FOLDER);
 
         // Create the temp folder
         let temp_path = repo_path.join(TEMP_FOLDER);
@@ -490,9 +459,9 @@ impl GitFs {
 
         // Prepare the live and build folders
         let live_ino = self.next_inode_raw(repo_ino)?;
-        let build_ino = self.next_inode_raw(repo_ino)?;
+        let chase_ino = self.next_inode_raw(repo_ino)?;
 
-        let live_name = OsString::from("live");
+        let live_name = OsString::from(LIVE_FOLDER);
 
         let perms = 0o775;
         let st_mode = libc::S_IFDIR | perms;
@@ -501,14 +470,14 @@ impl GitFs {
         live_attr.ino = live_ino;
         live_attr.git_mode = st_mode;
 
-        let mut build_attr: FileAttr = dir_attr(InoFlag::BuildRoot).into();
-        build_attr.ino = build_ino;
-        build_attr.git_mode = st_mode;
+        let mut chase_attr: FileAttr = dir_attr(InoFlag::ChaseRoot).into();
+        chase_attr.ino = chase_ino;
+        chase_attr.git_mode = st_mode;
 
         let repo = self.get_repo(repo_ino)?;
         repo.with_state_mut(|s| {
             s.res_inodes.insert(live_ino);
-            s.res_inodes.insert(build_ino);
+            s.res_inodes.insert(chase_ino);
         });
 
         let nodes: Vec<StorageNode> = vec![
@@ -519,8 +488,8 @@ impl GitFs {
             },
             StorageNode {
                 parent_ino: repo_ino,
-                name: build_name,
-                attr: build_attr,
+                name: chase_name,
+                attr: chase_attr,
             },
         ];
 
@@ -578,6 +547,56 @@ impl GitFs {
         self.fetch_repo(repo_id, repo_name, tmpdir.path(), url)
     }
 
+    fn new_repo_connection(&self, repo_name: &str, tmpdir: &Path) -> anyhow::Result<u16> {
+        // Assign repo id
+        let repo_id = self.next_repo_id();
+        let repo_ino = (repo_id as u64) << REPO_SHIFT;
+        self.next_inode
+            .insert(repo_id, AtomicU64::from(repo_ino + 1));
+
+        let db_path = tmpdir.join(META_STORE);
+        // Initialize the database (create file and schema)
+        self.init_meta_db(&db_path)?;
+        // Initialize the ro_pool and writer_tx
+        let db_conn = meta_db::new_repo_db(&db_path)?;
+        self.conn_list.insert(repo_id, db_conn);
+
+        // Create the live folder on disk (real, current path)
+        let live_path = tmpdir.join(LIVE_FOLDER);
+        // Save the build and chase dir paths (future path, after tmp rename)
+        let build_dir = self.repos_dir.join(repo_name).join(BUILD_FOLDER);
+        let chase_dir = self.repos_dir.join(repo_name).join(CHASE_FOLDER);
+        std::fs::create_dir(&live_path)?;
+        let repo = git2::Repository::init(live_path)?;
+
+        let state: State = State {
+            head: None,
+            snapshots: BTreeMap::new(),
+            commits: BTreeMap::new(),
+            res_inodes: HashSet::new(),
+            vdir_cache: BTreeMap::new(),
+            build_sessions: HashMap::new(),
+            snaps_map: HashMap::new(),
+        };
+
+        let git_repo = GitRepo {
+            repo_dir: repo_name.to_owned(),
+            build_dir,
+            chase_dir,
+            repo_id,
+            inner: parking_lot::Mutex::new(repo),
+            state: parking_lot::RwLock::new(state),
+            attr_cache: LruCache::new(ATTR_LRU),
+            dentry_cache: DentryLru::new(DENTRY_LRU),
+            file_cache: LruCache::new(FILE_LRU),
+            injected_files: DashMap::new(),
+        };
+
+        let repo_rc = Arc::from(git_repo);
+        self.insert_repo(&repo_rc, repo_name, repo_id)?;
+        Ok(repo_id)
+    }
+
     fn fetch_repo(
         &self,
         repo_id: u16,
@@ -600,13 +619,13 @@ impl GitFs {
         }];
         self.write_inodes_to_db(nodes)?;
 
-        // Prepare the live and build folders
+        // Prepare the live and chase folders
 
         let live_ino = self.next_inode_raw(repo_ino)?;
-        let build_ino = self.next_inode_raw(repo_ino)?;
+        let chase_ino = self.next_inode_raw(repo_ino)?;
 
-        let build_name = OsString::from("build");
-        let live_name = OsString::from("live");
+        let chase_name = OsString::from(CHASE_FOLDER);
+        let live_name = OsString::from(LIVE_FOLDER);
 
         let perms = 0o775;
         let st_mode = libc::S_IFDIR | perms;
@@ -615,12 +634,12 @@ impl GitFs {
         live_attr.ino = live_ino;
         live_attr.git_mode = st_mode;
 
-        let mut build_attr: FileAttr = dir_attr(InoFlag::BuildRoot).into();
-        build_attr.ino = build_ino;
-        build_attr.git_mode = st_mode;
+        let mut chase_attr: FileAttr = dir_attr(InoFlag::ChaseRoot).into();
+        chase_attr.ino = chase_ino;
+        chase_attr.git_mode = st_mode;
 
         // Create build folder on disk
-        std::fs::create_dir(tmp_path.join("build"))?;
+        std::fs::create_dir(tmp_path.join(CHASE_FOLDER))?;
 
         // Create the temp folder
         let temp_path = tmp_path.join(TEMP_FOLDER);
@@ -630,7 +649,7 @@ impl GitFs {
         let repo = self.get_repo(repo_ino)?;
         repo.with_state_mut(|s| {
             s.res_inodes.insert(live_ino);
-            s.res_inodes.insert(build_ino);
+            s.res_inodes.insert(chase_ino);
         });
 
         let nodes: Vec<StorageNode> = vec![
@@ -641,8 +660,8 @@ impl GitFs {
             },
             StorageNode {
                 parent_ino: repo_ino,
-                name: build_name,
-                attr: build_attr,
+                name: chase_name,
+                attr: chase_attr,
             },
         ];
 
@@ -1525,7 +1544,7 @@ impl GitFs {
         if let dashmap::Entry::Vacant(entry) = self.repos_list.entry(repo_id) {
             entry.insert(repo.clone());
             self.repos_map.insert(repo_name.to_string(), repo_id);
-            info!("Repo {repo_name} added with id {repo_id}");
+            info!("Repo {repo_name} added with");
         } else {
             bail!("Repo id already exists");
         }
@@ -1896,7 +1915,8 @@ impl GitFs {
     #[allow(dead_code)]
     fn get_build_ino(&self, ino: NormalIno) -> anyhow::Result<u64> {
         let repo_ino = self.get_repo_ino(ino.to_norm_u64())?;
-        self.get_ino_from_db(repo_ino, OsStr::new("build"))?.into()
+        self.get_ino_from_db(repo_ino, OsStr::new(BUILD_FOLDER))?
+            .into()
     }
 
     fn exists_by_name(&self, parent: u64, name: &OsStr) -> anyhow::Result<DbReturn<u64>> {

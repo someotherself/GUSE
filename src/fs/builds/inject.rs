@@ -4,8 +4,15 @@ use git2::Oid;
 
 use crate::fs::{GitFs, TEMP_FOLDER, janitor::random_string};
 
+/// Holds information about and keeps track of modified blobs.
+///
+/// Created by `open_git` the first time a blob is modified
+///
+/// Priority when opening is: build > modified > original blob
 pub struct InjectedMetadata {
+    /// Created by a user
     pub modified: InjectedFile,
+    /// Created and cleaned up by a chase
     pub build: Option<InjectedFile>,
 }
 
@@ -15,6 +22,11 @@ pub struct InjectedFile {
 }
 
 impl InjectedMetadata {
+    /// Used when a blob is opened with write == true
+    ///
+    /// It creates a new file in repo_dir/.temp and copies the blob in it.
+    ///
+    /// For as long as the file exists, it will replace the blob and will be used in builds
     pub fn create_modified(fs: &GitFs, oid: Oid, ino: u64) -> anyhow::Result<Self> {
         let filename = OsString::from(random_string());
         let repo = fs.get_repo(ino)?;
@@ -43,9 +55,5 @@ impl InjectedMetadata {
             build: None,
         };
         Ok(metadata)
-    }
-
-    pub fn open_build() {
-        todo!()
     }
 }

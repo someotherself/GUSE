@@ -14,7 +14,7 @@ use crate::{
         GitFs, Handle, SourceTypes, VFileEntry,
         builds::inject::InjectedMetadata,
         fileattr::{InoFlag, ObjectAttr},
-        ops::readdir::{DirCase, build_dot_git_path, classify_inode},
+        ops::readdir::{DirCase, build_chase_path, build_dot_git_path, classify_inode},
         repo::GitRepo,
     },
     inodes::{Inodes, NormalIno, VirtualIno},
@@ -111,6 +111,19 @@ pub fn open_git(
                     oid: metadata.oid,
                     data: contents.into(),
                 }
+            };
+            let handle = Handle {
+                ino: ino.to_norm_u64(),
+                source: file,
+                write: false,
+            };
+            fs.handles.open(handle)
+        }
+        InoFlag::InsideChase => {
+            let file = {
+                let path = build_chase_path(fs, ino)?;
+                let open_file = OpenOptions::new().read(true).open(path)?;
+                SourceTypes::RealFile(Arc::new(open_file))
             };
             let handle = Handle {
                 ino: ino.to_norm_u64(),
