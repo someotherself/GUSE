@@ -262,73 +262,55 @@ impl GitRepo {
     }
 
     pub fn fetch_anon(&self, url: &str) -> anyhow::Result<()> {
-        // Set up the anonymous remote and callbacks
         let repo = self.inner.lock();
         let mut remote = repo.remote_anonymous(url)?;
-        let mut cbs = git2::RemoteCallbacks::new();
-        cbs.sideband_progress(|d| {
-            print!("remote: {}", std::str::from_utf8(d).unwrap_or(""));
-            true
-        });
-        cbs.update_tips(|name, a, b| {
-            println!("update {a:.10}..{b:.10} {name}");
-            true
-        });
-        cbs.transfer_progress(|s| {
-            if s.total_objects() > 0 {
-                print!(
-                    "\rReceived {}/{} (idx {}) {} bytes",
-                    s.received_objects(),
-                    s.total_objects(),
-                    s.indexed_objects(),
-                    s.received_bytes()
-                );
-            }
-            std::io::Write::flush(&mut std::io::stdout()).ok();
-            true
-        });
+        let cbs = git2::RemoteCallbacks::new();
         let mut fo = git2::FetchOptions::new();
         fo.remote_callbacks(cbs);
 
         remote.connect(Direction::Fetch)?;
-        let default_branch = remote.default_branch().ok(); // Optional but nice
+        let default_branch = remote.default_branch();
         remote.disconnect()?;
 
         let mut refspecs = vec![
-            "+refs/heads/*:refs/remotes/anon/*".to_string(),
+            "+refs/heads/*:refs/remotes/upstream/*".to_string(),
             "+refs/tags/*:refs/tags/*".to_string(),
+            "+HEAD:refs/remotes/upstream/HEAD".to_string(),
         ];
-        if let Some(ref buf) = default_branch {
+        if url.contains("github") {
+            refspecs.push("+refs/pull/*/head:refs/remotes/upstream/pr/*".to_string());
+            refspecs.push("+refs/pull/*/merge:refs/remotes/upstream/pr-merge/*".to_string());
+        }
+        if let Ok(ref buf) = default_branch {
             if let Ok(src) = std::str::from_utf8(buf.as_ref()) {
                 refspecs.push(format!(
-                    "+{}:refs/remotes/anon/{}",
+                    "+{}:refs/remotes/upstream/{}",
                     src,
                     src.rsplit('/')
                         .next()
                         .ok_or_else(|| anyhow!("Invalid ref"))?
                 ));
-                refspecs.push("+HEAD:refs/remotes/anon/HEAD".to_string());
+                refspecs.push("+HEAD:refs/remotes/upstream/HEAD".to_string());
             }
         } else {
-            refspecs.push("+HEAD:refs/remotes/anon/HEAD".to_string());
+            refspecs.push("+HEAD:refs/remotes/upstream/HEAD".to_string());
         }
         let refs_as_str: Vec<&str> = refspecs.iter().map(|s| s.as_str()).collect();
 
         remote.fetch(&refs_as_str, Some(&mut fo), None)?;
 
         if repo.head().is_err() {
-            if let Some(ref buf) = default_branch
+            if let Ok(ref buf) = default_branch
                 && let Ok(src) = std::str::from_utf8(buf.as_ref())
             {
                 let short = src
                     .rsplit('/')
                     .next()
                     .ok_or_else(|| anyhow!("Invalid ref"))?;
-                let target = format!("refs/remotes/anon/{short}");
-                // If that ref exists, point HEAD to it; else fall back to anon/HEAD
+                let target = format!("refs/remotes/upstream/{short}");
                 if repo.refname_to_id(&target).is_ok() {
                     repo.set_head(&target)?;
-                } else if let Ok(r) = repo.find_reference("refs/remotes/anon/HEAD") {
+                } else if let Ok(r) = repo.find_reference("refs/remotes/upstream/HEAD") {
                     if let Some(sym) = r.symbolic_target() {
                         repo.set_head(sym)?;
                     } else if let Some(oid) = r.target() {
@@ -336,7 +318,7 @@ impl GitRepo {
                     }
                 }
             }
-        } else if let Ok(r) = repo.find_reference("refs/remotes/anon/HEAD") {
+        } else if let Ok(r) = repo.find_reference("refs/remotes/upstream/HEAD") {
             if let Some(sym) = r.symbolic_target() {
                 repo.set_head(sym)?;
             } else if let Some(oid) = r.target() {
