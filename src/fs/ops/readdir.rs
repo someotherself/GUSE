@@ -148,7 +148,7 @@ pub fn readdir_repo_dir(fs: &GitFs, parent: NormalIno) -> anyhow::Result<Vec<Dir
     let object_entries = {
         let repo = fs.get_repo(parent)?;
         // Refresh the snapshots every time we cd into repo root
-        repo.refresh_snapshots()?;
+        repo.refresh_refs()?;
         repo.month_folders()?
     };
 

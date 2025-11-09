@@ -419,7 +419,8 @@ impl GitFs {
             });
             git_repo.with_state_mut(|s| s.head = head);
             if head.is_some() {
-                git_repo.refresh_snapshots()?;
+                // git_repo.refresh_snapshots()?;
+                git_repo.refresh_refs()?;
             }
         }
 
@@ -673,7 +674,8 @@ impl GitFs {
 
         if let Some(url) = url {
             repo.fetch_anon(url)?;
-            repo.refresh_snapshots()?;
+            // repo.refresh_snapshots()?;
+            repo.refresh_refs()?;
         };
 
         let final_path = self.repos_dir.join(repo_name);
@@ -1548,7 +1550,7 @@ impl GitFs {
         if let dashmap::Entry::Vacant(entry) = self.repos_list.entry(repo_id) {
             entry.insert(repo.clone());
             self.repos_map.insert(repo_name.to_string(), repo_id);
-            info!("Repo {repo_name} added with");
+            info!("Repo {repo_name} added");
         } else {
             bail!("Repo id already exists");
         }

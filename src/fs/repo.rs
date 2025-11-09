@@ -143,105 +143,66 @@ impl GitRepo {
     pub fn refresh_refs(&self) -> anyhow::Result<()> {
         let repo = self.inner.lock();
 
+        let mut ref_tips = Vec::new();
+
         for r in repo.references()? {
             let r = r?;
 
-            let name = match r.name() {
-                Some(name) => name,
-                None => continue,
+            let Some(name) = r.name() else {
+                continue;
             };
 
-            let ref_kind = match RefKind::classify_ref(name) {
-                Some(k) => k,
-                None => continue,
+            let Some(ref_kind) = RefKind::classify_ref(name) else {
+                continue;
             };
 
-            let tip = r.resolve()?;
-            let object = tip.peel(git2::ObjectType::Commit)?;
+            if let Ok(tip) = r
+                .resolve()
+                .and_then(|rr| rr.peel(git2::ObjectType::Commit).map(|obj| obj.id()))
+            {
+                ref_tips.push((ref_kind, tip))
+            }
+        }
 
-            let mut revwalk = repo.revwalk()?;
-            revwalk.set_sorting(git2::Sort::TOPOLOGICAL | git2::Sort::TIME)?;
-            revwalk.push(object.id())?;
+        self.with_state_mut(|s| {
+            s.snapshots.clear();
+            s.refs_to_snaps.clear();
+            s.snaps_to_ref.clear();
+        });
 
-            let mut state = self.state.write();
+        let mut snapshots: BTreeMap<i64, Vec<Oid>> = BTreeMap::new();
+        let mut refs_to_snaps: HashMap<RefKind, Vec<Oid>> = HashMap::new();
+        let mut snaps_to_ref: HashMap<Oid, BTreeSet<RefKind>> = HashMap::new();
 
-            state.snapshots.clear();
-            state.refs_to_snaps.clear();
-            state.snaps_to_ref.clear();
+        let mut revwalk = repo.revwalk()?;
+        revwalk.set_sorting(git2::Sort::TOPOLOGICAL | git2::Sort::TIME)?;
 
-            for c in revwalk {
-                let commit_oid = c?;
+        for (rf, tip) in ref_tips {
+            revwalk.reset()?;
+            revwalk.push(tip)?;
 
-                // Find the commit time and insert into snapshots
-                let commit = repo.find_commit(commit_oid)?;
+            let entry = refs_to_snaps.entry(rf.clone()).or_default();
+
+            for oid in revwalk.by_ref() {
+                let oid = oid?;
+
+                entry.push(oid);
+
                 let time = {
+                    let commit = repo.find_commit(oid)?;
                     let t = commit.time();
                     t.seconds()
                 };
-                state.snapshots.entry(time).or_default().push(commit_oid);
-                state
-                    .snaps_to_ref
-                    .entry(commit_oid)
-                    .or_default()
-                    .insert(ref_kind.clone());
-                state
-                    .refs_to_snaps
-                    .entry(ref_kind.clone())
-                    .or_default()
-                    .push(commit_oid);
+                snapshots.entry(time).or_default().push(oid);
+                snaps_to_ref.entry(oid).or_default().insert(rf.clone());
             }
         }
-        Ok(())
-    }
-
-    // Updates the State snapshots and snaps_map
-    // Runs every time a user cd's into the repo root
-    pub fn refresh_snapshots(&self) -> anyhow::Result<()> {
-        let head_oid = self.with_repo(|r| match r.head() {
-            Ok(h) => h.target(),
-            Err(_) => None,
-        });
 
         self.with_state_mut(|s| {
-            s.head = head_oid;
-            s.snapshots.clear();
+            s.snapshots = snapshots;
+            s.refs_to_snaps = refs_to_snaps;
+            s.snaps_to_ref = snaps_to_ref;
         });
-
-        self.with_repo(|r| -> Result<(), git2::Error> {
-            let mut walk = r.revwalk()?;
-            walk.set_sorting(git2::Sort::TOPOLOGICAL | git2::Sort::TIME)?;
-            if let Some(oid) = head_oid {
-                walk.push(oid)?;
-            };
-            for oid_res in walk {
-                let oid = oid_res?;
-                let secs = {
-                    let c = r.find_commit(oid)?;
-                    let t = c.time();
-                    t.seconds()
-                };
-                self.with_state_mut(|s| s.snapshots.entry(secs).or_default().push(oid));
-            }
-            Ok(())
-        })?;
-
-        // Save the MONTH folders into the State
-        let months_names = self
-            .month_folders()?
-            .iter()
-            .map(|e| e.0.clone())
-            .collect::<Vec<OsString>>();
-
-        for name in months_names {
-            let str_name = name
-                .to_str()
-                .ok_or_else(|| anyhow!("Not valid UTF-8 name"))?;
-            let snaps = self.month_oid(str_name)?;
-            for snap in snaps {
-                self.with_state_mut(|s| s.snaps_map.insert(snap.0, (name.clone(), snap.1)));
-            }
-        }
-
         Ok(())
     }
 
