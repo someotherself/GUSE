@@ -391,6 +391,8 @@ impl GitFs {
             vdir_cache: BTreeMap::new(),
             build_sessions: HashMap::new(),
             snaps_map: HashMap::new(),
+            refs_to_snaps: HashMap::new(),
+            snaps_to_ref: HashMap::new(),
         };
 
         let git_repo = GitRepo {
@@ -577,6 +579,8 @@ impl GitFs {
             vdir_cache: BTreeMap::new(),
             build_sessions: HashMap::new(),
             snaps_map: HashMap::new(),
+            refs_to_snaps: HashMap::new(),
+            snaps_to_ref: HashMap::new(),
         };
 
         let git_repo = GitRepo {

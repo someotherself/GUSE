@@ -4,7 +4,7 @@ use dashmap::DashMap;
 use git2::{Commit, Delta, Direction, FileMode, ObjectType, Oid, Repository, Time, Tree};
 use parking_lot::{Mutex, RwLock};
 use std::{
-    collections::{BTreeMap, HashMap, HashSet, hash_map::Entry},
+    collections::{BTreeMap, BTreeSet, HashMap, HashSet},
     ffi::OsString,
     path::{Path, PathBuf},
     sync::{
@@ -47,9 +47,6 @@ pub struct State {
     ///
     /// Vec<Oid> -> Vec<commit_oid> -> In case commits are made at the same time
     pub snapshots: BTreeMap<i64, Vec<Oid>>,
-    /// Used to connect a commit to it's Snap folder
-    ///
-    /// <commit oid, Filename of MONTH folder>
     pub commits: BTreeMap<Oid, String>,
     /// Used inodes to prevent reading from DB
     pub res_inodes: HashSet<u64>,
@@ -62,6 +59,10 @@ pub struct State {
     /// <folder name, (MONTH name, Snap name)>
     /// TODO: remove and add to snapshots
     pub snaps_map: HashMap<Oid, (OsString, OsString)>,
+    /// Maps all the commits to one of more refs
+    pub snaps_to_ref: HashMap<Oid, BTreeSet<RefKind>>,
+    /// Lists all the commits for a respective ref
+    pub refs_to_snaps: HashMap<RefKind, Vec<Oid>>,
 }
 
 /// Create the Virtual Node during opendir
@@ -81,13 +82,41 @@ pub struct VirtualNode {
     pub log: BTreeMap<OsString, (u64, ObjectAttr)>,
 }
 
-/// Used to identify where a Snap folder is based on a commit oid
-///
-/// Used instead of checking storage, to avoid discovery issues.
-struct CommitCtx {
-    snap: OsString,
-    month: OsString,
-    branch: String,
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum RefKind {
+    Branch(String),
+    Tag(String),
+    Pr(u32),
+    PrMerge(u32),
+    Head(String),
+}
+
+impl RefKind {
+    fn classify_ref(full: &str) -> Option<RefKind> {
+        let short = full.rsplit('/').next()?;
+        if full == "HEAD" {
+            return Some(RefKind::Head(short.to_owned()));
+        }
+        if full.starts_with("refs/heads/") {
+            return Some(RefKind::Branch(short.to_owned()));
+        }
+        if full.starts_with("refs/tags/") {
+            return Some(RefKind::Tag(short.to_owned()));
+        }
+        if full.starts_with("refs/remotes/") {
+            if full.contains("/pr/") {
+                let pr_num = short.parse::<u32>().ok()?;
+                Some(RefKind::Pr(pr_num))
+            } else if full.contains("/pr-merge/") {
+                let pr_num = short.parse::<u32>().ok()?;
+                Some(RefKind::PrMerge(pr_num))
+            } else {
+                Some(RefKind::Branch(short.to_owned()))
+            }
+        } else {
+            None
+        }
+    }
 }
 
 impl GitRepo {
@@ -109,6 +138,60 @@ impl GitRepo {
     pub fn with_state_mut<R>(&self, f: impl FnOnce(&mut State) -> R) -> R {
         let mut guard = self.state.write();
         f(&mut guard)
+    }
+
+    pub fn refresh_refs(&self) -> anyhow::Result<()> {
+        let repo = self.inner.lock();
+
+        for r in repo.references()? {
+            let r = r?;
+
+            let name = match r.name() {
+                Some(name) => name,
+                None => continue,
+            };
+
+            let ref_kind = match RefKind::classify_ref(name) {
+                Some(k) => k,
+                None => continue,
+            };
+
+            let tip = r.resolve()?;
+            let object = tip.peel(git2::ObjectType::Commit)?;
+
+            let mut revwalk = repo.revwalk()?;
+            revwalk.set_sorting(git2::Sort::TOPOLOGICAL | git2::Sort::TIME)?;
+            revwalk.push(object.id())?;
+
+            let mut state = self.state.write();
+
+            state.snapshots.clear();
+            state.refs_to_snaps.clear();
+            state.snaps_to_ref.clear();
+
+            for c in revwalk {
+                let commit_oid = c?;
+
+                // Find the commit time and insert into snapshots
+                let commit = repo.find_commit(commit_oid)?;
+                let time = {
+                    let t = commit.time();
+                    t.seconds()
+                };
+                state.snapshots.entry(time).or_default().push(commit_oid);
+                state
+                    .snaps_to_ref
+                    .entry(commit_oid)
+                    .or_default()
+                    .insert(ref_kind.clone());
+                state
+                    .refs_to_snaps
+                    .entry(ref_kind.clone())
+                    .or_default()
+                    .push(commit_oid);
+            }
+        }
+        Ok(())
     }
 
     // Updates the State snapshots and snaps_map
@@ -269,6 +352,7 @@ impl GitRepo {
         fo.remote_callbacks(cbs);
 
         remote.connect(Direction::Fetch)?;
+        // What branch does HEAD point to
         let default_branch = remote.default_branch();
         remote.disconnect()?;
 
@@ -281,20 +365,7 @@ impl GitRepo {
             refspecs.push("+refs/pull/*/head:refs/remotes/upstream/pr/*".to_string());
             refspecs.push("+refs/pull/*/merge:refs/remotes/upstream/pr-merge/*".to_string());
         }
-        if let Ok(ref buf) = default_branch {
-            if let Ok(src) = std::str::from_utf8(buf.as_ref()) {
-                refspecs.push(format!(
-                    "+{}:refs/remotes/upstream/{}",
-                    src,
-                    src.rsplit('/')
-                        .next()
-                        .ok_or_else(|| anyhow!("Invalid ref"))?
-                ));
-                refspecs.push("+HEAD:refs/remotes/upstream/HEAD".to_string());
-            }
-        } else {
-            refspecs.push("+HEAD:refs/remotes/upstream/HEAD".to_string());
-        }
+
         let refs_as_str: Vec<&str> = refspecs.iter().map(|s| s.as_str()).collect();
 
         remote.fetch(&refs_as_str, Some(&mut fo), None)?;
@@ -636,11 +707,11 @@ impl GitRepo {
         build_folder: &Path,
     ) -> anyhow::Result<Arc<BuildSession>> {
         self.with_state_mut(|s| match s.build_sessions.entry(commit_oid) {
-            Entry::Occupied(entry) => {
+            std::collections::hash_map::Entry::Occupied(entry) => {
                 let session = entry.get();
                 Ok(session.clone())
             }
-            Entry::Vacant(slot) => {
+            std::collections::hash_map::Entry::Vacant(slot) => {
                 let folder = tempfile::Builder::new()
                     .prefix(&format!("build_{}", &commit_oid.to_string()[..=7]))
                     .tempdir_in(build_folder)?;
