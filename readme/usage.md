@@ -70,6 +70,19 @@ URL: https://github.com/tokio-rs/tokio.git
 bash: mkdir github.tokio-rs.tokio.git
 ```
 
+This fetches the following:
+```
++------------------------+---------------------------------+
+| Remote ref pattern     | Stored locally under            |
++------------------------+---------------------------------+
+| refs/heads/*           | refs/remotes/upstream/*         |   → all branches
+| refs/tags/*            | refs/tags/*                     |   → all tags
+| HEAD                   | refs/remotes/upstream/HEAD      |   → remote HEAD
+| refs/pull/*/head       | refs/remotes/upstream/pr/*      |   → GitHub PR branch tips
+| refs/pull/*/merge      | refs/remotes/upstream/pr-merge/*|   → GitHub PR merge commits
++------------------------+---------------------------------+
+```
+
 Inside the new repo, the commits will be grouped by MONTH.
 Inside the MONTH folders, each commit will be found in a directory. The folder name followed the format:
 ```
