@@ -8,13 +8,11 @@ use fuser::{
 };
 use git2::Oid;
 use libc::{EACCES, EIO, EISDIR, ENOENT, ENOTDIR, ENOTTY, O_DIRECTORY};
-use ratatui::crossterm::style::Stylize;
 use tracing::{Level, Span, info, instrument};
 use tracing::{debug, error, trace, warn};
 
 use std::ffi::{OsStr, OsString};
 use std::io::{BufRead, BufReader, Read, Write};
-use std::iter::Skip;
 use std::os::linux::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::os::unix::net::{UnixListener, UnixStream};
