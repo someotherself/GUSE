@@ -132,10 +132,11 @@ pub fn open_git(
             };
             fs.handles.open(handle)
         }
+        // Check if modified/build version exists
+        // Open them if they exist (priority is build > modified)
+        // If none exist and write == false, open blob
         // If write == true, copy blob to temp folder and open as SourceType::ReadlFile
-        // If write == false, open the blob as SourceType::Blob
-        _ if write => open_modified_blob(fs, metadata.oid, ino.to_norm_u64()),
-        _ => open_blob(fs, metadata.oid, ino.to_norm_u64()),
+        _ => open_modified_blob(fs, metadata.oid, ino.to_norm_u64(), write),
     }
 }
 
@@ -288,24 +289,32 @@ fn open_blob(fs: &GitFs, oid: Oid, ino: u64) -> anyhow::Result<u64> {
     fs.handles.open(handle)
 }
 
-fn open_modified_blob(fs: &GitFs, oid: Oid, ino: u64) -> anyhow::Result<u64> {
+fn open_modified_blob(fs: &GitFs, oid: Oid, ino: u64, write: bool) -> anyhow::Result<u64> {
     let repo = fs.get_repo(ino)?;
     match repo.injected_files.entry(ino) {
         Entry::Occupied(e) => {
             let metadata = e.get();
-            let handle = open_injected_file(metadata, ino)?;
+            let handle = open_injected_file(metadata, ino, write)?;
             fs.handles.open(handle)
         }
         Entry::Vacant(s) => {
             let metadata = InjectedMetadata::create_modified(fs, oid, ino)?;
-            let handle = open_injected_file(&metadata, ino)?;
-            s.insert(metadata);
-            fs.handles.open(handle)
+            if write {
+                let handle = open_injected_file(&metadata, ino, write)?;
+                s.insert(metadata);
+                fs.handles.open(handle)
+            } else {
+                open_blob(fs, oid, ino)
+            }
         }
     }
 }
 
-fn open_injected_file(metadata: &InjectedMetadata, ino: u64) -> anyhow::Result<Handle> {
+fn open_injected_file(
+    metadata: &InjectedMetadata,
+    ino: u64,
+    write: bool,
+) -> anyhow::Result<Handle> {
     let path = if let Some(build_meta) = &metadata.build {
         build_meta.path.as_path()
     } else {
@@ -316,7 +325,7 @@ fn open_injected_file(metadata: &InjectedMetadata, ino: u64) -> anyhow::Result<H
     Ok(Handle {
         ino,
         source: SourceTypes::RealFile(Arc::new(file)),
-        write: true,
+        write,
     })
 }
 
