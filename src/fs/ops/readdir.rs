@@ -149,11 +149,7 @@ pub fn readdir_repo_dir(fs: &GitFs, parent: NormalIno) -> anyhow::Result<Vec<Dir
 
     // Add the MONTH folders
     let repo = fs.get_repo(parent)?;
-    let object_entries = {
-        // Refresh the snapshots every time we cd into repo root
-        repo.refresh_refs()?;
-        repo.month_folders()?
-    };
+    let object_entries = { repo.month_folders()? };
 
     let mut nodes: Vec<StorageNode> = vec![];
     if !object_entries.is_empty() {

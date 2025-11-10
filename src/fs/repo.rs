@@ -43,11 +43,6 @@ pub struct GitRepo {
 
 pub struct State {
     pub head: Option<Oid>,
-    /// i64 -> commit_time -> seconds since EPOCH. Used to create MONTH and Snap folders
-    ///
-    /// Vec<Oid> -> Vec<commit_oid> -> In case commits are made at the same time
-    pub snapshots: BTreeMap<i64, Vec<Oid>>,
-    pub commits: BTreeMap<Oid, String>,
     /// Used inodes to prevent reading from DB
     pub res_inodes: HashSet<u64>,
     /// key: inode of the virtual directory
@@ -60,9 +55,14 @@ pub struct State {
     /// TODO: remove and add to snapshots
     pub snaps_map: HashMap<Oid, (OsString, OsString)>,
     /// Maps all the commits to one of more refs
-    pub snaps_to_ref: HashMap<Oid, BTreeSet<RefData>>, // HashMap<Oid, BTreeSet<RefData>>
+    pub snaps_to_ref: HashMap<Oid, BTreeSet<RefKind>>,
     /// Lists all the commits for a respective ref
-    pub refs_to_snaps: HashMap<RefKind, Vec<Oid>>, // HashMap<RefKind, Vec<(Oid, short name)>>
+    ///
+    /// i64 -> commit_time -> seconds since EPOCH. Used to create MONTH and Snap folders
+    pub refs_to_snaps: HashMap<RefKind, Vec<(i64, Oid)>>, // HashMap<RefKind, Vec<(Oid, short name)>>
+    /// Lists the namespaces to group commits
+    ///
+    /// To keep track which kinds of refs are available (branches, tags, pr, pr-merge)
     pub ref_namespaces: HashSet<String>,
 }
 
@@ -84,15 +84,14 @@ pub struct VirtualNode {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
-///Stores the ref namespace (prefix) without the final name
-//<   ref namespace   ><name>
-//refs/remotes/upstream/main
+///Stores short name
 pub enum RefKind {
     Branch(String),
     Tag(String),
     Pr(String),
     PrMerge(String),
     Head(String),
+    Main(String),
 }
 
 impl RefKind {
@@ -103,60 +102,35 @@ impl RefKind {
             Self::Pr(_) => "Pr",
             Self::PrMerge(_) => "PrMerge",
             Self::Tag(_) => "Tags",
+            Self::Main(_) => "main",
         }
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct RefData {
-    kind: RefKind,
-    short: String,
-}
-
-impl RefData {
+impl RefKind {
+    // TODO: Make this better at identifying main and head
     fn classify_ref(full: &str) -> Option<Self> {
-        let mut split = full.rsplitn(2, '/');
+        let mut split = full.rsplit('/');
         let short = split.next()?;
-        if full == "HEAD" {
-            let kind = RefKind::Head(split.next()?.to_owned());
-            return Some(Self {
-                kind,
-                short: short.to_string(),
-            });
+        if full.contains("HEAD") {
+            return Some(RefKind::Head(short.to_string()));
         }
+        if full.contains("main") || full.contains("master") {
+            return Some(RefKind::Main(short.to_string()));
+        };
         if full.starts_with("refs/heads/") {
-            let kind = RefKind::Branch(split.next()?.to_owned());
-            return Some(Self {
-                kind,
-                short: short.to_string(),
-            });
+            return Some(RefKind::Branch(short.to_string()));
         }
         if full.starts_with("refs/tags/") {
-            let kind = RefKind::Tag(split.next()?.to_owned());
-            return Some(Self {
-                kind,
-                short: short.to_string(),
-            });
+            return Some(RefKind::Tag(short.to_string()));
         }
         if full.starts_with("refs/remotes/") {
             if full.contains("/pr/") {
-                let kind = RefKind::Pr(split.next()?.to_owned());
-                Some(Self {
-                    kind,
-                    short: short.to_string(),
-                })
+                Some(RefKind::Pr(split.next()?.to_owned()))
             } else if full.contains("/pr-merge/") {
-                let kind = RefKind::PrMerge(split.next()?.to_owned());
-                Some(Self {
-                    kind,
-                    short: short.to_string(),
-                })
+                Some(RefKind::PrMerge(short.to_string()))
             } else {
-                let kind = RefKind::Branch(split.next()?.to_owned());
-                Some(Self {
-                    kind,
-                    short: short.to_string(),
-                })
+                Some(RefKind::Branch(short.to_string()))
             }
         } else {
             None
@@ -197,7 +171,7 @@ impl GitRepo {
                 continue;
             };
 
-            let Some(ref_data) = RefData::classify_ref(name) else {
+            let Some(ref_data) = RefKind::classify_ref(name) else {
                 continue;
             };
 
@@ -209,18 +183,8 @@ impl GitRepo {
             }
         }
 
-        // Keep ref_kind using short name so we iterate all the refs
-        // Then strip the short name from each and save namespace and short name separately.
-
-        self.with_state_mut(|s| {
-            s.snapshots.clear();
-            s.refs_to_snaps.clear();
-            s.snaps_to_ref.clear();
-        });
-
-        let mut snapshots: BTreeMap<i64, Vec<Oid>> = BTreeMap::new();
-        let mut refs_to_snaps: HashMap<RefKind, Vec<Oid>> = HashMap::new();
-        let mut snaps_to_ref: HashMap<Oid, BTreeSet<RefData>> = HashMap::new();
+        let mut refs_to_snaps: HashMap<RefKind, Vec<(i64, Oid)>> = HashMap::new();
+        let mut snaps_to_ref: HashMap<Oid, BTreeSet<RefKind>> = HashMap::new();
         let mut ref_namespaces: HashSet<String> = HashSet::new();
 
         let mut revwalk = repo.revwalk()?;
@@ -230,26 +194,24 @@ impl GitRepo {
             revwalk.reset()?;
             revwalk.push(tip)?;
 
-            let entry = refs_to_snaps.entry(rf.kind.clone()).or_default();
-            ref_namespaces.insert(rf.kind.as_str().to_string());
+            let entry = refs_to_snaps.entry(rf.clone()).or_default();
+            ref_namespaces.insert(rf.as_str().to_string());
 
             for oid in revwalk.by_ref() {
                 let oid = oid?;
-
-                entry.push(oid);
 
                 let time = {
                     let commit = repo.find_commit(oid)?;
                     let t = commit.time();
                     t.seconds()
                 };
-                snapshots.entry(time).or_default().push(oid);
+
+                entry.push((time, oid));
                 snaps_to_ref.entry(oid).or_default().insert(rf.clone());
             }
         }
 
         self.with_state_mut(|s| {
-            s.snapshots = snapshots;
             s.refs_to_snaps = refs_to_snaps;
             s.snaps_to_ref = snaps_to_ref;
             s.ref_namespaces = ref_namespaces;
@@ -257,11 +219,19 @@ impl GitRepo {
         Ok(())
     }
 
+    // Looks for the commits under `main` and splits them by months
     pub fn month_folders(&self) -> anyhow::Result<BTreeMap<OsString, ObjectAttr>> {
         let mut out: BTreeMap<OsString, ObjectAttr> = BTreeMap::new();
 
         self.with_state(|s| {
-            for secs in s.snapshots.keys() {
+            let Some(objects) = s
+                .refs_to_snaps
+                .iter()
+                .find(|(k, _)| matches!(k, RefKind::Main(_)))
+            else {
+                return;
+            };
+            for (secs, _) in objects.1 {
                 let dt = chrono::DateTime::from_timestamp(*secs, 0)
                     .unwrap_or_else(|| chrono::DateTime::from_timestamp(0, 0).unwrap());
                 let folder_name = OsString::from(format!("{:04}-{:02}", dt.year(), dt.month()));
@@ -301,21 +271,25 @@ impl GitRepo {
         let mut commit_num = 0;
 
         self.with_state(|s| {
-            for (&secs_utc, oids) in &s.snapshots {
-                for commit_oid in oids {
-                    let dt = DateTime::from_timestamp(secs_utc, 0)
-                        .unwrap_or_else(|| DateTime::from_timestamp(0, 0).unwrap());
+            let Some(objects) = s
+                .refs_to_snaps
+                .iter()
+                .find(|(k, _)| matches!(k, RefKind::Main(_)))
+            else {
+                return;
+            };
+            for (secs_utc, commit_oid) in objects.1 {
+                let dt = DateTime::from_timestamp(*secs_utc, 0)
+                    .unwrap_or_else(|| DateTime::from_timestamp(0, 0).unwrap());
 
-                    if dt.year() != year || dt.month() != month {
-                        continue;
-                    }
-
-                    commit_num += 1;
-                    let folder_name =
-                        OsString::from(format!("Snap{commit_num:03}_{commit_oid:.7}"));
-
-                    out.push((*commit_oid, folder_name));
+                if dt.year() != year || dt.month() != month {
+                    continue;
                 }
+
+                commit_num += 1;
+                let folder_name = OsString::from(format!("Snap{commit_num:03}_{commit_oid:.7}"));
+
+                out.push((*commit_oid, folder_name));
             }
         });
         Ok(out)
@@ -329,28 +303,32 @@ impl GitRepo {
         let mut commit_num = 0;
 
         self.with_state(|s| {
-            for (&secs_utc, oids) in &s.snapshots {
-                for commit_oid in oids {
-                    let dt = DateTime::from_timestamp(secs_utc, 0)
-                        .unwrap_or_else(|| DateTime::from_timestamp(0, 0).unwrap());
+            let Some(objects) = s
+                .refs_to_snaps
+                .iter()
+                .find(|(k, _)| matches!(k, RefKind::Main(_)))
+            else {
+                return;
+            };
+            for (secs_utc, commit_oid) in objects.1 {
+                let dt = DateTime::from_timestamp(*secs_utc, 0)
+                    .unwrap_or_else(|| DateTime::from_timestamp(0, 0).unwrap());
 
-                    if dt.year() != year || dt.month() != month {
-                        continue;
-                    }
-
-                    commit_num += 1;
-                    let folder_name =
-                        OsString::from(format!("Snap{commit_num:03}_{commit_oid:.7}"));
-
-                    out.push(ObjectAttr {
-                        name: folder_name,
-                        oid: *commit_oid,
-                        kind: ObjectType::Commit,
-                        git_mode: 0o040000,
-                        size: 0,
-                        commit_time: git2::Time::new(secs_utc, 0),
-                    });
+                if dt.year() != year || dt.month() != month {
+                    continue;
                 }
+
+                commit_num += 1;
+                let folder_name = OsString::from(format!("Snap{commit_num:03}_{commit_oid:.7}"));
+
+                out.push(ObjectAttr {
+                    name: folder_name,
+                    oid: *commit_oid,
+                    kind: ObjectType::Commit,
+                    git_mode: 0o040000,
+                    size: 0,
+                    commit_time: git2::Time::new(*secs_utc, 0),
+                });
             }
         });
         Ok(out)
