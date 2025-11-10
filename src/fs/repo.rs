@@ -42,7 +42,6 @@ pub struct GitRepo {
 }
 
 pub struct State {
-    pub head: Option<Oid>,
     /// Used inodes to prevent reading from DB
     pub res_inodes: HashSet<u64>,
     /// key: inode of the virtual directory

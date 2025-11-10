@@ -384,7 +384,6 @@ impl GitFs {
         let _ = std::fs::create_dir(&chase_dir);
 
         let state: State = State {
-            head: None,
             res_inodes: HashSet::new(),
             vdir_cache: BTreeMap::new(),
             build_sessions: HashMap::new(),
@@ -406,22 +405,6 @@ impl GitFs {
             file_cache: LruCache::new(FILE_LRU),
             injected_files: DashMap::new(),
         };
-
-        // Find HEAD in the git repo
-        {
-            let head = git_repo.with_repo_mut(|r| {
-                if let Ok(head) = r.revparse_single("HEAD") {
-                    Some(head.id())
-                } else {
-                    None
-                }
-            });
-            git_repo.with_state_mut(|s| s.head = head);
-            if head.is_some() {
-                // git_repo.refresh_snapshots()?;
-                git_repo.refresh_refs()?;
-            }
-        }
 
         let repo_rc = Arc::from(git_repo);
         self.insert_repo(&repo_rc, repo_name, repo_id)?;
@@ -572,7 +555,6 @@ impl GitFs {
         let repo = git2::Repository::init(live_path)?;
 
         let state: State = State {
-            head: None,
             res_inodes: HashSet::new(),
             vdir_cache: BTreeMap::new(),
             build_sessions: HashMap::new(),
