@@ -393,6 +393,7 @@ impl GitFs {
             snaps_map: HashMap::new(),
             refs_to_snaps: HashMap::new(),
             snaps_to_ref: HashMap::new(),
+            ref_namespaces: HashSet::new(),
         };
 
         let git_repo = GitRepo {
@@ -582,6 +583,7 @@ impl GitFs {
             snaps_map: HashMap::new(),
             refs_to_snaps: HashMap::new(),
             snaps_to_ref: HashMap::new(),
+            ref_namespaces: HashSet::new(),
         };
 
         let git_repo = GitRepo {

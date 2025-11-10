@@ -60,9 +60,10 @@ pub struct State {
     /// TODO: remove and add to snapshots
     pub snaps_map: HashMap<Oid, (OsString, OsString)>,
     /// Maps all the commits to one of more refs
-    pub snaps_to_ref: HashMap<Oid, BTreeSet<RefKind>>,
+    pub snaps_to_ref: HashMap<Oid, BTreeSet<RefData>>, // HashMap<Oid, BTreeSet<RefData>>
     /// Lists all the commits for a respective ref
-    pub refs_to_snaps: HashMap<RefKind, Vec<Oid>>,
+    pub refs_to_snaps: HashMap<RefKind, Vec<Oid>>, // HashMap<RefKind, Vec<(Oid, short name)>>
+    pub ref_namespaces: HashSet<String>,
 }
 
 /// Create the Virtual Node during opendir
@@ -83,35 +84,79 @@ pub struct VirtualNode {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+///Stores the ref namespace (prefix) without the final name
+//<   ref namespace   ><name>
+//refs/remotes/upstream/main
 pub enum RefKind {
     Branch(String),
     Tag(String),
-    Pr(u32),
-    PrMerge(u32),
+    Pr(String),
+    PrMerge(String),
     Head(String),
 }
 
 impl RefKind {
-    fn classify_ref(full: &str) -> Option<RefKind> {
-        let short = full.rsplit('/').next()?;
+    pub const fn as_str(&self) -> &'static str {
+        match *self {
+            Self::Branch(_) => "Branches",
+            Self::Head(_) => "Head",
+            Self::Pr(_) => "Pr",
+            Self::PrMerge(_) => "PrMerge",
+            Self::Tag(_) => "Tags",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct RefData {
+    kind: RefKind,
+    short: String,
+}
+
+impl RefData {
+    fn classify_ref(full: &str) -> Option<Self> {
+        let mut split = full.rsplitn(2, '/');
+        let short = split.next()?;
         if full == "HEAD" {
-            return Some(RefKind::Head(short.to_owned()));
+            let kind = RefKind::Head(split.next()?.to_owned());
+            return Some(Self {
+                kind,
+                short: short.to_string(),
+            });
         }
         if full.starts_with("refs/heads/") {
-            return Some(RefKind::Branch(short.to_owned()));
+            let kind = RefKind::Branch(split.next()?.to_owned());
+            return Some(Self {
+                kind,
+                short: short.to_string(),
+            });
         }
         if full.starts_with("refs/tags/") {
-            return Some(RefKind::Tag(short.to_owned()));
+            let kind = RefKind::Tag(split.next()?.to_owned());
+            return Some(Self {
+                kind,
+                short: short.to_string(),
+            });
         }
         if full.starts_with("refs/remotes/") {
             if full.contains("/pr/") {
-                let pr_num = short.parse::<u32>().ok()?;
-                Some(RefKind::Pr(pr_num))
+                let kind = RefKind::Pr(split.next()?.to_owned());
+                Some(Self {
+                    kind,
+                    short: short.to_string(),
+                })
             } else if full.contains("/pr-merge/") {
-                let pr_num = short.parse::<u32>().ok()?;
-                Some(RefKind::PrMerge(pr_num))
+                let kind = RefKind::PrMerge(split.next()?.to_owned());
+                Some(Self {
+                    kind,
+                    short: short.to_string(),
+                })
             } else {
-                Some(RefKind::Branch(short.to_owned()))
+                let kind = RefKind::Branch(split.next()?.to_owned());
+                Some(Self {
+                    kind,
+                    short: short.to_string(),
+                })
             }
         } else {
             None
@@ -152,7 +197,7 @@ impl GitRepo {
                 continue;
             };
 
-            let Some(ref_kind) = RefKind::classify_ref(name) else {
+            let Some(ref_data) = RefData::classify_ref(name) else {
                 continue;
             };
 
@@ -160,9 +205,12 @@ impl GitRepo {
                 .resolve()
                 .and_then(|rr| rr.peel(git2::ObjectType::Commit).map(|obj| obj.id()))
             {
-                ref_tips.push((ref_kind, tip))
+                ref_tips.push((ref_data, tip))
             }
         }
+
+        // Keep ref_kind using short name so we iterate all the refs
+        // Then strip the short name from each and save namespace and short name separately.
 
         self.with_state_mut(|s| {
             s.snapshots.clear();
@@ -172,7 +220,8 @@ impl GitRepo {
 
         let mut snapshots: BTreeMap<i64, Vec<Oid>> = BTreeMap::new();
         let mut refs_to_snaps: HashMap<RefKind, Vec<Oid>> = HashMap::new();
-        let mut snaps_to_ref: HashMap<Oid, BTreeSet<RefKind>> = HashMap::new();
+        let mut snaps_to_ref: HashMap<Oid, BTreeSet<RefData>> = HashMap::new();
+        let mut ref_namespaces: HashSet<String> = HashSet::new();
 
         let mut revwalk = repo.revwalk()?;
         revwalk.set_sorting(git2::Sort::TOPOLOGICAL | git2::Sort::TIME)?;
@@ -181,7 +230,8 @@ impl GitRepo {
             revwalk.reset()?;
             revwalk.push(tip)?;
 
-            let entry = refs_to_snaps.entry(rf.clone()).or_default();
+            let entry = refs_to_snaps.entry(rf.kind.clone()).or_default();
+            ref_namespaces.insert(rf.kind.as_str().to_string());
 
             for oid in revwalk.by_ref() {
                 let oid = oid?;
@@ -202,6 +252,7 @@ impl GitRepo {
             s.snapshots = snapshots;
             s.refs_to_snaps = refs_to_snaps;
             s.snaps_to_ref = snaps_to_ref;
+            s.ref_namespaces = ref_namespaces;
         });
         Ok(())
     }

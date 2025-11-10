@@ -103,7 +103,7 @@ pub fn readdir_root_dir(fs: &GitFs) -> anyhow::Result<Vec<DirectoryEntry>> {
 }
 
 // We are in repo root. This should show:
-// . .. MONTH MONTH MONTH live
+// . .. MONTH MONTH MONTH Tags Branches Pr Prmerge chase live
 pub fn readdir_repo_dir(fs: &GitFs, parent: NormalIno) -> anyhow::Result<Vec<DirectoryEntry>> {
     let parent = parent.to_norm_u64();
     let repo_id = GitFs::ino_to_repo_id(parent);
@@ -114,6 +114,7 @@ pub fn readdir_repo_dir(fs: &GitFs, parent: NormalIno) -> anyhow::Result<Vec<Dir
 
     let mut entries: Vec<DirectoryEntry> = vec![];
 
+    // Add the live folder
     let DbReturn::Found { value: live_ino } =
         fs.get_ino_from_db(parent, OsStr::new(LIVE_FOLDER))?
     else {
@@ -128,6 +129,7 @@ pub fn readdir_repo_dir(fs: &GitFs, parent: NormalIno) -> anyhow::Result<Vec<Dir
         libc::S_IFDIR,
     );
 
+    // Add the chase folder
     let DbReturn::Found { value: chase_ino } =
         fs.get_ino_from_db(parent, OsStr::new(CHASE_FOLDER))?
     else {
@@ -145,8 +147,9 @@ pub fn readdir_repo_dir(fs: &GitFs, parent: NormalIno) -> anyhow::Result<Vec<Dir
     entries.push(live_entry);
     entries.push(chase_entry);
 
+    // Add the MONTH folders
+    let repo = fs.get_repo(parent)?;
     let object_entries = {
-        let repo = fs.get_repo(parent)?;
         // Refresh the snapshots every time we cd into repo root
         repo.refresh_refs()?;
         repo.month_folders()?
@@ -181,6 +184,47 @@ pub fn readdir_repo_dir(fs: &GitFs, parent: NormalIno) -> anyhow::Result<Vec<Dir
             entries.push(dir_entry);
         }
     }
+
+    // Add the Tags/Brances/Pr/PrMerge (if they exist)
+    let mut folders = Vec::new();
+    repo.with_state(|s| {
+        for rf in s.ref_namespaces.iter() {
+            match rf.as_str() {
+                "Branches" => folders.push((OsString::from("Branches"), InoFlag::BranchesRoot)),
+                "Tags" => folders.push((OsString::from("Tags"), InoFlag::TagsRoot)),
+                "Pr" => folders.push((OsString::from("Pr"), InoFlag::PrRoot)),
+                "PrMerge" => folders.push((OsString::from("PrMerge"), InoFlag::PrMergeRoot)),
+                _ => continue,
+            }
+        }
+    });
+    for (ref_name, flag) in folders {
+        let dir_entry = match fs.exists_by_name(parent, &ref_name)? {
+            DbReturn::Found { value: i } => DirectoryEntry::new(
+                i,
+                Oid::zero(),
+                ref_name.clone(),
+                FileType::Directory,
+                libc::S_IFDIR,
+            ),
+            DbReturn::Missing => {
+                let entry_ino = fs.next_inode_checked(parent)?;
+                let mut attr: FileAttr = dir_attr(flag).into();
+                attr.ino = entry_ino;
+                nodes.push(StorageNode {
+                    parent_ino: parent,
+                    name: ref_name.clone(),
+                    attr,
+                });
+                DirectoryEntry::new(entry_ino, attr.oid, ref_name, attr.kind, attr.git_mode)
+            }
+            DbReturn::Negative => {
+                continue;
+            }
+        };
+        entries.push(dir_entry);
+    }
+
     fs.write_inodes_to_db(nodes)?;
     Ok(entries)
 }

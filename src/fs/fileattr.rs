@@ -199,6 +199,10 @@ pub enum InoFlag {
     HeadFile = 1 << 12,
     ChaseRoot = 1 << 13,
     InsideChase = 1 << 14,
+    BranchesRoot = 1 << 15,
+    TagsRoot = 1 << 16,
+    PrRoot = 1 << 17,
+    PrMergeRoot = 1 << 18,
 }
 impl InoFlag {
     pub const fn as_str(&self) -> &'static str {
@@ -218,6 +222,10 @@ impl InoFlag {
             InoFlag::HeadFile => "HeadFile",
             InoFlag::ChaseRoot => "ChaseRoot",
             InoFlag::InsideChase => "InsideChase",
+            InoFlag::BranchesRoot => "BranchesRoot",
+            InoFlag::TagsRoot => "TagsRoot",
+            InoFlag::PrRoot => "PrRoot",
+            InoFlag::PrMergeRoot => "PrMergeRoot",
         }
     }
 }
@@ -245,6 +253,10 @@ impl TryFrom<u64> for InoFlag {
             x if x == InoFlag::HeadFile as u64 => Ok(InoFlag::HeadFile),
             x if x == InoFlag::ChaseRoot as u64 => Ok(InoFlag::ChaseRoot),
             x if x == InoFlag::InsideChase as u64 => Ok(InoFlag::InsideChase),
+            x if x == InoFlag::BranchesRoot as u64 => Ok(InoFlag::BranchesRoot),
+            x if x == InoFlag::TagsRoot as u64 => Ok(InoFlag::TagsRoot),
+            x if x == InoFlag::PrRoot as u64 => Ok(InoFlag::PrRoot),
+            x if x == InoFlag::PrMergeRoot as u64 => Ok(InoFlag::PrMergeRoot),
             _ => bail!("Unknown InoFlag valueL {v:#x}"),
         }
     }
