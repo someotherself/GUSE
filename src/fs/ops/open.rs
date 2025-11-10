@@ -310,6 +310,8 @@ fn open_modified_blob(fs: &GitFs, oid: Oid, ino: u64, write: bool) -> anyhow::Re
     }
 }
 
+// Injected file == A blob file that has been modified.
+// The blob contents are copied to a real file and opened instead of the blob
 fn open_injected_file(
     metadata: &InjectedMetadata,
     ino: u64,
