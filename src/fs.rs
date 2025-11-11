@@ -390,7 +390,8 @@ impl GitFs {
             snaps_map: HashMap::new(),
             refs_to_snaps: HashMap::new(),
             snaps_to_ref: HashMap::new(),
-            ref_namespaces: HashSet::new(),
+            unique_namespaces: HashSet::new(),
+            all_namespaces: Vec::new(),
         };
 
         let git_repo = GitRepo {
@@ -460,6 +461,7 @@ impl GitFs {
         chase_attr.git_mode = st_mode;
 
         let repo = self.get_repo(repo_ino)?;
+        repo.refresh_refs()?;
         repo.with_state_mut(|s| {
             s.res_inodes.insert(live_ino);
             s.res_inodes.insert(chase_ino);
@@ -561,7 +563,8 @@ impl GitFs {
             snaps_map: HashMap::new(),
             refs_to_snaps: HashMap::new(),
             snaps_to_ref: HashMap::new(),
-            ref_namespaces: HashSet::new(),
+            unique_namespaces: HashSet::new(),
+            all_namespaces: Vec::new(),
         };
 
         let git_repo = GitRepo {
@@ -654,7 +657,6 @@ impl GitFs {
 
         if let Some(url) = url {
             repo.fetch_anon(url)?;
-            // repo.refresh_snapshots()?;
             repo.refresh_refs()?;
         };
 

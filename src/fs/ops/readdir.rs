@@ -184,7 +184,7 @@ pub fn readdir_repo_dir(fs: &GitFs, parent: NormalIno) -> anyhow::Result<Vec<Dir
     // Add the Tags/Brances/Pr/PrMerge (if they exist)
     let mut folders = Vec::new();
     repo.with_state(|s| {
-        for rf in s.ref_namespaces.iter() {
+        for rf in s.unique_namespaces.iter() {
             match rf.as_str() {
                 "Branches" => folders.push((OsString::from("Branches"), InoFlag::BranchesRoot)),
                 "Tags" => folders.push((OsString::from("Tags"), InoFlag::TagsRoot)),
@@ -466,6 +466,27 @@ pub fn readdir_git_dir(fs: &GitFs, parent: NormalIno) -> anyhow::Result<Vec<Dire
                 bail!("Invalid MONTH folder name")
             };
             let objects = repo.month_commits(&format!("{year:04}-{month:02}"))?;
+            objects_to_dir_entries(fs, parent, objects, InoFlag::SnapFolder)?
+        }
+        InoFlag::BranchesRoot | InoFlag::PrRoot => {
+            // Snaps folders (number of the PR)
+            let objects = repo.non_branch_folders(metadata.ino_flag)?;
+            let flag = if metadata.ino_flag == InoFlag::BranchesRoot {
+                InoFlag::BranchFolder
+            } else {
+                InoFlag::PrFolder
+            };
+            objects_to_dir_entries(fs, parent, objects, flag)?
+        }
+        InoFlag::TagsRoot | InoFlag::PrMergeRoot => {
+            let objects = repo.non_branch_folders(metadata.ino_flag)?;
+            objects_to_dir_entries(fs, parent, objects, InoFlag::SnapFolder)?
+        }
+        // Treat Branch folder separately
+        // Try to find merge_base with main and list Snap folders if succesfull
+        // If it fails, list everything in MONTH folders
+        InoFlag::PrFolder | InoFlag::BranchFolder => {
+            let objects = repo.branch_snaps(&metadata.name, metadata.ino_flag)?;
             objects_to_dir_entries(fs, parent, objects, InoFlag::SnapFolder)?
         }
         InoFlag::SnapFolder => {

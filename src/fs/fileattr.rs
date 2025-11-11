@@ -203,6 +203,8 @@ pub enum InoFlag {
     TagsRoot = 1 << 16,
     PrRoot = 1 << 17,
     PrMergeRoot = 1 << 18,
+    PrFolder = 1 << 19,
+    BranchFolder = 1 << 20,
 }
 impl InoFlag {
     pub const fn as_str(&self) -> &'static str {
@@ -226,6 +228,8 @@ impl InoFlag {
             InoFlag::TagsRoot => "TagsRoot",
             InoFlag::PrRoot => "PrRoot",
             InoFlag::PrMergeRoot => "PrMergeRoot",
+            InoFlag::PrFolder => "PrFolder",
+            InoFlag::BranchFolder => "BranchFolder",
         }
     }
 }
@@ -240,6 +244,7 @@ impl TryFrom<u64> for InoFlag {
     type Error = anyhow::Error;
     fn try_from(v: u64) -> Result<Self, Self::Error> {
         match v {
+            x if x == InoFlag::Root as u64 => Ok(InoFlag::Root),
             x if x == InoFlag::RepoRoot as u64 => Ok(InoFlag::RepoRoot),
             x if x == InoFlag::LiveRoot as u64 => Ok(InoFlag::LiveRoot),
             x if x == InoFlag::BuildRoot as u64 => Ok(InoFlag::BuildRoot),
@@ -248,6 +253,7 @@ impl TryFrom<u64> for InoFlag {
             x if x == InoFlag::InsideSnap as u64 => Ok(InoFlag::InsideSnap),
             x if x == InoFlag::InsideBuild as u64 => Ok(InoFlag::InsideBuild),
             x if x == InoFlag::InsideLive as u64 => Ok(InoFlag::InsideLive),
+            x if x == InoFlag::VirtualFile as u64 => Ok(InoFlag::VirtualFile),
             x if x == InoFlag::DotGitRoot as u64 => Ok(InoFlag::DotGitRoot),
             x if x == InoFlag::InsideDotGit as u64 => Ok(InoFlag::InsideDotGit),
             x if x == InoFlag::HeadFile as u64 => Ok(InoFlag::HeadFile),
@@ -257,6 +263,8 @@ impl TryFrom<u64> for InoFlag {
             x if x == InoFlag::TagsRoot as u64 => Ok(InoFlag::TagsRoot),
             x if x == InoFlag::PrRoot as u64 => Ok(InoFlag::PrRoot),
             x if x == InoFlag::PrMergeRoot as u64 => Ok(InoFlag::PrMergeRoot),
+            x if x == InoFlag::PrFolder as u64 => Ok(InoFlag::PrFolder),
+            x if x == InoFlag::BranchFolder as u64 => Ok(InoFlag::BranchFolder),
             _ => bail!("Unknown InoFlag valueL {v:#x}"),
         }
     }

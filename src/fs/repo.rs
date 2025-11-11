@@ -5,7 +5,7 @@ use git2::{Commit, Delta, Direction, FileMode, ObjectType, Oid, Repository, Time
 use parking_lot::{Mutex, RwLock};
 use std::{
     collections::{BTreeMap, BTreeSet, HashMap, HashSet},
-    ffi::OsString,
+    ffi::{OsStr, OsString},
     path::{Path, PathBuf},
     sync::{
         Arc,
@@ -17,7 +17,7 @@ use crate::{
     fs::{
         GitFs, LIVE_FOLDER, ObjectAttr, SourceTypes,
         builds::{BuildSession, inject::InjectedMetadata},
-        fileattr::FileAttr,
+        fileattr::{FileAttr, InoFlag},
     },
     inodes::VirtualIno,
     internals::{cache::LruCache, cache_dentry::DentryLru},
@@ -59,10 +59,11 @@ pub struct State {
     ///
     /// i64 -> commit_time -> seconds since EPOCH. Used to create MONTH and Snap folders
     pub refs_to_snaps: HashMap<RefKind, Vec<(i64, Oid)>>, // HashMap<RefKind, Vec<(Oid, short name)>>
-    /// Lists the namespaces to group commits
+    /// Lists the unique namespace types
     ///
     /// To keep track which kinds of refs are available (branches, tags, pr, pr-merge)
-    pub ref_namespaces: HashSet<String>,
+    pub unique_namespaces: HashSet<String>,
+    pub all_namespaces: Vec<(String, RefKind)>,
 }
 
 /// Create the Virtual Node during opendir
@@ -85,12 +86,12 @@ pub struct VirtualNode {
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 ///Stores short name
 pub enum RefKind {
-    Branch(String),
-    Tag(String),
-    Pr(String),
-    PrMerge(String),
-    Head(String),
-    Main(String),
+    Branch(Arc<str>),
+    Tag(Arc<str>),
+    Pr(Arc<str>),
+    PrMerge(Arc<str>),
+    Head(Arc<str>),
+    Main(Arc<str>),
 }
 
 impl RefKind {
@@ -107,29 +108,29 @@ impl RefKind {
 }
 
 impl RefKind {
-    // TODO: Make this better at identifying main and head
+    // TODO: Make this better at identifying main and head???
     fn classify_ref(full: &str) -> Option<Self> {
         let mut split = full.rsplit('/');
         let short = split.next()?;
         if full.contains("HEAD") {
-            return Some(RefKind::Head(short.to_string()));
+            return Some(RefKind::Head(short.into()));
         }
-        if full.contains("main") || full.contains("master") {
-            return Some(RefKind::Main(short.to_string()));
+        if full.ends_with("main") || full.ends_with("master") {
+            return Some(RefKind::Main(short.into()));
         };
         if full.starts_with("refs/heads/") {
-            return Some(RefKind::Branch(short.to_string()));
+            return Some(RefKind::Branch(short.into()));
         }
         if full.starts_with("refs/tags/") {
-            return Some(RefKind::Tag(short.to_string()));
+            return Some(RefKind::Tag(short.into()));
         }
         if full.starts_with("refs/remotes/") {
             if full.contains("/pr/") {
-                Some(RefKind::Pr(split.next()?.to_owned()))
+                Some(RefKind::Pr(short.into()))
             } else if full.contains("/pr-merge/") {
-                Some(RefKind::PrMerge(short.to_string()))
+                Some(RefKind::PrMerge(short.into()))
             } else {
-                Some(RefKind::Branch(short.to_string()))
+                Some(RefKind::Branch(short.into()))
             }
         } else {
             None
@@ -158,10 +159,23 @@ impl GitRepo {
         f(&mut guard)
     }
 
+    /// Updates these fields in State: snaps_to_ref, refs_to_snaps, unique_namespaces and all_namespaces. They are not updated anywhere else (which means the folder structure is only updated on fetch, or on a new session)
+    ///
+    /// Handles Branches, Tags, Pr and Pr-Merges
+    ///
+    /// - Branches: It does a merge_base against main (or master) and does a revwalk if it finds something. If that fails, it will merge_base against the other branches. If that also fails, it walk the entire history.
+    ///
+    /// - Pr: Checks if a Pr-Merge exists and if it does, walks between the head and base parent. Otherwise, they are ignored
+    ///
+    /// - Tags and Pr-Merges: Does not walk the history. Only saves the tip
     pub fn refresh_refs(&self) -> anyhow::Result<()> {
         let repo = self.inner.lock();
 
         let mut ref_tips = Vec::new();
+        let mut all_namespaces: Vec<(String, RefKind)> = Vec::new();
+
+        let mut revwalk = repo.revwalk()?;
+        revwalk.set_sorting(git2::Sort::TOPOLOGICAL | git2::Sort::TIME)?;
 
         for r in repo.references()? {
             let r = r?;
@@ -173,28 +187,86 @@ impl GitRepo {
             let Some(ref_data) = RefKind::classify_ref(name) else {
                 continue;
             };
+            all_namespaces.push((name.to_string(), ref_data.clone()));
 
             if let Ok(tip) = r
                 .resolve()
                 .and_then(|rr| rr.peel(git2::ObjectType::Commit).map(|obj| obj.id()))
             {
-                ref_tips.push((ref_data, tip))
+                ref_tips.push((ref_data, tip, name.to_string()))
             }
         }
 
+        // Save them now because they are used later
+        self.with_state_mut(|s| {
+            s.all_namespaces = all_namespaces;
+        });
+
         let mut refs_to_snaps: HashMap<RefKind, Vec<(i64, Oid)>> = HashMap::new();
         let mut snaps_to_ref: HashMap<Oid, BTreeSet<RefKind>> = HashMap::new();
-        let mut ref_namespaces: HashSet<String> = HashSet::new();
+        let mut unique_namespaces: HashSet<String> = HashSet::new();
 
-        let mut revwalk = repo.revwalk()?;
-        revwalk.set_sorting(git2::Sort::TOPOLOGICAL | git2::Sort::TIME)?;
-
-        for (rf, tip) in ref_tips {
+        for (rf, tip, name) in ref_tips {
             revwalk.reset()?;
             revwalk.push(tip)?;
 
             let entry = refs_to_snaps.entry(rf.clone()).or_default();
-            ref_namespaces.insert(rf.as_str().to_string());
+            unique_namespaces.insert(rf.as_str().to_string());
+
+            // Do not walk the tags or pr-merges
+            if matches!(rf, RefKind::Tag(_)) || matches!(rf, RefKind::PrMerge(_)) {
+                let time = {
+                    let commit = repo.find_commit(tip)?;
+                    let t = commit.time();
+                    t.seconds()
+                };
+
+                entry.push((time, tip));
+                snaps_to_ref.entry(tip).or_default().insert(rf.clone());
+                continue;
+            }
+
+            if matches!(rf, RefKind::Pr(_)) {
+                let merge_name = name.replace("/pr/", "/pr-merge/");
+                // If pr merge ref does not exist, PR was probably closed or merged. Ignore these for now.
+                let Ok(merge_ref) = repo.find_reference(&merge_name) else {
+                    continue;
+                };
+                let merge_commit = merge_ref.peel_to_commit()?;
+                let base = merge_commit.parent(0)?;
+                let head = merge_commit.parent(1)?;
+                revwalk.reset()?;
+                revwalk.push(head.id())?;
+                revwalk.hide(base.id())?;
+            }
+
+            if matches!(rf, RefKind::Branch(_)) {
+                let mut target_ref = self.with_state(|s| {
+                    s.all_namespaces
+                        .iter()
+                        .filter(|&(_, kind)| matches!(kind, RefKind::Main(_)))
+                        .map(|(name, _)| name.as_str())
+                        .find_map(|name| repo.find_reference(name).ok())
+                });
+                if target_ref.is_none() {
+                    // Fallback, check the rest of the branches if not found against main/master
+                    target_ref = self.with_state(|s| {
+                        s.all_namespaces
+                            .iter()
+                            .filter(|&(_, kind)| matches!(kind, RefKind::Branch(_)))
+                            .map(|(name, _)| name.as_str())
+                            .find_map(|name| repo.find_reference(name).ok())
+                    });
+                }
+
+                if let Some(main_ref) = target_ref {
+                    let main_commit = main_ref.peel_to_commit()?.id();
+
+                    let base = repo.merge_base(tip, main_commit)?;
+                    revwalk.reset()?;
+                    revwalk.push_range(&format!("{}..{}", base, tip))?;
+                }
+            }
 
             for oid in revwalk.by_ref() {
                 let oid = oid?;
@@ -213,7 +285,7 @@ impl GitRepo {
         self.with_state_mut(|s| {
             s.refs_to_snaps = refs_to_snaps;
             s.snaps_to_ref = snaps_to_ref;
-            s.ref_namespaces = ref_namespaces;
+            s.unique_namespaces = unique_namespaces;
         });
         Ok(())
     }
@@ -330,6 +402,84 @@ impl GitRepo {
                 });
             }
         });
+        Ok(out)
+    }
+
+    /// Used for finding and creating folders for any commit in a tag or pr-merge
+    /// Creates Snap folders
+    pub fn non_branch_folders(&self, flag: InoFlag) -> anyhow::Result<Vec<ObjectAttr>> {
+        let mut out: Vec<ObjectAttr> = Vec::new();
+
+        let matches_flag = |k: &RefKind| match flag {
+            InoFlag::TagsRoot => matches!(k, RefKind::Tag(_)),
+            InoFlag::PrRoot => matches!(k, RefKind::Pr(_)),
+            InoFlag::PrMergeRoot => matches!(k, RefKind::PrMerge(_)),
+            InoFlag::BranchesRoot => matches!(k, RefKind::Branch(_)),
+            _ => false,
+        };
+
+        self.with_state(|s| {
+            for (ref_kind, objects) in s.refs_to_snaps.iter().filter(|(k, _)| matches_flag(k)) {
+                let name = match ref_kind {
+                    RefKind::Tag(n)
+                    | RefKind::Pr(n)
+                    | RefKind::PrMerge(n)
+                    | RefKind::Branch(n)
+                    | RefKind::Main(n)
+                    | RefKind::Head(n) => n,
+                };
+
+                let folder_name = OsString::from(name.to_string());
+                let Some(tip) = objects.first() else {
+                    continue;
+                };
+
+                out.push(ObjectAttr {
+                    name: folder_name,
+                    oid: tip.1,
+                    kind: ObjectType::Commit,
+                    git_mode: 0o040000,
+                    size: 0,
+                    commit_time: git2::Time::new(tip.0, 0),
+                });
+            }
+        });
+        Ok(out)
+    }
+
+    /// Create folders (similar to MONTH folders) which contain Snaps
+    pub fn branch_snaps(&self, name: &OsStr, flag: InoFlag) -> anyhow::Result<Vec<ObjectAttr>> {
+        let mut out: Vec<ObjectAttr> = Vec::new();
+        let mut commit_num = 0;
+
+        // Look for the ref with the exact short name
+        let rf_kind = if flag == InoFlag::BranchFolder {
+            RefKind::Branch(name.to_string_lossy().into())
+        } else {
+            RefKind::Pr(name.to_string_lossy().into())
+        };
+
+        self.with_state(|s| {
+            if let Some(objects) = s.refs_to_snaps.iter().find(|k| *k.0 == rf_kind) {
+                let mut sorted = objects.1.clone();
+                sorted.sort_unstable_by(|a, b| a.0.cmp(&b.0));
+                for (secs_utc, commit_oid) in sorted {
+                    commit_num += 1;
+                    let folder_name =
+                        OsString::from(format!("Snap{commit_num:03}_{commit_oid:.7}"));
+
+                    out.push(ObjectAttr {
+                        name: folder_name,
+                        oid: commit_oid,
+                        kind: ObjectType::Commit,
+                        git_mode: 0o040000,
+                        size: 0,
+                        commit_time: git2::Time::new(secs_utc, 0),
+                    });
+                }
+            };
+        });
+
         Ok(out)
     }
 
