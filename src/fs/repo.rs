@@ -238,7 +238,7 @@ impl GitRepo {
                 let mut target_ref = all_namespaces
                     .iter()
                     .filter(|&(_, kind)| matches!(kind, RefKind::Main(_)))
-                    .find_map(|(name, _)| repo.find_reference(&name).ok());
+                    .find_map(|(name, _)| repo.find_reference(name).ok());
                 if target_ref.is_none() {
                     // Fallback, check the rest of the branches if not found against main/master
                     target_ref = all_namespaces
