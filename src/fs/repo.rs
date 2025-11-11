@@ -63,7 +63,6 @@ pub struct State {
     ///
     /// To keep track which kinds of refs are available (branches, tags, pr, pr-merge)
     pub unique_namespaces: HashSet<String>,
-    pub all_namespaces: Vec<(String, RefKind)>,
 }
 
 /// Create the Virtual Node during opendir
@@ -159,7 +158,7 @@ impl GitRepo {
         f(&mut guard)
     }
 
-    /// Updates these fields in State: snaps_to_ref, refs_to_snaps, unique_namespaces and all_namespaces. They are not updated anywhere else (which means the folder structure is only updated on fetch, or on a new session)
+    /// Updates these fields in State: snaps_to_ref, refs_to_snaps and unique_namespaces. They are not updated anywhere else (which means the folder structure is only updated on fetch, or on a new session)
     ///
     /// Handles Branches, Tags, Pr and Pr-Merges
     ///
@@ -196,11 +195,6 @@ impl GitRepo {
                 ref_tips.push((ref_data, tip, name.to_string()))
             }
         }
-
-        // Save them now because they are used later
-        self.with_state_mut(|s| {
-            s.all_namespaces = all_namespaces;
-        });
 
         let mut refs_to_snaps: HashMap<RefKind, Vec<(i64, Oid)>> = HashMap::new();
         let mut snaps_to_ref: HashMap<Oid, BTreeSet<RefKind>> = HashMap::new();
@@ -241,22 +235,16 @@ impl GitRepo {
             }
 
             if matches!(rf, RefKind::Branch(_)) {
-                let mut target_ref = self.with_state(|s| {
-                    s.all_namespaces
-                        .iter()
-                        .filter(|&(_, kind)| matches!(kind, RefKind::Main(_)))
-                        .map(|(name, _)| name.as_str())
-                        .find_map(|name| repo.find_reference(name).ok())
-                });
+                let mut target_ref = all_namespaces
+                    .iter()
+                    .filter(|&(_, kind)| matches!(kind, RefKind::Main(_)))
+                    .find_map(|(name, _)| repo.find_reference(&name).ok());
                 if target_ref.is_none() {
                     // Fallback, check the rest of the branches if not found against main/master
-                    target_ref = self.with_state(|s| {
-                        s.all_namespaces
-                            .iter()
-                            .filter(|&(_, kind)| matches!(kind, RefKind::Branch(_)))
-                            .map(|(name, _)| name.as_str())
-                            .find_map(|name| repo.find_reference(name).ok())
-                    });
+                    target_ref = all_namespaces
+                        .iter()
+                        .filter(|&(_, kind)| matches!(kind, RefKind::Branch(_)))
+                        .find_map(|(name, _)| repo.find_reference(name).ok());
                 }
 
                 if let Some(main_ref) = target_ref {
