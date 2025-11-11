@@ -22,7 +22,6 @@ use crate::fs::fileattr::{
     dir_attr, file_attr,
 };
 use crate::fs::handles::FileHandles;
-use crate::fs::janitor::Jobs;
 use crate::fs::meta_db::{DbReturn, DbWriteMsg, MetaDb, oneshot, set_conn_pragmas, set_wal_once};
 use crate::fs::ops::readdir::{
     BuildCtxMetadata, DirectoryEntry, DirectoryEntryPlus, DirectoryStreamCookie,
@@ -37,7 +36,6 @@ use crate::namespec::NameSpec;
 pub mod builds;
 pub mod fileattr;
 pub mod handles;
-pub mod janitor;
 pub mod meta_db;
 pub mod ops;
 pub mod repo;
@@ -287,8 +285,6 @@ impl GitFs {
         };
 
         let fs = Arc::new(fs);
-        let fs_clone = Arc::downgrade(&fs);
-        Jobs::spawn_worker(fs_clone);
 
         std::thread::spawn(move || {
             while notifier.get().is_none() {
@@ -1964,13 +1960,6 @@ impl GitFs {
             .ok_or_else(|| anyhow::anyhow!("no db"))?;
         let conn = repo_db.ro_pool.get()?;
         let attr = MetaDb::get_metadata(&conn, target_ino)?;
-
-        // Cache attr on miss
-        if let DbReturn::Found { value: attr } = attr {
-            let repo = self.get_repo(target_ino)?;
-            repo.attr_cache.insert(target_ino, attr);
-        }
-
         Ok(attr)
     }
 
@@ -2122,6 +2111,7 @@ impl GitFs {
     /// Send and forget but will log errors as `tracing::error!`
     fn remove_db_dentry(&self, parent_ino: NormalIno, target_name: &OsStr) -> anyhow::Result<()> {
         let repo_id = GitFs::ino_to_repo_id(parent_ino.into());
+
         self.remove_inode_from_cache(parent_ino.into(), target_name);
         let writer_tx = {
             let guard = self

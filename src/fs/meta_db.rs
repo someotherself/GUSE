@@ -732,34 +732,26 @@ impl MetaDb {
         parent: u64,
         name: &OsStr,
     ) -> anyhow::Result<DbReturn<u64>> {
-        let sql = r#"
-            SELECT target_inode, is_active
+        let mut stmt = conn.prepare_cached(
+            r#"
+            SELECT target_inode
             FROM dentries
-            WHERE parent_inode = ?1 AND name = ?2
-            LIMIT 2
-        "#;
+            WHERE parent_inode = ?1 AND name = ?2 AND is_active = 1
+            LIMIT 1
+            "#,
+        )?;
+        let result: Option<i64> = stmt
+            .query_row((parent as i64, name.as_bytes()), |r| r.get(0))
+            .optional()?;
 
-        let mut stmt = conn.prepare_cached(sql)?;
-        let mut rows = stmt.query((parent as i64, name.as_bytes()))?;
-
-        let first = rows.next()?;
-        let Some(row) = first else {
-            return Ok(DbReturn::Missing);
-        };
-
-        let child_i64: i64 = row.get(0)?;
-        let is_active: bool = row.get(1)?;
-        if !is_active {
-            return Ok(DbReturn::Negative);
-        };
-        let child = u64::try_from(child_i64)
-            .map_err(|_| anyhow!("child_ino out of range: {}", child_i64))?;
-
-        if rows.next()?.is_some() {
-            bail!("Multiple dentries for ({parent}, {})", name.display());
+        match result {
+            None => Ok(DbReturn::Missing),
+            Some(child_i64) => {
+                let child = u64::try_from(child_i64)
+                    .map_err(|_| anyhow::anyhow!("child_ino out of range: {child_i64}"))?;
+                Ok(DbReturn::Found { value: child })
+            }
         }
-
-        Ok(DbReturn::Found { value: child })
     }
 
     pub fn get_dentry_from_db(

@@ -1,8 +1,9 @@
 use std::{ffi::OsString, fs::OpenOptions, os::unix::fs::FileExt, path::PathBuf};
 
 use git2::Oid;
+use rand::{Rng, distr::Alphanumeric};
 
-use crate::fs::{GitFs, TEMP_FOLDER, janitor::random_string};
+use crate::fs::{GitFs, TEMP_FOLDER};
 
 /// Holds information about and keeps track of modified blobs.
 ///
@@ -56,4 +57,13 @@ impl InjectedMetadata {
         };
         Ok(metadata)
     }
+}
+
+// Creates a random string 6 characters long and alphanumerical
+pub fn random_string() -> String {
+    rand::rng()
+        .sample_iter(&Alphanumeric)
+        .take(6)
+        .map(char::from)
+        .collect()
 }
