@@ -13,7 +13,7 @@ use rand::{Rng, distr::Alphanumeric};
 use crate::fs::{GitFs, TRASH_FOLDER, meta_db::MetaDb};
 
 const TRASH_PER: Duration = Duration::from_secs(10);
-const NEG_PER: Duration = Duration::from_secs(60);
+const NEG_PER: Duration = Duration::from_secs(10);
 
 pub struct Janitor {
     tx: Sender<Jobs>,
@@ -21,7 +21,7 @@ pub struct Janitor {
 }
 
 pub enum Jobs {}
-
+    
 impl Jobs {
     pub fn _run_job(_fs: Weak<GitFs>) -> anyhow::Result<()> {
         Ok(())

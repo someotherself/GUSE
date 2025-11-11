@@ -393,7 +393,7 @@ where
                 }
                 None => {
                     if let Err(e) = &res {
-                        tracing::warn!("db cleanup_dentry failed: {e}");
+                        tracing::warn!("db set_negative failed: {e}");
                     }
                     Ok(())
                 }
@@ -408,7 +408,7 @@ where
                 }
                 None => {
                     if let Err(e) = &res {
-                        tracing::warn!("db cleanup_dentry failed: {e}");
+                        tracing::warn!("db clean negative failed: {e}");
                     }
                     Ok(())
                 }
@@ -901,9 +901,9 @@ impl MetaDb {
     pub fn get_name_from_db(conn: &rusqlite::Connection, ino: u64) -> anyhow::Result<OsString> {
         let mut stmt = conn.prepare(
             r#"
-            SELECT name, is_active
+            SELECT name
             FROM dentries
-            WHERE target_inode = ?1
+            WHERE target_inode = ?1 AND is_active = 1
             "#,
         )?;
 

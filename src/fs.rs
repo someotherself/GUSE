@@ -1001,7 +1001,7 @@ impl GitFs {
         let ino: Inodes = target.into();
 
         if !self.exists(ino)? {
-            bail!(format!("Inode {} does not exist", ino));
+            bail!(std::io::Error::from_raw_os_error(libc::ENOENT))
         }
 
         let ctx = FsOperationContext::get_operation(self, ino);
