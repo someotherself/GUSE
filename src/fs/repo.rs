@@ -10,7 +10,8 @@ use std::{
     sync::{
         Arc,
         atomic::{AtomicBool, AtomicUsize},
-    }, time::{Duration, SystemTime},
+    },
+    time::{Duration, SystemTime},
 };
 
 use crate::{

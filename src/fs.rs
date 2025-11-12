@@ -17,6 +17,7 @@ use dashmap::DashMap;
 use git2::{FileMode, ObjectType, Oid};
 use tracing::{Level, field, info, instrument};
 
+use crate::fs;
 use crate::fs::fileattr::{
     CreateFileAttr, Dentry, FileAttr, FileType, InoFlag, ObjectAttr, SetFileAttr, StorageNode,
     dir_attr, file_attr,
@@ -47,7 +48,6 @@ const META_STORE: &str = "fs_meta.db";
 const LIVE_FOLDER: &str = "live";
 const BUILD_FOLDER: &str = "build";
 const CHASE_FOLDER: &str = "chase";
-const TRASH_FOLDER: &str = ".trash";
 const TEMP_FOLDER: &str = ".temp";
 pub const REPO_SHIFT: u8 = 48;
 pub const ROOT_INO: u64 = 1;
@@ -267,9 +267,6 @@ impl GitFs {
         read_only: bool,
         notifier: Arc<OnceLock<fuser::Notifier>>,
     ) -> anyhow::Result<Arc<Self>> {
-        let _ = std::fs::remove_dir_all(repos_dir.join(TRASH_FOLDER));
-        let _ = std::fs::create_dir(repos_dir.join(TRASH_FOLDER));
-
         let (tx_inval, rx_inval) = crossbeam_channel::unbounded::<InvalMsg>();
 
         let fs = Self {
@@ -349,6 +346,21 @@ impl GitFs {
                 fs.exists_by_name(repo_ino, OsStr::new(CHASE_FOLDER))?
             {
                 fs.read_dir_to_db(&chase_path, &fs, InoFlag::InsideChase, chase_ino)?;
+            }
+            // Discover contents of repo root
+            let entries = fs::ops::readdir::readdir_repo_dir(&fs, repo_ino.into())?;
+            // Discover contents until we reach the Snap folders
+            for e1 in entries {
+                let entries = fs.readdir(e1.ino)?;
+                for e2 in entries {
+                    if e2.kind != FileType::Directory {
+                        continue;
+                    };
+                    if e2.name.as_bytes().starts_with(b"Snap") {
+                        continue;
+                    }
+                    fs.readdir(e2.ino)?;
+                }
             }
         }
         Ok(fs)
