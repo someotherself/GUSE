@@ -87,11 +87,10 @@ impl FsOperationContext {
 
 // Real disk structure
 // MOUNT_POINT/
-// repos/.trash/
 // repos/repo_dir1/
 //---------├── .temp                <- used for storing temp files created during a session
 //---------├── live/.git
-//---------├── build/               <- contents will show under each Snap folder
+//---------├── build/
 //---------------└── build_<commit_oid>/    <- Will show in the Snap folder
 //---------------------└── target/  <- Will show in the Snap folder for HASH (commit oid)
 //---------└── meta_fs.db
@@ -359,7 +358,7 @@ impl GitFs {
                     if e2.name.as_bytes().starts_with(b"Snap") {
                         continue;
                     }
-                    fs.readdir(e2.ino)?;
+                    let _ = fs.readdir(e2.ino);
                 }
             }
         }
@@ -679,6 +678,22 @@ impl GitFs {
             })?;
             let db_conn = meta_db::new_repo_db(final_path.join(META_STORE))?;
             self.conn_list.insert(repo_id, db_conn);
+        }
+
+        // Discover contents of repo root
+        let entries = fs::ops::readdir::readdir_repo_dir(self, repo_ino.into())?;
+        // Discover contents until we reach the Snap folders
+        for e1 in entries {
+            let entries = self.readdir(e1.ino)?;
+            for e2 in entries {
+                if e2.kind != FileType::Directory {
+                    continue;
+                };
+                if e2.name.as_bytes().starts_with(b"Snap") {
+                    continue;
+                }
+                let _ = self.readdir(e2.ino);
+            }
         }
 
         Ok(repo)
