@@ -255,7 +255,6 @@ impl fuser::Filesystem for GitFsAdapter {
         let fs = self.getfs();
         match fs.getattr(ino) {
             Err(err) => {
-                error!("getattr({}) failed: {:?}", ino, err);
                 reply.error(ENOENT);
             }
             Ok(attr) => reply.attr(&TTL, &attr.into()),

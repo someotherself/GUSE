@@ -104,6 +104,17 @@ impl RefKind {
             Self::Main(_) => "main",
         }
     }
+
+    pub fn get(&self) -> &str {
+        match self {
+            RefKind::Branch(s)
+            | RefKind::Tag(s)
+            | RefKind::Pr(s)
+            | RefKind::PrMerge(s)
+            | RefKind::Head(s)
+            | RefKind::Main(s) => s,
+        }
+    }
 }
 
 impl RefKind {
@@ -321,39 +332,6 @@ impl GitRepo {
         Some((y.parse().ok()?, m.parse().ok()?))
     }
 
-    /// Similar to month_commits, but only returns the Oid and folder name of each commit instead of ObjectAttr
-    fn month_oid(&self, month_key: &str) -> anyhow::Result<Vec<(Oid, OsString)>> {
-        let (year, month) =
-            Self::parse_month_key(month_key).ok_or_else(|| anyhow!("Invalid input"))?;
-
-        let mut out: Vec<(Oid, OsString)> = Vec::new();
-        let mut commit_num = 0;
-
-        self.with_state(|s| {
-            let Some(objects) = s
-                .refs_to_snaps
-                .iter()
-                .find(|(k, _)| matches!(k, RefKind::Main(_)))
-            else {
-                return;
-            };
-            for (secs_utc, commit_oid) in objects.1 {
-                let dt = DateTime::from_timestamp(*secs_utc, 0)
-                    .unwrap_or_else(|| DateTime::from_timestamp(0, 0).unwrap());
-
-                if dt.year() != year || dt.month() != month {
-                    continue;
-                }
-
-                commit_num += 1;
-                let folder_name = OsString::from(format!("Snap{commit_num:03}_{commit_oid:.7}"));
-
-                out.push((*commit_oid, folder_name));
-            }
-        });
-        Ok(out)
-    }
-
     pub fn month_commits(&self, month_key: &str) -> anyhow::Result<Vec<ObjectAttr>> {
         let (year, month) =
             Self::parse_month_key(month_key).ok_or_else(|| anyhow!("Invalid input"))?;
@@ -553,6 +531,28 @@ impl GitRepo {
                 git_mode: entry.filemode() as u32,
                 size,
                 commit_time: Time::new(0, 0),
+            });
+        }
+        Ok(entries)
+    }
+
+    pub fn commit_to_objects(
+        &self,
+        commits: Vec<(String, Oid)>,
+    ) -> anyhow::Result<Vec<ObjectAttr>> {
+        let mut entries: Vec<ObjectAttr> = vec![];
+        let repo = self.inner.lock();
+        for (name, c) in commits {
+            let Ok(commit) = repo.find_commit(c) else {
+                continue;
+            };
+            entries.push(ObjectAttr {
+                name: OsString::from(name),
+                oid: c,
+                kind: ObjectType::Commit,
+                git_mode: 0o040000,
+                size: 0,
+                commit_time: commit.time(),
             });
         }
         Ok(entries)
@@ -887,10 +887,7 @@ impl GitRepo {
         let live_path = repo_root.join(LIVE_FOLDER);
 
         let output = std::process::Command::new("git")
-            .arg("-C")
-            .arg(&repo_root)
-            .arg("--work-tree")
-            .arg(&live_path)
+            .current_dir(&live_path)
             .arg("show")
             .arg("--patch")
             .arg("--color=always")

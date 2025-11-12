@@ -15,7 +15,7 @@ use crate::{
         builds::inject::InjectedMetadata,
         fileattr::{InoFlag, ObjectAttr},
         ops::readdir::{DirCase, build_chase_path, build_dot_git_path, classify_inode},
-        repo::GitRepo,
+        repo::{GitRepo, RefKind},
     },
     inodes::{Inodes, NormalIno, VirtualIno},
     namespec,
@@ -135,7 +135,7 @@ pub fn open_git(
         // Check if modified/build version exists
         // Open them if they exist (priority is build > modified)
         // If none exist and write == false, open blob
-        // If write == true, copy blob to temp folder and open as SourceType::ReadlFile
+        // If write == true, copy blob to temp folder and open as SourceType::RealFile
         _ => open_modified_blob(fs, metadata.oid, ino.to_norm_u64(), write),
     }
 }
@@ -143,7 +143,7 @@ pub fn open_git(
 pub fn open_vfile(fs: &GitFs, ino: Inodes, read: bool, write: bool) -> anyhow::Result<u64> {
     let metadata = fs.get_builctx_metadata(ino.to_norm())?;
     let res = classify_inode(&metadata)?;
-    match res {
+    let contents = match res {
         DirCase::Month { year, month } => {
             let mut contents = {
                 let map = fs
@@ -153,23 +153,13 @@ pub fn open_vfile(fs: &GitFs, ino: Inodes, read: bool, write: bool) -> anyhow::R
                 map.get(&ino.to_virt()).and_then(|e| e.data.get()).cloned()
             };
             if contents.is_none() {
-                let entries = {
+                let mut entries = {
                     let repo = fs.get_repo(ino.to_u64_n())?;
                     repo.month_commits(&format!("{year:04}-{month:02}"))?
                 };
-                contents = Some(build_commits_text(fs, entries, ino.to_u64_n())?);
+                contents = Some(build_commits_text(fs, &mut entries, ino.to_u64_n())?);
             }
-            let data = contents.ok_or_else(|| anyhow!("No data"))?;
-            let blob_file = SourceTypes::Blob {
-                oid: Oid::zero(),
-                data,
-            };
-            let handle = Handle {
-                ino: ino.to_u64_v(),
-                source: blob_file,
-                write: false,
-            };
-            fs.handles.open(handle)
+            contents
         }
         // User is in a MONTH folder and runs a git summary on a snap folder
         // Example: cat Snap001_0c24236@
@@ -187,56 +177,125 @@ pub fn open_vfile(fs: &GitFs, ino: Inodes, read: bool, write: bool) -> anyhow::R
                 let summary = GitRepo::print_commit_summary(fs, repo.repo_id, oid)?;
                 contents = Some(summary.into());
             }
-            let data = contents.ok_or_else(|| anyhow!("No data"))?;
-            let blob_file = SourceTypes::Blob {
-                oid: Oid::zero(),
-                data,
+            contents
+        }
+        DirCase::Pr => {
+            let mut contents = {
+                let map = fs
+                    .vfile_entry
+                    .read()
+                    .map_err(|_| anyhow!("Lock poisoned"))?;
+                map.get(&ino.to_virt()).and_then(|e| e.data.get()).cloned()
             };
-            let handle = Handle {
-                ino: ino.to_u64_v(),
-                source: blob_file,
-                write: false,
+            if contents.is_none() {
+                contents = commits_inside_pr(fs, ino.to_norm())?.into();
+            }
+            contents
+        }
+        DirCase::Tags | DirCase::Branches | DirCase::PrMerge => {
+            let mut contents = {
+                let map = fs
+                    .vfile_entry
+                    .read()
+                    .map_err(|_| anyhow!("Lock poisoned"))?;
+                map.get(&ino.to_virt()).and_then(|e| e.data.get()).cloned()
             };
-            fs.handles.open(handle)
+            if contents.is_none() {
+                contents = commits_inside_normal(fs, ino.to_norm(), InoFlag::TagsRoot)?.into();
+            }
+            contents
+        }
+    };
+    let data = contents.ok_or_else(|| anyhow!("No data"))?;
+    let blob_file = SourceTypes::Blob {
+        oid: Oid::zero(),
+        data,
+    };
+    let handle = Handle {
+        ino: ino.to_u64_v(),
+        source: blob_file,
+        write: false,
+    };
+    fs.handles.open(handle)
+}
+
+// Searches for RefKind::Pr(_), but only if they have a corresponding RefKind::PrMerge(_)
+fn commits_inside_pr(fs: &GitFs, ino: NormalIno) -> anyhow::Result<Arc<[u8]>> {
+    let repo = fs.get_repo(ino.into())?;
+    let ref_entries = repo.with_state(|s| s.refs_to_snaps.clone());
+    let pr_merge_commits = ref_entries
+        .iter()
+        .filter(|(ref_kind, oids)| matches!(ref_kind, RefKind::PrMerge(_)) && !oids.is_empty())
+        .map(|(ref_kind, _)| ref_kind)
+        .collect::<Vec<_>>();
+
+    let mut pr_entries = vec![];
+    for rf in pr_merge_commits {
+        let pr_merge_id = rf.get();
+        let pr_entry = ref_entries
+            .iter()
+            .find(|&(rf, oids)| rf == &RefKind::Pr(pr_merge_id.into()) && !oids.is_empty());
+        if let Some((pr_entry, oids)) = pr_entry {
+            pr_entries.push((pr_merge_id.to_string(), oids[0].1));
         }
     }
+    let mut entries = repo.commit_to_objects(pr_entries)?;
+    build_commits_text(fs, &mut entries, ino.to_norm_u64())
+}
+
+/// Used for the Tag, Branches and PrMerge folders inside Repo Root
+///
+/// The Pr folder uses `commits_inside_pr`
+fn commits_inside_normal(fs: &GitFs, ino: NormalIno, flag: InoFlag) -> anyhow::Result<Arc<[u8]>> {
+    let check_flag = |rf: &RefKind| -> bool {
+        if flag == InoFlag::PrMergeRoot {
+            matches!(rf, RefKind::PrMerge(_))
+        } else if flag == InoFlag::BranchesRoot {
+            matches!(rf, RefKind::Branch(_))
+        } else if flag == InoFlag::TagsRoot {
+            matches!(rf, RefKind::Tag(_))
+        } else {
+            false
+        }
+    };
+    let repo = fs.get_repo(ino.into())?;
+    let ref_entries = repo.with_state(|s| s.refs_to_snaps.clone());
+    let commits = ref_entries
+        .iter()
+        .filter(|&(ref_kind, oids)| check_flag(ref_kind) && !oids.is_empty())
+        .map(|(ref_kind, oids)| (ref_kind.get().to_string(), oids[0].1))
+        .collect::<Vec<_>>();
+    let mut entries = repo.commit_to_objects(commits)?;
+    build_commits_text(fs, &mut entries, ino.to_norm_u64())
 }
 
 /// Saves the file in the vfile_entry and returns the size of the content
 pub fn create_vfile_entry(fs: &GitFs, ino: VirtualIno) -> anyhow::Result<u64> {
     let metadata = fs.get_builctx_metadata(ino.to_norm())?;
     let res = classify_inode(&metadata)?;
-    let (entry, len) = match res {
+    let repo = fs.get_repo(ino.into())?;
+    let contents = match res {
         DirCase::Month { year, month } => {
-            let entries = {
-                let repo = fs.get_repo(ino.to_norm_u64())?;
-                repo.month_commits(&format!("{year:04}-{month:02}"))?
-            };
-            let contents = build_commits_text(fs, entries, ino.to_norm_u64())?;
-            let data = OnceLock::new();
-            let _ = data.set(contents.clone());
-            let len = contents.len() as u64;
-            let entry = VFileEntry {
-                kind: crate::fs::VFile::Month,
-                len,
-                data,
-            };
-            (entry, len)
+            let mut entries = repo.month_commits(&format!("{year:04}-{month:02}"))?;
+            build_commits_text(fs, &mut entries, ino.to_norm_u64())?
         }
         // User is in a MONTH folder and runs a git summary on a snap folder
         // Example: cat Snap001_0c24236@
         // Only save the length of the data at this point
-        DirCase::Commit { oid } => {
-            let repo = fs.get_repo(ino.into())?;
-            let len = GitRepo::print_commit_summary(fs, repo.repo_id, oid)?.len() as u64;
-            let data = OnceLock::new();
-            let entry = VFileEntry {
-                kind: crate::fs::VFile::Commit,
-                len,
-                data,
-            };
-            (entry, len)
+        DirCase::Commit { oid } => GitRepo::print_commit_summary(fs, repo.repo_id, oid)?.into(),
+        DirCase::Pr => commits_inside_pr(fs, ino.to_norm())?,
+        DirCase::Tags | DirCase::Branches | DirCase::PrMerge => {
+            commits_inside_normal(fs, ino.to_norm(), metadata.ino_flag)?
         }
+    };
+
+    let data = OnceLock::new();
+    let _ = data.set(contents.clone());
+    let len = contents.len() as u64;
+    let entry = VFileEntry {
+        kind: crate::fs::VFile::Month,
+        len,
+        data,
     };
     {
         let mut guard = fs
@@ -343,8 +402,13 @@ fn git_commit_time(t: Time) -> String {
     dt.to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
 }
 
-fn build_commits_text(fs: &GitFs, entries: Vec<ObjectAttr>, ino: u64) -> anyhow::Result<Arc<[u8]>> {
+fn build_commits_text(
+    fs: &GitFs,
+    entries: &mut Vec<ObjectAttr>,
+    ino: u64,
+) -> anyhow::Result<Arc<[u8]>> {
     let mut contents: Vec<u8> = Vec::new();
+    entries.sort_unstable_by(|a, b| a.commit_time.cmp(&b.commit_time));
 
     for e in entries {
         let ts = git_commit_time(e.commit_time);

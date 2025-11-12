@@ -80,10 +80,19 @@ pub struct BuildCtxMetadata {
 #[derive(Debug)]
 pub enum DirCase {
     /// The month folders
-    Month { year: i32, month: u32 },
+    Month {
+        year: i32,
+        month: u32,
+    },
+    Pr,
+    PrMerge,
+    Branches,
+    Tags,
     /// Everything else
     /// Can be a commit, tree or Oid::zero()
-    Commit { oid: Oid },
+    Commit {
+        oid: Oid,
+    },
 }
 
 pub fn readdir_root_dir(fs: &GitFs) -> anyhow::Result<Vec<DirectoryEntry>> {
@@ -276,6 +285,20 @@ pub fn classify_inode(meta: &BuildCtxMetadata) -> anyhow::Result<DirCase> {
         {
             return Ok(DirCase::Month { year, month });
         }
+    }
+
+    // Add Pr, Pr-Merge, Branch, Tags
+    if meta.ino_flag == InoFlag::PrRoot {
+        return Ok(DirCase::Pr);
+    };
+    if meta.ino_flag == InoFlag::PrMergeRoot {
+        return Ok(DirCase::PrMerge);
+    }
+    if meta.ino_flag == InoFlag::BranchesRoot {
+        return Ok(DirCase::Branches);
+    }
+    if meta.ino_flag == InoFlag::TagsRoot {
+        return Ok(DirCase::Tags);
     }
 
     // Branch 2
