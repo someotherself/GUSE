@@ -12,7 +12,7 @@ use crate::{
         CHASE_FOLDER, FileAttr, GitFs, LIVE_FOLDER,
         builds::BuildOperationCtx,
         fileattr::{FileType, InoFlag, ObjectAttr, StorageNode, dir_attr, file_attr},
-        meta_db::DbReturn,
+        meta_db::DbReturn, repo::git2time_to_system,
     },
     inodes::{NormalIno, VirtualIno},
     namespec,
@@ -577,6 +577,9 @@ fn objects_to_dir_entries(
                 attr.oid = entry.oid;
                 attr.ino = ino;
                 attr.size = entry.size;
+                attr.atime = git2time_to_system(entry.commit_time);
+                attr.mtime = git2time_to_system(entry.commit_time);
+                attr.ctime = git2time_to_system(entry.commit_time);
                 nodes.push(StorageNode {
                     parent_ino: parent.to_norm_u64(),
                     name: entry.name.clone(),

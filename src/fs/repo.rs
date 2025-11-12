@@ -10,7 +10,7 @@ use std::{
     sync::{
         Arc,
         atomic::{AtomicBool, AtomicUsize},
-    },
+    }, time::{Duration, SystemTime},
 };
 
 use crate::{
@@ -969,5 +969,14 @@ pub fn try_into_filemode(mode: u64) -> Option<FileMode> {
                 _ => None,
             }
         }
+    }
+}
+
+pub fn git2time_to_system(time: Time) -> SystemTime {
+    let secs = time.seconds();
+    if secs >= 0 {
+        SystemTime::UNIX_EPOCH + Duration::from_secs(secs as u64)
+    } else {
+        SystemTime::UNIX_EPOCH - Duration::from_secs((-secs) as u64)
     }
 }
