@@ -1,7 +1,7 @@
 use std::{
     io::{Read, Write},
     os::unix::{
-        fs::PermissionsExt,
+        fs::{FileTypeExt, PermissionsExt},
         net::{UnixListener, UnixStream},
     },
     path::{Path, PathBuf},
@@ -121,21 +121,48 @@ fn handle_client(
 }
 
 fn bind_socket(socket_path: &Path) -> anyhow::Result<UnixListener> {
-    if socket_path.exists() {
-        match UnixStream::connect(socket_path) {
-            Ok(_) => anyhow::bail!("Already running at {}", socket_path.display()),
-            Err(_) => std::fs::remove_file(socket_path)?,
+    // First attempt
+    match UnixListener::bind(socket_path) {
+        Ok(listener) => {
+            let mut p = std::fs::metadata(socket_path)?.permissions();
+            p.set_mode(0o600);
+            std::fs::set_permissions(socket_path, p)?;
+            Ok(listener)
         }
+        Err(e) if e.kind() == std::io::ErrorKind::AddrInUse => {
+            // Path exists; determine if it's active or stale
+            match UnixStream::connect(socket_path) {
+                Ok(_) => {
+                    // Someone is listening there
+                    anyhow::bail!("Already running at {}", socket_path.display());
+                }
+                Err(_) => {
+                    // Looks stale: only unlink if it's a socket file
+                    if let Ok(meta) = std::fs::symlink_metadata(socket_path) {
+                        if meta.file_type().is_socket() {
+                            let _ = std::fs::remove_file(socket_path);
+                        } else {
+                            anyhow::bail!(
+                                "Refusing to remove non-socket at {}",
+                                socket_path.display()
+                            );
+                        }
+                    }
+                    // Retry bind once
+                    let listener = UnixListener::bind(socket_path)?;
+                    let mut p = std::fs::metadata(socket_path)?.permissions();
+                    p.set_mode(0o600);
+                    std::fs::set_permissions(socket_path, p)?;
+                    Ok(listener)
+                }
+            }
+        }
+        Err(e) => Err(e.into()),
     }
-    let listener = UnixListener::bind(socket_path)?;
-    let mut p = std::fs::metadata(socket_path)?.permissions();
-    p.set_mode(0o600);
-    std::fs::set_permissions(socket_path, p)?;
-    Ok(listener)
 }
 
 pub fn send_req(sock: &Path, req: &ControlReq) -> anyhow::Result<ControlRes> {
-    let mut s = UnixStream::connect(sock).map_err(|_| anyhow!("Daemon not running!"))?;
+    let mut s = UnixStream::connect(sock).map_err(|_| anyhow!("GUSE is not running!"))?;
     let data = serde_json::to_vec(req)?;
     s.write_all(&data)?;
     s.shutdown(std::net::Shutdown::Write)?;
