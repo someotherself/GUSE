@@ -6,7 +6,7 @@ use anyhow::anyhow;
 use clap::{Arg, ArgAction, ArgMatches, Command, command, crate_authors, crate_version};
 
 use guse::internals::sock::{ControlReq, send_req, socket_path};
-use tracing_subscriber::EnvFilter;
+use tracing_subscriber::{EnvFilter, filter::Directive};
 
 fn main() -> anyhow::Result<()> {
     let matches = handle_cli_args();
@@ -182,7 +182,9 @@ pub fn init_logging(verbosity: u8) {
     let mut filter =
         EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("warn,fuser=warn"));
 
-    filter = filter.add_directive(format!("{my_crate}={my_level}").parse().unwrap());
+    if let Ok(directive) = format!("{my_crate}={my_level}").parse::<Directive>() {
+        filter = filter.add_directive(directive);
+    }
 
     tracing_subscriber::fmt::Subscriber::builder()
         .with_env_filter(filter)

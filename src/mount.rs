@@ -469,7 +469,7 @@ impl fuser::Filesystem for GitFsAdapter {
 
         // Only create the entries when starting from offset 0 or after buffer was filled
         let res = {
-            let state = state_arc.lock().unwrap();
+            let state = state_arc.lock();
             state.dir_stream.is_none()
         };
         if res {
@@ -482,15 +482,16 @@ impl fuser::Filesystem for GitFsAdapter {
                     return;
                 }
             };
-            let mut state = state_arc.lock().unwrap();
+            let mut state = state_arc.lock();
             let entries: Arc<[DirectoryEntry]> = Arc::from(gitfs_entries.into_boxed_slice());
             state.dir_stream = Some(entries);
         }
 
         {
-            let state = state_arc.lock().unwrap();
-            let gitfs_entries = state.dir_stream.as_ref().unwrap();
-            entries.extend_from_slice(gitfs_entries);
+            let state = state_arc.lock();
+            if let Some(gitfs_entries) = state.dir_stream.as_ref() {
+                entries.extend_from_slice(gitfs_entries);
+            }
         };
 
         entries.sort_unstable_by(|a, b| a.name.as_encoded_bytes().cmp(b.name.as_encoded_bytes()));
@@ -501,13 +502,11 @@ impl fuser::Filesystem for GitFsAdapter {
         } else {
             // This is a subsequent call, get the last cookie
             let next_name = {
-                let state = state_arc.lock().unwrap();
+                let state = state_arc.lock();
                 state.next_name.clone()
             };
 
-            if next_name.is_some() {
-                #[allow(clippy::unnecessary_unwrap)]
-                let next_name = next_name.unwrap();
+            if let Some(next_name) = next_name {
                 let Some((cookie, _)) = entries
                     .iter()
                     .enumerate()
@@ -536,20 +535,18 @@ impl fuser::Filesystem for GitFsAdapter {
 
             if full {
                 next_name = Some(entry.name.clone());
-                if let Ok(mut state) = state_arc.lock() {
-                    state.next_name = next_name;
-                    state.last_stream = last_entries;
-                    state.dir_stream = None;
-                }
+                let mut state = state_arc.lock();
+                state.next_name = next_name;
+                state.last_stream = last_entries;
+                state.dir_stream = None;
                 reply.ok();
                 return;
             }
         }
-        if let Ok(mut state) = state_arc.lock() {
-            state.next_name = next_name;
-            state.last_stream = last_entries;
-            state.dir_stream = None;
-        }
+        let mut state = state_arc.lock();
+        state.next_name = next_name;
+        state.last_stream = last_entries;
+        state.dir_stream = None;
 
         reply.ok();
     }

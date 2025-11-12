@@ -1,11 +1,8 @@
-use std::{
-    collections::BTreeMap,
-    ffi::OsString,
-    sync::{Arc, Mutex},
-};
+use std::{collections::BTreeMap, ffi::OsString, sync::Arc};
 
 use anyhow::bail;
 use git2::Oid;
+use parking_lot::Mutex;
 
 use crate::{
     fs::{

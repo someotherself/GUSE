@@ -304,7 +304,7 @@ impl GitRepo {
             };
             for (secs, _) in objects.1 {
                 let dt = chrono::DateTime::from_timestamp(*secs, 0)
-                    .unwrap_or_else(|| chrono::DateTime::from_timestamp(0, 0).unwrap());
+                    .unwrap_or(chrono::DateTime::UNIX_EPOCH);
                 let folder_name = OsString::from(format!("{:04}-{:02}", dt.year(), dt.month()));
 
                 if out.iter().any(|(_, attr)| attr.name == folder_name) {
@@ -350,7 +350,7 @@ impl GitRepo {
             };
             for (secs_utc, commit_oid) in objects.1 {
                 let dt = DateTime::from_timestamp(*secs_utc, 0)
-                    .unwrap_or_else(|| DateTime::from_timestamp(0, 0).unwrap());
+                    .unwrap_or(chrono::DateTime::UNIX_EPOCH);
 
                 if dt.year() != year || dt.month() != month {
                     continue;

@@ -3,7 +3,7 @@ use std::fs::File;
 use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::{FileExt, MetadataExt};
 use std::path::Path;
-use std::sync::{Arc, Mutex, OnceLock, RwLock};
+use std::sync::{Arc, OnceLock, RwLock};
 use std::time::{Duration, UNIX_EPOCH};
 use std::{
     collections::{BTreeMap, HashMap, HashSet},
@@ -170,7 +170,7 @@ pub enum SourceTypes {
     },
     /// Created by opendir, populated readdir with directory entries
     DirSnapshot {
-        entries: Arc<Mutex<DirectoryStreamCookie>>,
+        entries: Arc<parking_lot::Mutex<DirectoryStreamCookie>>,
     },
     Closed,
 }
@@ -286,7 +286,9 @@ impl GitFs {
             while notifier.get().is_none() {
                 std::thread::sleep(std::time::Duration::from_millis(10));
             }
-            let n = notifier.get().unwrap().clone();
+            let Some(n) = notifier.get() else {
+                return;
+            };
             for msg in rx_inval.iter() {
                 match msg {
                     InvalMsg::Entry { parent, name } => {
