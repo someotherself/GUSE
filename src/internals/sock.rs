@@ -121,7 +121,6 @@ fn handle_client(
 }
 
 fn bind_socket(socket_path: &Path) -> anyhow::Result<UnixListener> {
-    // First attempt
     match UnixListener::bind(socket_path) {
         Ok(listener) => {
             let mut p = std::fs::metadata(socket_path)?.permissions();
@@ -130,14 +129,12 @@ fn bind_socket(socket_path: &Path) -> anyhow::Result<UnixListener> {
             Ok(listener)
         }
         Err(e) if e.kind() == std::io::ErrorKind::AddrInUse => {
-            // Path exists; determine if it's active or stale
             match UnixStream::connect(socket_path) {
                 Ok(_) => {
                     // Someone is listening there
                     anyhow::bail!("Already running at {}", socket_path.display());
                 }
                 Err(_) => {
-                    // Looks stale: only unlink if it's a socket file
                     if let Ok(meta) = std::fs::symlink_metadata(socket_path) {
                         if meta.file_type().is_socket() {
                             let _ = std::fs::remove_file(socket_path);
@@ -148,7 +145,6 @@ fn bind_socket(socket_path: &Path) -> anyhow::Result<UnixListener> {
                             );
                         }
                     }
-                    // Retry bind once
                     let listener = UnixListener::bind(socket_path)?;
                     let mut p = std::fs::metadata(socket_path)?.permissions();
                     p.set_mode(0o600);
