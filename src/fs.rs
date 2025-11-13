@@ -453,6 +453,7 @@ impl GitFs {
 
         // Prepare the live and build folders
         let live_ino = self.next_inode_raw(repo_ino)?;
+        let build_ino = self.next_inode_raw(repo_ino)?;
         let chase_ino = self.next_inode_raw(repo_ino)?;
 
         let live_name = OsString::from(LIVE_FOLDER);
@@ -464,6 +465,10 @@ impl GitFs {
         live_attr.ino = live_ino;
         live_attr.git_mode = st_mode;
 
+        let mut build_attr: FileAttr = dir_attr(InoFlag::BuildRoot).into();
+        build_attr.ino = build_ino;
+        build_attr.git_mode = st_mode;
+
         let mut chase_attr: FileAttr = dir_attr(InoFlag::ChaseRoot).into();
         chase_attr.ino = chase_ino;
         chase_attr.git_mode = st_mode;
@@ -472,6 +477,7 @@ impl GitFs {
         repo.refresh_refs()?;
         repo.with_state_mut(|s| {
             s.res_inodes.insert(live_ino);
+            s.res_inodes.insert(build_ino);
             s.res_inodes.insert(chase_ino);
         });
 
@@ -485,6 +491,11 @@ impl GitFs {
                 parent_ino: repo_ino,
                 name: chase_name,
                 attr: chase_attr,
+            },
+            StorageNode {
+                parent_ino: repo_ino,
+                name: build_name,
+                attr: build_attr,
             },
         ];
 
@@ -617,9 +628,11 @@ impl GitFs {
         // Prepare the live and chase folders
 
         let live_ino = self.next_inode_raw(repo_ino)?;
+        let build_ino = self.next_inode_raw(repo_ino)?;
         let chase_ino = self.next_inode_raw(repo_ino)?;
 
         let chase_name = OsString::from(CHASE_FOLDER);
+        let build_name = OsString::from(BUILD_FOLDER);
         let live_name = OsString::from(LIVE_FOLDER);
 
         let perms = 0o775;
@@ -628,6 +641,13 @@ impl GitFs {
         let mut live_attr: FileAttr = dir_attr(InoFlag::LiveRoot).into();
         live_attr.ino = live_ino;
         live_attr.git_mode = st_mode;
+
+        let mut build_attr: FileAttr = dir_attr(InoFlag::BuildRoot).into();
+        build_attr.ino = build_ino;
+        build_attr.git_mode = st_mode;
+
+        // Create build folder on disk
+        std::fs::create_dir(tmp_path.join(BUILD_FOLDER))?;
 
         let mut chase_attr: FileAttr = dir_attr(InoFlag::ChaseRoot).into();
         chase_attr.ino = chase_ino;
@@ -644,6 +664,7 @@ impl GitFs {
         let repo = self.get_repo(repo_ino)?;
         repo.with_state_mut(|s| {
             s.res_inodes.insert(live_ino);
+            s.res_inodes.insert(build_ino);
             s.res_inodes.insert(chase_ino);
         });
 
@@ -657,6 +678,11 @@ impl GitFs {
                 parent_ino: repo_ino,
                 name: chase_name,
                 attr: chase_attr,
+            },
+            StorageNode {
+                parent_ino: repo_ino,
+                name: build_name,
+                attr: build_attr,
             },
         ];
 
