@@ -453,7 +453,28 @@ impl GitRepo {
     pub fn fetch_anon(&self, url: &str) -> anyhow::Result<()> {
         let repo = self.inner.lock();
         let mut remote = repo.remote_anonymous(url)?;
-        let cbs = git2::RemoteCallbacks::new();
+        let mut cbs = git2::RemoteCallbacks::new();
+        cbs.sideband_progress(|d| {
+            print!("remote: {}", std::str::from_utf8(d).unwrap_or(""));
+            true
+        });
+        cbs.update_tips(|name, a, b| {
+            println!("update {a:.10}..{b:.10} {name}");
+            true
+        });
+        cbs.transfer_progress(|s| {
+            if s.total_objects() > 0 {
+                print!(
+                    "\rReceived {}/{} (idx {}) {} bytes",
+                    s.received_objects(),
+                    s.total_objects(),
+                    s.indexed_objects(),
+                    s.received_bytes()
+                );
+            }
+            std::io::Write::flush(&mut std::io::stdout()).ok();
+            true
+        });
         let mut fo = git2::FetchOptions::new();
         fo.remote_callbacks(cbs);
 
