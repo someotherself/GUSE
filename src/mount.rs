@@ -182,12 +182,16 @@ impl fuser::Filesystem for GitFsAdapter {
             | consts::FUSE_ATOMIC_O_TRUNC;
 
         config.set_max_readahead(128 * 1024).map_err(|e| e as u16)?;
-        config.set_max_write(4 * 1024 * 1024).map_err(|e| e as u16)?;
+        config
+            .set_max_write(4 * 1024 * 1024)
+            .map_err(|e| e as u16)?;
         config.set_max_background(4096)?;
         config.set_congestion_threshold(1384)?;
-        config.add_capabilities(capabilities).map_err(|e| e as u16)?;
+        config
+            .add_capabilities(capabilities)
+            .map_err(|e| e as u16)?;
         Ok(())
-    }   
+    }
 
     fn destroy(&mut self) {}
 

@@ -10,6 +10,7 @@ use std::{
 
 use anyhow::{Context, anyhow};
 use serde::{Deserialize, Serialize};
+use serde_json::Deserializer;
 
 use crate::{fs::builds::chase::start_chase, mount::GitFsAdapter};
 
@@ -33,7 +34,10 @@ pub enum ControlReq<'a> {
 #[serde(tag = "status", rename_all = "snake_case")]
 pub enum ControlRes {
     Ok,
+    // User to print error messages to the user cli
     Error { error: String },
+    // Used to print progress to the user cli
+    Update { message: Vec<u8> },
     RepoList { repos: Vec<String> },
     Status { running: bool, mount_point: String },
 }
@@ -99,9 +103,7 @@ fn handle_client(
             ControlReq::Chase { repo, build } => {
                 let repo = repo.strip_suffix("/").unwrap_or(repo);
                 let fs = inner.getfs();
-                tracing::info!("Running chase");
-                println!("Running chase");
-                start_chase(&fs, repo, build)?;
+                start_chase(&fs, repo, build, &mut stream)?;
                 Ok(ControlRes::Ok)
             }
             ControlReq::Status => {
@@ -131,7 +133,6 @@ fn bind_socket(socket_path: &Path) -> anyhow::Result<UnixListener> {
         Err(e) if e.kind() == std::io::ErrorKind::AddrInUse => {
             match UnixStream::connect(socket_path) {
                 Ok(_) => {
-                    // Someone is listening there
                     anyhow::bail!("Already running at {}", socket_path.display());
                 }
                 Err(_) => {
@@ -158,17 +159,33 @@ fn bind_socket(socket_path: &Path) -> anyhow::Result<UnixListener> {
 }
 
 pub fn send_req(sock: &Path, req: &ControlReq) -> anyhow::Result<ControlRes> {
+    println!("Calling control daemon with {:?}", req);
     let mut s = UnixStream::connect(sock).map_err(|_| anyhow!("GUSE is not running!"))?;
     let data = serde_json::to_vec(req)?;
     s.write_all(&data)?;
     s.shutdown(std::net::Shutdown::Write)?;
     let mut resp_buf = vec![];
     s.read_to_end(&mut resp_buf)?;
-    let resp: ControlRes = serde_json::from_slice(&resp_buf).map_err(|e| {
-        anyhow::anyhow!(
-            "invalid response from daemon: {e}. raw={:?}",
-            String::from_utf8_lossy(&resp_buf)
-        )
-    })?;
-    Ok(resp)
+    let iter = Deserializer::from_slice(&resp_buf).into_iter::<ControlRes>();
+    let mut final_res: Option<ControlRes> = None;
+
+    for item in iter {
+        let msg = item.map_err(|e| {
+            anyhow::anyhow!(
+                "invalid response from daemon: {e}. raw={:?}",
+                String::from_utf8_lossy(&resp_buf)
+            )
+        })?;
+
+        match msg {
+            ControlRes::Update { message } => {
+                print!("{}", String::from_utf8_lossy(&message));
+            }
+            other => {
+                final_res = Some(other);
+            }
+        }
+    }
+
+    final_res.ok_or_else(|| anyhow::anyhow!("daemon sent no final response"))
 }

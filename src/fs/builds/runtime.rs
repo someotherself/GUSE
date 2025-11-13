@@ -65,6 +65,9 @@ impl LuaConfig {
             Ok(())
         })?;
 
+        lua.gc_collect()?;
+        lua.gc_collect()?;
+
         let config = Arc::try_unwrap(lua_config).unwrap().into_inner().unwrap();
         Ok(config)
     }

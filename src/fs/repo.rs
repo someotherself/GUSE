@@ -349,8 +349,8 @@ impl GitRepo {
                 return;
             };
             for (secs_utc, commit_oid) in objects.1 {
-                let dt = DateTime::from_timestamp(*secs_utc, 0)
-                    .unwrap_or(chrono::DateTime::UNIX_EPOCH);
+                let dt =
+                    DateTime::from_timestamp(*secs_utc, 0).unwrap_or(chrono::DateTime::UNIX_EPOCH);
 
                 if dt.year() != year || dt.month() != month {
                     continue;
@@ -557,6 +557,18 @@ impl GitRepo {
             });
         }
         Ok(entries)
+    }
+
+    pub fn find_snap_in_repo(&self, commits: &[String]) -> anyhow::Result<Vec<(String, Time)>> {
+        let mut out = vec![];
+        self.with_repo(|r| -> anyhow::Result<()> {
+            for commit in commits {
+                let commit = r.find_commit_by_prefix(commit)?;
+                out.push((commit.id().to_string(), commit.time()));
+            }
+            Ok(())
+        })?;
+        Ok(out)
     }
 
     pub fn blob_history_objects(&self, target_blob: Oid) -> anyhow::Result<Vec<ObjectAttr>> {
