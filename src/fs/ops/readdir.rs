@@ -198,8 +198,11 @@ pub fn readdir_repo_dir(fs: &GitFs, parent: NormalIno) -> anyhow::Result<Vec<Dir
             match rf.as_str() {
                 "Branches" => folders.push((OsString::from("Branches"), InoFlag::BranchesRoot)),
                 "Tags" => folders.push((OsString::from("Tags"), InoFlag::TagsRoot)),
-                "Pr" => folders.push((OsString::from("Pr"), InoFlag::PrRoot)),
-                "PrMerge" => folders.push((OsString::from("PrMerge"), InoFlag::PrMergeRoot)),
+                "PrMerge" => {
+                    // Only push Pr is there PrMerges too
+                    folders.push((OsString::from("Pr"), InoFlag::PrRoot));
+                    folders.push((OsString::from("PrMerge"), InoFlag::PrMergeRoot));
+                }
                 _ => continue,
             }
         }
