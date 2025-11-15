@@ -352,16 +352,7 @@ impl GitFs {
             let entries = fs::ops::readdir::readdir_repo_dir(&fs, repo_ino.into())?;
             // Discover contents until we reach the Snap folders
             for e1 in entries {
-                let entries = fs.readdir(e1.ino)?;
-                for e2 in entries {
-                    if e2.kind != FileType::Directory {
-                        continue;
-                    };
-                    if e2.name.as_bytes().starts_with(b"Snap") {
-                        continue;
-                    }
-                    let _ = fs.readdir(e2.ino);
-                }
+                let _ = fs.readdir(e1.ino);
             }
         }
         Ok(fs)
@@ -712,16 +703,7 @@ impl GitFs {
         let entries = fs::ops::readdir::readdir_repo_dir(self, repo_ino.into())?;
         // Discover contents until we reach the Snap folders
         for e1 in entries {
-            let entries = self.readdir(e1.ino)?;
-            for e2 in entries {
-                if e2.kind != FileType::Directory {
-                    continue;
-                };
-                if e2.name.as_bytes().starts_with(b"Snap") {
-                    continue;
-                }
-                let _ = self.readdir(e2.ino);
-            }
+            let _ = self.readdir(e1.ino);
         }
 
         Ok(repo)
