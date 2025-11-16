@@ -5,6 +5,8 @@ use std::{
 
 use mlua::Lua;
 
+use crate::fs::builds::reporter::{ChaseError, GuseResult};
+
 #[derive(Debug)]
 pub enum ChaseMode {
     Continuous,
@@ -28,45 +30,90 @@ pub struct LuaConfig {
 }
 
 impl LuaConfig {
-    pub fn read_lua(path: &Path) -> mlua::Result<Self> {
+    pub fn read_lua(path: &Path) -> GuseResult<Self> {
         let lua = Lua::new();
-        let lua_src = std::fs::read_to_string(path.join("chase.lua"))?;
+        let script_path = path.join("chase.lua");
+        let lua_src = std::fs::read_to_string(&script_path)
+            .map_err(|_| ChaseError::ScriptNotFound { path: script_path })?;
         let globals = lua.globals();
 
         let lua_config = Arc::new(Mutex::new(LuaConfig::default()));
 
-        lua.scope(|scope| {
-            let cfg = lua.create_table()?;
+        let scope = |scope: &Lua| -> GuseResult<()> {
+            let cfg = lua.create_table().map_err(|e| ChaseError::LuaError {
+                source: e,
+                msg: "Could not create cfg table: ".to_string(),
+            })?;
 
             {
                 let commits_ref = Arc::clone(&lua_config);
-                let add_commit = scope.create_function(move |_, oid: String| {
-                    commits_ref.lock().unwrap().commits.push(oid);
-                    Ok(())
-                })?;
-                cfg.set("add_commit", add_commit)?;
+                let add_commit = scope
+                    .create_function(move |_, oid: String| {
+                        commits_ref.lock().unwrap().commits.push(oid);
+                        Ok(())
+                    })
+                    .map_err(|e| ChaseError::LuaError {
+                        source: e,
+                        msg: "Could not create add_commit function: ".to_string(),
+                    })?;
+                cfg.set("add_commit", add_commit)
+                    .map_err(|e| ChaseError::LuaError {
+                        source: e,
+                        msg: "Error setting cfg table: ".to_string(),
+                    })?;
             }
 
             {
                 let mode_ref = Arc::clone(&lua_config);
-                let set_mode = scope.create_function(move |_, mode: String| {
-                    let chase_mode = ChaseMode::from_str(&mode);
-                    mode_ref.lock().unwrap().mode = chase_mode;
-                    Ok(())
-                })?;
-                cfg.set("set_mode", set_mode)?;
+                let set_mode = scope
+                    .create_function(move |_, mode: String| {
+                        let chase_mode = ChaseMode::from_str(&mode);
+                        mode_ref.lock().unwrap().mode = chase_mode;
+                        Ok(())
+                    })
+                    .map_err(|e| ChaseError::LuaError {
+                        source: e,
+                        msg: "Could not create set_mode function: ".to_string(),
+                    })?;
+                cfg.set("set_mode", set_mode)
+                    .map_err(|e| ChaseError::LuaError {
+                        source: e,
+                        msg: "Error setting cfg table: ".to_string(),
+                    })?;
             }
 
-            globals.set("cfg", cfg)?;
+            globals.set("cfg", cfg).map_err(|e| ChaseError::LuaError {
+                source: e,
+                msg: "Error setting cfg table: ".to_string(),
+            })?;
 
-            lua.load(&lua_src).set_name("chase.lua").exec()?;
+            lua.load(&lua_src)
+                .set_name("chase.lua")
+                .exec()
+                .map_err(|e| ChaseError::LuaError {
+                    source: e,
+                    msg: "Error running exec on cfg table: ".to_string(),
+                })?;
 
-            globals.set("cfg", mlua::Value::Nil)?;
+            globals
+                .set("cfg", mlua::Value::Nil)
+                .map_err(|e| ChaseError::LuaError {
+                    source: e,
+                    msg: "Error setting cfg table: ".to_string(),
+                })?;
             Ok(())
-        })?;
+        };
 
-        lua.gc_collect()?;
-        lua.gc_collect()?;
+        scope(&lua)?;
+
+        lua.gc_collect().map_err(|e| ChaseError::LuaError {
+            source: e,
+            msg: "Could not run lua GC: ".to_string(),
+        })?;
+        lua.gc_collect().map_err(|e| ChaseError::LuaError {
+            source: e,
+            msg: "Could not run lua GC: ".to_string(),
+        })?;
 
         let config = Arc::try_unwrap(lua_config).unwrap().into_inner().unwrap();
         Ok(config)

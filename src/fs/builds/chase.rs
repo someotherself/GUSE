@@ -1,25 +1,30 @@
 use std::{
     collections::{HashMap, VecDeque},
     os::unix::net::UnixStream,
+    path::PathBuf,
     sync::Arc,
 };
 
-use anyhow::{anyhow, bail};
+use anyhow::bail;
 use git2::Oid;
 
 use crate::fs::{
     GitFs,
-    builds::{BuildSession, reporter::{Reporter, color_green}, runtime::LuaConfig},
+    builds::{
+        BuildSession,
+        chase_resolver::{resolve_path_for_refs, validate_commit_refs, validate_commits},
+        reporter::{ErrorResolver, Reporter},
+        runtime::LuaConfig,
+    },
 };
 
 struct Chase {
     commits: VecDeque<Oid>,
-    timeout: usize,
-    max_parallel: usize,
-    /// Old sessions returned by `move_build_session`.
+    commit_paths: HashMap<Oid, PathBuf>,
+    /// Old session returned by `move_build_session`.
     ///
-    /// Should be returned at the end of the chase
-    moved_sessions: HashMap<Oid, Arc<BuildSession>>,
+    /// One commit can only be linked to one BuildSession. If a commit already has one, save it here and fix it when the commit is done with the chase build.
+    moved_session: Option<(Oid, Arc<BuildSession>)>,
 }
 
 pub fn start_chase(
@@ -38,31 +43,28 @@ pub fn start_chase(
 
     stream.update(&start_message(script))?;
 
-    let cfg = LuaConfig::read_lua(&script_path).map_err(|e| {
-        println!("ERROR: {e}");
-        anyhow!("Error processing lua scripts - {e}")
-    })?;
+    let cfg = LuaConfig::read_lua(&script_path).resolve(stream)?;
 
-    let bytes = color_green(&format!("{}", cfg.commits.len()));
-    let msg = format!("Found {} commits in script \n", bytes);
+    let msg = format!("Found {} commits in script \n", cfg.commits.len());
     stream.update(&msg)?;
+
+    let commits = validate_commits(fs, repo_ino, &cfg.commits).resolve(stream)?;
+    // TODO: Update message
+    let c_oid_vec = commits.iter().collect::<Vec<&Oid>>();
+    let c_refs = validate_commit_refs(fs, repo_ino, &c_oid_vec)?;
+
+    let paths = resolve_path_for_refs(fs, repo_ino, c_refs)?;
+
+    // Prepare the build ctx
+    let _chase: Chase = Chase {
+        commits,
+        commit_paths: paths,
+        moved_session: None,
+    };
+
     Ok(())
 }
 
 fn start_message(script: &str) -> String {
-    format!("STARTING GUSE CHASE {} \n", script)
-}
-
-fn validate_commits(fs: &GitFs, commits: &[String], repo_ino: u64) -> anyhow::Result<()> {
-    let repo = fs.get_repo(repo_ino)?;
-    let _res = repo.find_snap_in_repo(commits)?;
-    Ok(())
-}
-
-
-fn build_commit_update(commits: &[String]) -> Vec<u8> {
-    let parts: Vec<String> = commits.iter().map(|c| color_green(c)).collect();
-
-    let msg = format!("Commits found in script: {}\n", parts.join(", "));
-    msg.into_bytes()
+    format!("Starting GUSE chase {} \n", script)
 }

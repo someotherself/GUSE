@@ -754,7 +754,7 @@ impl GitFs {
         //   mtime_nsecs  INTEGER   NOT NULL
         //   ctime_secs   INTEGER   NOT NULL
         //   ctime_nsecs  INTEGER   NOT NULL
-        //   nlink        INTEGER   NOT NULL        -> calculated by sql
+        //   nlink        INTEGER   NOT NULL        -> calculated by sql. Not given to the kernel
         //   rdev         INTEGER   NOT NULL
         //   flags        INTEGER   NOT NULL
         //
@@ -826,8 +826,8 @@ impl GitFs {
 
         let ctx = FsOperationContext::get_operation(self, ino);
         match ctx? {
-            FsOperationContext::Root => bail!("Target is a directory"),
-            FsOperationContext::RepoDir => bail!("Target is a directory"),
+            FsOperationContext::Root => bail!(std::io::Error::from_raw_os_error(libc::EISDIR)),
+            FsOperationContext::RepoDir => bail!(std::io::Error::from_raw_os_error(libc::EISDIR)),
             FsOperationContext::InsideLiveDir => match parent_kind {
                 FileType::Directory => {
                     ops::open::open_live(self, ino.to_norm(), read, write, truncate)

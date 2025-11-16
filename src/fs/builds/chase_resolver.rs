@@ -1,5 +1,5 @@
 use std::{
-    collections::{BTreeSet, HashMap},
+    collections::{BTreeSet, HashMap, VecDeque},
     ffi::{OsStr, OsString},
     path::PathBuf,
 };
@@ -17,6 +17,29 @@ pub fn validate_commits(
     fs: &GitFs,
     repo_ino: u64,
     commits: &[String],
+) -> GuseGitResult<VecDeque<Oid>> {
+    let Ok(repo) = fs.get_repo(repo_ino) else {
+        return Err(ChaseGitError::FsError {
+            msg: "Repo not found. Try restarting the session".to_string(),
+        });
+    };
+    let mut c_oids = VecDeque::new();
+    repo.with_repo(|r| -> GuseGitResult<()> {
+        for commit in commits {
+            let commit = r
+                .find_commit_by_prefix(commit)
+                .map_err(|e| map_git_error(commit, e))?;
+            c_oids.push_back(commit.id());
+        }
+        Ok(())
+    })?;
+    Ok(c_oids)
+}
+
+pub fn validate_commit_refs(
+    fs: &GitFs,
+    repo_ino: u64,
+    commits: &[&Oid],
 ) -> GuseGitResult<Vec<(Oid, BTreeSet<RefKind>, i64)>> {
     let Ok(repo) = fs.get_repo(repo_ino) else {
         return Err(ChaseGitError::FsError {
@@ -25,10 +48,10 @@ pub fn validate_commits(
     };
     let mut c_oids = vec![];
     repo.with_repo(|r| -> GuseGitResult<()> {
-        for commit in commits {
+        for &commit in commits {
             let commit = r
-                .find_commit_by_prefix(commit)
-                .map_err(|e| map_git_error(commit, e))?;
+                .find_commit(*commit)
+                .map_err(|e| map_git_error(&commit.to_string(), e))?;
             c_oids.push((commit.id(), commit.time().seconds()));
         }
         Ok(())
@@ -158,7 +181,7 @@ fn find_path_in_branch(
     commit: Oid,
     branch_name: &str,
 ) -> GuseFsResult<PathBuf> {
-    let Ok(branchroot) = fs::ops::lookup::lookup_repo(&fs, repo_ino.into(), OsStr::new("Branches"))
+    let Ok(branchroot) = fs::ops::lookup::lookup_repo(fs, repo_ino.into(), OsStr::new("Branches"))
     else {
         return Err(ChaseFsError::NoneFound {
             target: OsString::from("Branches"),
@@ -171,7 +194,7 @@ fn find_path_in_branch(
     };
 
     let Ok(branch_folder) =
-        fs::ops::lookup::lookup_repo(&fs, branchroot.ino.into(), OsStr::new(branch_name))
+        fs::ops::lookup::lookup_repo(fs, branchroot.ino.into(), OsStr::new(branch_name))
     else {
         return Err(ChaseFsError::NoneFound {
             target: OsString::from(branch_name),

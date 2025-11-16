@@ -303,6 +303,7 @@ impl GitRepo {
                 return;
             };
             for (secs, _) in objects.1 {
+                // TODO: the unwrap_or makes no sense???
                 let dt = chrono::DateTime::from_timestamp(*secs, 0)
                     .unwrap_or(chrono::DateTime::UNIX_EPOCH);
                 let folder_name = OsString::from(format!("{:04}-{:02}", dt.year(), dt.month()));
@@ -580,18 +581,6 @@ impl GitRepo {
         Ok(entries)
     }
 
-    pub fn find_snap_in_repo(&self, commits: &[String]) -> anyhow::Result<Vec<(String, Time)>> {
-        let mut out = vec![];
-        self.with_repo(|r| -> anyhow::Result<()> {
-            for commit in commits {
-                let commit = r.find_commit_by_prefix(commit)?;
-                out.push((commit.id().to_string(), commit.time()));
-            }
-            Ok(())
-        })?;
-        Ok(out)
-    }
-
     pub fn blob_history_objects(&self, target_blob: Oid) -> anyhow::Result<Vec<ObjectAttr>> {
         let oid = self
             .find_newest_commit_containing_blob_fp(target_blob, 50_000)
@@ -612,9 +601,7 @@ impl GitRepo {
         loop {
             steps += 1;
             if steps > MAX_STEPS {
-                bail!(
-                    "Aborting blob history: exceeded {MAX_STEPS} steps (possible pathological history)"
-                );
+                bail!("Aborting blob history: exceeded {MAX_STEPS} steps.");
             }
             let tree = commit.tree()?;
             if let Some(attr) = {
@@ -946,7 +933,7 @@ impl GitRepo {
 ///
 /// Otherwise, it will return None
 ///
-/// This will signal that we create a normal folder
+/// This will signal that we create an empty repo.
 pub fn parse_mkdir_url(name: &str) -> anyhow::Result<Option<(String, String)>> {
     if (!name.starts_with("github.") || !name.starts_with("gitlab.")) && !name.ends_with(".git") {
         return Ok(None);

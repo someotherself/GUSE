@@ -159,7 +159,6 @@ fn bind_socket(socket_path: &Path) -> anyhow::Result<UnixListener> {
 }
 
 pub fn send_req(sock: &Path, req: &ControlReq) -> anyhow::Result<ControlRes> {
-    println!("Calling control daemon with {:?}", req);
     let mut s = UnixStream::connect(sock).map_err(|_| anyhow!("GUSE is not running!"))?;
     let data = serde_json::to_vec(req)?;
     s.write_all(&data)?;
@@ -183,6 +182,7 @@ pub fn send_req(sock: &Path, req: &ControlReq) -> anyhow::Result<ControlRes> {
             }
             other => {
                 final_res = Some(other);
+                println!("Ending GUSE chase.")
             }
         }
     }
