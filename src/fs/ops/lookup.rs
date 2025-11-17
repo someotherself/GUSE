@@ -4,7 +4,6 @@ use crate::{
     fs::{
         self, CHASE_FOLDER, FileAttr, GitFs, LIVE_FOLDER,
         fileattr::{InoFlag, dir_attr},
-        meta_db::DbReturn,
     },
     inodes::{NormalIno, VirtualIno},
 };
@@ -39,9 +38,7 @@ pub fn lookup_repo(
         None => return Ok(None),
     };
     let attr = if name == LIVE_FOLDER {
-        let DbReturn::Found { value: live_ino } =
-            fs.get_ino_from_db(parent.into(), OsStr::new(LIVE_FOLDER))?
-        else {
+        let Ok(live_ino) = fs.get_ino_from_db(parent.into(), OsStr::new(LIVE_FOLDER)) else {
             return Ok(None);
         };
         let path = fs.repos_dir.join(&repo.repo_dir).join(LIVE_FOLDER);
@@ -49,9 +46,7 @@ pub fn lookup_repo(
         attr.ino = live_ino;
         attr
     } else if name == CHASE_FOLDER {
-        let DbReturn::Found { value: chase_ino } =
-            fs.get_ino_from_db(parent.into(), OsStr::new(CHASE_FOLDER))?
-        else {
+        let Ok(chase_ino) = fs.get_ino_from_db(parent.into(), OsStr::new(CHASE_FOLDER)) else {
             return Ok(None);
         };
         let path = fs.repos_dir.join(&repo.repo_dir).join(CHASE_FOLDER);
@@ -61,12 +56,8 @@ pub fn lookup_repo(
     } else {
         // It will always be a yyyy-mm folder
         // Build blank attr for it
-        let child_ino = match fs.get_ino_from_db(parent.into(), name) {
-            Ok(i_res) => match i_res {
-                DbReturn::Found { value: i } => i,
-                _ => return Ok(None),
-            },
-            Err(_) => return Ok(None),
+        let Ok(child_ino) = fs.get_ino_from_db(parent.into(), name) else {
+            return Ok(None);
         };
         let mut attr: FileAttr = dir_attr(InoFlag::MonthFolder).into();
         attr.ino = child_ino;
@@ -80,33 +71,31 @@ pub fn lookup_live(
     parent: NormalIno,
     name: &OsStr,
 ) -> anyhow::Result<Option<FileAttr>> {
-    match fs.get_metadata_by_name(parent, name)? {
-        DbReturn::Found { value } => Ok(Some(value)),
-        DbReturn::Negative => Ok(None),
-        DbReturn::Missing => {
+    match fs.get_metadata_by_name(parent, name) {
+        Ok(value) => Ok(Some(value)),
+        Err(_) => {
             fs::ops::readdir::readdir_live_dir(fs, parent)?;
-            match fs.get_metadata_by_name(parent, name)? {
-                DbReturn::Found { value } => Ok(Some(value)),
-                DbReturn::Missing | DbReturn::Negative => Ok(None),
+            match fs.get_metadata_by_name(parent, name) {
+                Ok(attr) => Ok(Some(attr)),
+                Err(_) => Ok(None),
             }
         }
     }
 }
 
 pub fn lookup_git(fs: &GitFs, parent: NormalIno, name: &OsStr) -> anyhow::Result<Option<FileAttr>> {
-    match fs.get_metadata_by_name(parent, name)? {
-        DbReturn::Found { value } => Ok(Some(value)),
-        DbReturn::Negative => Ok(None),
-        DbReturn::Missing => {
+    match fs.get_metadata_by_name(parent, name) {
+        Ok(value) => Ok(Some(value)),
+        Err(_) => {
             let p_flag = fs.get_ino_flag_from_db(parent)?;
             if p_flag == InoFlag::InsideSnap
                 || p_flag == InoFlag::InsideDotGit
                 || p_flag == InoFlag::HeadFile
             {
                 fs::ops::readdir::readdir_git_dir(fs, parent)?;
-                match fs.get_metadata_by_name(parent, name)? {
-                    DbReturn::Found { value } => Ok(Some(value)),
-                    DbReturn::Missing | DbReturn::Negative => Ok(None),
+                match fs.get_metadata_by_name(parent, name) {
+                    Ok(value) => Ok(Some(value)),
+                    Err(_) => Ok(None),
                 }
             } else {
                 Ok(None)
@@ -128,6 +117,7 @@ pub fn lookup_vdir(
     let Some((entry_ino, object)) = v_node.log.get(name) else {
         return Ok(None);
     };
-    let attr = fs.object_to_file_attr(*entry_ino, object, InoFlag::InsideSnap)?;
+    let mut attr = fs.object_to_file_attr(*entry_ino, object, InoFlag::InsideSnap)?;
+    attr.parent_ino = parent.to_norm_u64();
     Ok(Some(attr))
 }

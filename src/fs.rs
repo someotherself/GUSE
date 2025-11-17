@@ -19,18 +19,16 @@ use tracing::{Level, field, info, instrument};
 
 use crate::fs;
 use crate::fs::fileattr::{
-    CreateFileAttr, Dentry, FileAttr, FileType, InoFlag, ObjectAttr, SetFileAttr, StorageNode,
-    dir_attr, file_attr,
+    CreateFileAttr, FileAttr, FileType, InoFlag, ObjectAttr, SetFileAttr, dir_attr, file_attr,
 };
 use crate::fs::handles::FileHandles;
-use crate::fs::meta_db::{DbReturn, DbWriteMsg, MetaDb, oneshot, set_conn_pragmas, set_wal_once};
+use crate::fs::meta_db::{DbWriteMsg, MetaDb, oneshot, set_conn_pragmas, set_wal_once};
 use crate::fs::ops::readdir::{
     BuildCtxMetadata, DirectoryEntry, DirectoryEntryPlus, DirectoryStreamCookie,
 };
 use crate::fs::repo::{GitRepo, State};
 use crate::inodes::{Inodes, NormalIno, VirtualIno};
-use crate::internals::cache::LruCache;
-use crate::internals::cache_dentry::DentryLru;
+use crate::internals::cache::{AttrCache, LruCache};
 use crate::mount::InvalMsg;
 use crate::namespec::NameSpec;
 
@@ -52,8 +50,7 @@ const TEMP_FOLDER: &str = ".temp";
 pub const REPO_SHIFT: u8 = 48;
 pub const ROOT_INO: u64 = 1;
 pub const VDIR_BIT: u64 = 1u64 << 47;
-const ATTR_LRU: usize = 12000;
-const DENTRY_LRU: usize = 12000;
+const ATTR_LRU: usize = 20000;
 const FILE_LRU: usize = 800;
 
 enum FsOperationContext {
@@ -343,9 +340,7 @@ impl GitFs {
             fs.read_dir_to_db(&live_path, &fs, InoFlag::InsideLive, live_ino)?;
 
             // Read contents of chase
-            if let DbReturn::Found { value: chase_ino } =
-                fs.exists_by_name(repo_ino, OsStr::new(CHASE_FOLDER))?
-            {
+            if let Ok(chase_ino) = fs.exists_by_name(repo_ino, OsStr::new(CHASE_FOLDER)) {
                 fs.read_dir_to_db(&chase_path, &fs, InoFlag::InsideChase, chase_ino)?;
             }
             // Discover contents of repo root
@@ -400,8 +395,7 @@ impl GitFs {
             repo_id,
             inner: parking_lot::Mutex::new(repo),
             state: parking_lot::RwLock::new(state),
-            attr_cache: LruCache::new(ATTR_LRU),
-            dentry_cache: DentryLru::new(DENTRY_LRU),
+            attr_cache: AttrCache::new(ATTR_LRU),
             file_cache: LruCache::new(FILE_LRU),
             injected_files: DashMap::new(),
         };
@@ -422,14 +416,15 @@ impl GitFs {
         self.db_ensure_root(repo_ino)?;
 
         // Write the Repo Root in db
-        let mut repo_attr: FileAttr = dir_attr(InoFlag::RepoRoot).into();
-        repo_attr.ino = repo_ino;
-        let nodes: Vec<StorageNode> = vec![StorageNode {
-            parent_ino: ROOT_INO,
-            name: repo_name.into(),
-            attr: repo_attr,
-        }];
-        self.write_inodes_to_db(nodes)?;
+        let repo_attr = FileAttr::new(
+            dir_attr(InoFlag::RepoRoot),
+            repo_ino,
+            OsStr::new(repo_name),
+            ROOT_INO,
+            Oid::zero(),
+            None,
+        );
+        self.write_inodes_to_db(vec![repo_attr])?;
 
         // Clean the build folder
         let build_name = OsString::from(BUILD_FOLDER);
@@ -449,20 +444,32 @@ impl GitFs {
 
         let live_name = OsString::from(LIVE_FOLDER);
 
-        let perms = 0o775;
-        let st_mode = libc::S_IFDIR | perms;
+        let live_attr: FileAttr = FileAttr::new(
+            dir_attr(InoFlag::LiveRoot),
+            live_ino,
+            &live_name,
+            repo_ino,
+            Oid::zero(),
+            None,
+        );
 
-        let mut live_attr: FileAttr = dir_attr(InoFlag::LiveRoot).into();
-        live_attr.ino = live_ino;
-        live_attr.git_mode = st_mode;
+        let build_attr: FileAttr = FileAttr::new(
+            dir_attr(InoFlag::BuildRoot),
+            build_ino,
+            &build_name,
+            repo_ino,
+            Oid::zero(),
+            None,
+        );
 
-        let mut build_attr: FileAttr = dir_attr(InoFlag::BuildRoot).into();
-        build_attr.ino = build_ino;
-        build_attr.git_mode = st_mode;
-
-        let mut chase_attr: FileAttr = dir_attr(InoFlag::ChaseRoot).into();
-        chase_attr.ino = chase_ino;
-        chase_attr.git_mode = st_mode;
+        let chase_attr: FileAttr = FileAttr::new(
+            dir_attr(InoFlag::ChaseRoot),
+            chase_ino,
+            &chase_name,
+            repo_ino,
+            Oid::zero(),
+            None,
+        );
 
         let repo = self.get_repo(repo_ino)?;
         repo.refresh_refs()?;
@@ -472,23 +479,7 @@ impl GitFs {
             s.res_inodes.insert(chase_ino);
         });
 
-        let nodes: Vec<StorageNode> = vec![
-            StorageNode {
-                parent_ino: repo_ino,
-                name: live_name,
-                attr: live_attr,
-            },
-            StorageNode {
-                parent_ino: repo_ino,
-                name: chase_name,
-                attr: chase_attr,
-            },
-            StorageNode {
-                parent_ino: repo_ino,
-                name: build_name,
-                attr: build_attr,
-            },
-        ];
+        let nodes: Vec<FileAttr> = vec![live_attr, build_attr, chase_attr];
 
         self.write_inodes_to_db(nodes)?;
 
@@ -507,22 +498,20 @@ impl GitFs {
     ) -> anyhow::Result<()> {
         let mut stack: Vec<(PathBuf, u64)> = vec![(path.into(), parent_ino)];
         while let Some((cur_path, cur_parent)) = stack.pop() {
-            let mut nodes: Vec<StorageNode> = vec![];
+            let mut nodes: Vec<FileAttr> = vec![];
             for entry in cur_path.read_dir()? {
                 let entry = entry?;
                 let mut attr = self.refresh_medata_using_path(entry.path(), ino_flag)?;
                 let ino = self.next_inode_checked(cur_parent)?;
+                attr.ino = ino;
+                attr.parent_ino = cur_parent;
+                attr.name = entry.file_name();
 
                 if entry.file_type()?.is_dir() {
                     stack.push((entry.path(), ino));
                 }
 
-                attr.ino = ino;
-                nodes.push(StorageNode {
-                    parent_ino: cur_parent,
-                    name: entry.file_name(),
-                    attr,
-                });
+                nodes.push(attr);
             }
             fs.write_inodes_to_db(nodes)?;
         }
@@ -583,8 +572,7 @@ impl GitFs {
             repo_id,
             inner: parking_lot::Mutex::new(repo),
             state: parking_lot::RwLock::new(state),
-            attr_cache: LruCache::new(ATTR_LRU),
-            dentry_cache: DentryLru::new(DENTRY_LRU),
+            attr_cache: AttrCache::new(ATTR_LRU),
             file_cache: LruCache::new(FILE_LRU),
             injected_files: DashMap::new(),
         };
@@ -607,13 +595,15 @@ impl GitFs {
         self.db_ensure_root(repo_ino)?;
 
         // Write the Repo Root in db
-        let mut repo_attr: FileAttr = dir_attr(InoFlag::RepoRoot).into();
-        repo_attr.ino = repo_ino;
-        let nodes: Vec<StorageNode> = vec![StorageNode {
-            parent_ino: ROOT_INO,
-            name: repo_name.into(),
-            attr: repo_attr,
-        }];
+        let repo_attr: FileAttr = FileAttr::new(
+            dir_attr(InoFlag::RepoRoot),
+            repo_ino,
+            OsStr::new(repo_name),
+            ROOT_INO,
+            Oid::zero(),
+            None,
+        );
+        let nodes: Vec<FileAttr> = vec![repo_attr];
         self.write_inodes_to_db(nodes)?;
 
         // Prepare the live and chase folders
@@ -626,23 +616,35 @@ impl GitFs {
         let build_name = OsString::from(BUILD_FOLDER);
         let live_name = OsString::from(LIVE_FOLDER);
 
-        let perms = 0o775;
-        let st_mode = libc::S_IFDIR | perms;
+        let live_attr = FileAttr::new(
+            dir_attr(InoFlag::LiveRoot),
+            live_ino,
+            &live_name,
+            repo_ino,
+            Oid::zero(),
+            None,
+        );
 
-        let mut live_attr: FileAttr = dir_attr(InoFlag::LiveRoot).into();
-        live_attr.ino = live_ino;
-        live_attr.git_mode = st_mode;
-
-        let mut build_attr: FileAttr = dir_attr(InoFlag::BuildRoot).into();
-        build_attr.ino = build_ino;
-        build_attr.git_mode = st_mode;
+        let build_attr = FileAttr::new(
+            dir_attr(InoFlag::BuildRoot),
+            build_ino,
+            &build_name,
+            repo_ino,
+            Oid::zero(),
+            None,
+        );
 
         // Create build folder on disk
         std::fs::create_dir(tmp_path.join(BUILD_FOLDER))?;
 
-        let mut chase_attr: FileAttr = dir_attr(InoFlag::ChaseRoot).into();
-        chase_attr.ino = chase_ino;
-        chase_attr.git_mode = st_mode;
+        let chase_attr = FileAttr::new(
+            dir_attr(InoFlag::ChaseRoot),
+            chase_ino,
+            &chase_name,
+            repo_ino,
+            Oid::zero(),
+            None,
+        );
 
         // Create build folder on disk
         std::fs::create_dir(tmp_path.join(CHASE_FOLDER))?;
@@ -659,23 +661,7 @@ impl GitFs {
             s.res_inodes.insert(chase_ino);
         });
 
-        let nodes: Vec<StorageNode> = vec![
-            StorageNode {
-                parent_ino: repo_ino,
-                name: live_name,
-                attr: live_attr,
-            },
-            StorageNode {
-                parent_ino: repo_ino,
-                name: chase_name,
-                attr: chase_attr,
-            },
-            StorageNode {
-                parent_ino: repo_ino,
-                name: build_name,
-                attr: build_attr,
-            },
-        ];
+        let nodes: Vec<FileAttr> = vec![live_attr, build_attr, chase_attr];
 
         self.write_inodes_to_db(nodes)?;
 
@@ -739,63 +725,36 @@ impl GitFs {
         set_wal_once(&conn)?;
         set_conn_pragmas(&conn)?;
 
-        // DB layout
-        // INODE storage
-        //   inode        INTEGER   PRIMARY KEY,    -> the u64 inode
-        //   git_mode     INTEGER   NOT NULL        -> the raw Git filemode
-        //   oid          TEXT      NOT NULL        -> the Git OID
-        //   size         INTEGER   NOT NULL        -> real size of the file/git object
-        //   inode_flag   INTEGER   NOT NULL        -> InoFlag
-        //   uid          INTEGER   NOT NULL
-        //   gid          INTEGER   NOT NULL
-        //   atime_secs   INTEGER   NOT NULL
-        //   atime_nsecs  INTEGER   NOT NULL
-        //   mtime_secs   INTEGER   NOT NULL
-        //   mtime_nsecs  INTEGER   NOT NULL
-        //   ctime_secs   INTEGER   NOT NULL
-        //   ctime_nsecs  INTEGER   NOT NULL
-        //   nlink        INTEGER   NOT NULL        -> calculated by sql. Not given to the kernel
-        //   rdev         INTEGER   NOT NULL
-        //   flags        INTEGER   NOT NULL
-        //
-        // Directory Entries Storage
-        //  target_inode INTEGER   NOT NULL       -> inode from inode_map
-        //  parent_inode INTEGER   NOT NULL       -> the parent directory’s inode
-        //  name         BLOB      NOT NULL       -> the filename or directory name
         conn.execute_batch(
             r#"
-                CREATE TABLE IF NOT EXISTS inode_map (
-                    inode        INTEGER PRIMARY KEY,
-                    oid          TEXT    NOT NULL,
-                    git_mode     INTEGER NOT NULL,
-                    size         INTEGER NOT NUll,
-                    inode_flag   INTEGER NOT NUll,
-                    uid          INTEGER NOT NULL,
-                    gid          INTEGER NOT NULL,
-                    atime_secs   INTEGER NOT NULL,
-                    atime_nsecs  INTEGER NOT NULL,
-                    mtime_secs   INTEGER NOT NULL,
-                    mtime_nsecs  INTEGER NOT NULL,
-                    ctime_secs   INTEGER NOT NULL,
-                    ctime_nsecs  INTEGER NOT NULL,
-                    nlink        INTEGER NOT NULL,
-                    rdev         INTEGER NOT NULL,
-                    flags        INTEGER NOT NULL
-                );
-
-                CREATE TABLE IF NOT EXISTS dentries (
+            CREATE TABLE IF NOT EXISTS inode_map (
+                inode        INTEGER NOT NULL,
                 parent_inode INTEGER NOT NULL,
-                target_inode INTEGER NOT NULL,
                 name         BLOB    NOT NULL,
-                is_active    INTEGER NOT NULL,
-                PRIMARY KEY (parent_inode, name),
-                FOREIGN KEY (parent_inode) REFERENCES inode_map(inode) ON DELETE RESTRICT,
-                FOREIGN KEY (target_inode) REFERENCES inode_map(inode) ON DELETE RESTRICT
-                ) WITHOUT ROWID;
+                oid          TEXT    NOT NULL,
+                git_mode     INTEGER NOT NULL,
+                size         INTEGER NOT NULL,
+                inode_flag   INTEGER NOT NULL,
+                uid          INTEGER NOT NULL,
+                gid          INTEGER NOT NULL,
+                atime_secs   INTEGER NOT NULL,
+                atime_nsecs  INTEGER NOT NULL,
+                mtime_secs   INTEGER NOT NULL,
+                mtime_nsecs  INTEGER NOT NULL,
+                ctime_secs   INTEGER NOT NULL,
+                ctime_nsecs  INTEGER NOT NULL,
+                rdev         INTEGER NOT NULL,
+                flags        INTEGER NOT NULL,
+                uuid         TEXT,
+                PRIMARY KEY (inode),
+                UNIQUE (parent_inode, name),
+                FOREIGN KEY (parent_inode)
+                    REFERENCES inode_map(inode)
+                    ON DELETE CASCADE
+            ) WITHOUT ROWID;
 
-                CREATE INDEX IF NOT EXISTS dentries_by_target ON dentries(target_inode);
-                CREATE INDEX IF NOT EXISTS dentries_by_parent ON dentries(parent_inode);
-                CREATE INDEX IF NOT EXISTS dentries_active_by_target ON dentries(target_inode) WHERE is_active = 1;
+            CREATE INDEX IF NOT EXISTS inodes_by_parent
+                ON inode_map(parent_inode);
             "#,
         )?;
         Ok(())
@@ -892,7 +851,7 @@ impl GitFs {
         }
     }
 
-    #[instrument(level = "debug", skip(self, buf), fields(ino = %ino), err(Display))]
+    // #[instrument(level = "debug", skip(self, buf), fields(ino = %ino), err(Display))]
     pub fn read(&self, ino: u64, offset: u64, buf: &mut [u8], fh: u64) -> anyhow::Result<usize> {
         let ret: anyhow::Result<usize> = {
             let ino: Inodes = ino.into();
@@ -932,7 +891,6 @@ impl GitFs {
         };
         if let Ok(ref bytes_written) = ret {
             tracing::Span::current().record("return_len", tracing::field::display(bytes_written));
-            tracing::debug!(len = *bytes_written, "Write ok");
         }
         ret
     }
@@ -960,12 +918,7 @@ impl GitFs {
         let Some(ino) = self.handles.exists(fh) else {
             return Ok(false);
         };
-        let writer_tx = if ino == ROOT_INO {
-            None
-        } else {
-            Some(self.prepare_writemsg(ino.into())?)
-        };
-        self.handles.close(fh, writer_tx)?;
+        self.handles.close(fh)?;
         {
             let mut guard = self
                 .vfile_entry
@@ -996,8 +949,6 @@ impl GitFs {
         };
         let perm = 0o775;
 
-        let nlink = if kind == FileType::Directory { 2 } else { 1 };
-
         let uid = unsafe { libc::getuid() };
         let gid = unsafe { libc::getgid() };
         let rdev = 0;
@@ -1006,6 +957,8 @@ impl GitFs {
 
         Ok(FileAttr {
             ino,
+            parent_ino: 0,
+            name: git_attr.name.clone(),
             ino_flag,
             oid: git_attr.oid,
             size: git_attr.size,
@@ -1017,12 +970,12 @@ impl GitFs {
             kind,
             perm,
             git_mode: git_attr.git_mode,
-            nlink,
             uid,
             gid,
             rdev,
             blksize,
             flags,
+            uuid: None,
         })
     }
 
@@ -1126,44 +1079,44 @@ impl GitFs {
         }
     }
 
-    #[instrument(level = "debug", skip(self), fields(ino = %ino, newparent = %newparent), ret(level = Level::DEBUG), err(Display))]
-    pub fn link(&self, ino: u64, newparent: u64, newname: &OsStr) -> anyhow::Result<FileAttr> {
-        let ino: Inodes = ino.into();
-        let newparent: Inodes = newparent.into();
-        if newname.is_empty() || newname == "." || newname == ".." {
-            bail!(std::io::Error::from_raw_os_error(libc::EINVAL));
-        }
+    // #[instrument(level = "debug", skip(self), fields(ino = %ino, newparent = %newparent), ret(level = Level::DEBUG), err(Display))]
+    // pub fn link(&self, ino: u64, newparent: u64, newname: &OsStr) -> anyhow::Result<FileAttr> {
+    //     let ino: Inodes = ino.into();
+    //     let newparent: Inodes = newparent.into();
+    //     if newname.is_empty() || newname == "." || newname == ".." {
+    //         bail!(std::io::Error::from_raw_os_error(libc::EINVAL));
+    //     }
 
-        if memchr::memchr2(b'/', b'\\', newname.as_bytes()).is_some() {
-            tracing::error!("invalid name: contains '/' or '\\' {}", newname.display());
-            bail!(format!("Invalid name {}", newname.display()));
-        }
+    //     if memchr::memchr2(b'/', b'\\', newname.as_bytes()).is_some() {
+    //         tracing::error!("invalid name: contains '/' or '\\' {}", newname.display());
+    //         bail!(format!("Invalid name {}", newname.display()));
+    //     }
 
-        if self.read_only {
-            bail!("Filesystem is in read only");
-        }
-        if !self.exists(ino)? {
-            bail!(format!("Parent {} does not exist", ino));
-        }
+    //     if self.read_only {
+    //         bail!("Filesystem is in read only");
+    //     }
+    //     if !self.exists(ino)? {
+    //         bail!(format!("Parent {} does not exist", ino));
+    //     }
 
-        let ctx = FsOperationContext::get_operation(self, ino);
-        match ctx? {
-            FsOperationContext::Root => {
-                tracing::error!("This directory is read only");
-                bail!("This directory is read only")
-            }
-            FsOperationContext::RepoDir => {
-                tracing::error!("This directory is read only");
-                bail!("This directory is read only")
-            }
-            FsOperationContext::InsideLiveDir => {
-                ops::link::link_live(self, ino.to_norm(), newparent.to_norm(), newname)
-            }
-            FsOperationContext::InsideGitDir => {
-                ops::link::link_git(self, ino.to_norm(), newparent.to_norm(), newname)
-            }
-        }
-    }
+    //     let ctx = FsOperationContext::get_operation(self, ino);
+    //     match ctx? {
+    //         FsOperationContext::Root => {
+    //             tracing::error!("This directory is read only");
+    //             bail!("This directory is read only")
+    //         }
+    //         FsOperationContext::RepoDir => {
+    //             tracing::error!("This directory is read only");
+    //             bail!("This directory is read only")
+    //         }
+    //         FsOperationContext::InsideLiveDir => {
+    //             ops::link::link_live(self, ino.to_norm(), newparent.to_norm(), newname)
+    //         }
+    //         FsOperationContext::InsideGitDir => {
+    //             ops::link::link_git(self, ino.to_norm(), newparent.to_norm(), newname)
+    //         }
+    //     }
+    // }
 
     #[instrument(level = "debug", skip(self), fields(parent = %parent), ret(level = Level::DEBUG), err(Display))]
     pub fn create(
@@ -1482,7 +1435,6 @@ impl GitFs {
         new_attr.git_mode = 0o100444;
         new_attr.kind = FileType::RegularFile;
         new_attr.perm = 0o444;
-        new_attr.nlink = 1;
         new_attr.ino = v_ino;
         new_attr.blksize = u32::try_from(size.div_ceil(512))?;
 
@@ -1490,13 +1442,12 @@ impl GitFs {
     }
 
     pub fn prepare_virtual_folder(&self, attr: FileAttr) -> anyhow::Result<FileAttr> {
-        let mut new_attr = attr;
+        let mut new_attr = attr.clone();
         let v_ino: VirtualIno = attr.ino.into();
         new_attr.ino = v_ino.to_virt_u64();
         new_attr.perm = 0o555;
         new_attr.size = 0;
         new_attr.kind = FileType::Directory;
-        new_attr.nlink = 2;
         Ok(new_attr)
     }
 }
@@ -1627,31 +1578,8 @@ impl GitFs {
         Ok(attr)
     }
 
-    /// Finds the file on disk using an inode
-    pub fn refresh_metadata_from_disk(&self, ino: NormalIno) -> anyhow::Result<FileAttr> {
-        let path = if self.is_in_live(ino)? {
-            self.get_live_path(ino)?
-        } else if self.is_in_build(ino)? {
-            let commit_oid = self.get_oid_from_db(ino.into())?;
-            let repo = self.get_repo(ino.into())?;
-            let build_root = &repo.build_dir;
-            let session = repo.get_or_init_build_session(commit_oid, build_root)?;
-            session.finish_path(self, ino)?
-        } else {
-            bail!(std::io::Error::from_raw_os_error(libc::EPERM));
-        };
-        let ino_flag = self.get_ino_flag_from_db(ino)?;
-        let mut attr = self.refresh_medata_using_path(path, ino_flag)?;
-        attr.ino = ino.into();
-
-        Ok(attr)
-    }
-
     #[instrument(level = "debug", skip(self, stored_attr), fields(ino = %stored_attr.ino), err(Display))]
-    pub fn update_db_metadata(
-        &self,
-        stored_attr: SetFileAttr,
-    ) -> anyhow::Result<DbReturn<FileAttr>> {
+    pub fn update_db_metadata(&self, stored_attr: SetFileAttr) -> anyhow::Result<FileAttr> {
         let target_ino = stored_attr.ino;
         let cache_res = self.update_attr_in_cache(&stored_attr.clone());
         // Update the DB
@@ -1676,18 +1604,20 @@ impl GitFs {
             .context("writer_tx error on update_db_metadata")?;
 
         if cache_res.is_err() {
+            tracing::error!("update_db_metadata cache err {}", target_ino);
             rx.recv()
                 .context("writer_rx disc on update_db_metadata")??;
         }
 
         // Fetch the new metadata
         match cache_res {
-            Ok(attr) => Ok(DbReturn::Found { value: attr }),
+            Ok(attr) => Ok(attr),
             Err(_) => self.get_metadata(target_ino),
         }
     }
 
     fn attr_from_path(ino_flag: InoFlag, path: &Path) -> anyhow::Result<FileAttr> {
+        let name = path.file_name().unwrap_or(OsStr::new(""));
         let metadata = path.metadata()?;
         let atime: SystemTime = metadata.accessed()?;
         let mtime: SystemTime = metadata.modified()?;
@@ -1714,6 +1644,8 @@ impl GitFs {
 
         Ok(FileAttr {
             ino: 0,
+            parent_ino: 0,
+            name: name.to_os_string(),
             ino_flag,
             oid: Oid::zero(),
             size: metadata.size(),
@@ -1725,12 +1657,12 @@ impl GitFs {
             kind,
             perm: 0o775,
             git_mode: st_mode,
-            nlink: metadata.nlink() as u32,
             uid: unsafe { libc::geteuid() },
             gid: unsafe { libc::getgid() },
             rdev: metadata.rdev() as u32,
             blksize: metadata.blksize() as u32,
             flags: 0,
+            uuid: None,
         })
     }
 
@@ -1860,26 +1792,10 @@ impl GitFs {
         MetaDb::read_children(&conn, parent_ino.to_norm_u64())
     }
 
-    pub fn get_all_parents(&self, ino: u64) -> anyhow::Result<Vec<u64>> {
-        let repo = self.get_repo(ino)?;
-        if let Some(parents) = repo.dentry_cache.get_all_parents(ino) {
-            return Ok(parents);
-        }
-        let repo_id = GitFs::ino_to_repo_id(ino);
-        let repo_db = self
-            .conn_list
-            .get(&repo_id)
-            .ok_or_else(|| anyhow::anyhow!("no db"))?;
-        let conn = repo_db.ro_pool.get()?;
-        MetaDb::get_all_parents(&conn, ino)
-    }
-
     pub fn get_single_parent(&self, ino: u64) -> anyhow::Result<u64> {
         let repo = self.get_repo(ino)?;
-        if let Some(entries) = repo.dentry_cache.get_by_target(ino)
-            && !entries.is_empty()
-        {
-            return Ok(entries[0].parent_ino);
+        if let Some(parent) = repo.attr_cache.with_get_mut(&ino, |a| a.parent_ino) {
+            return Ok(parent);
         }
         let repo_id = GitFs::ino_to_repo_id(ino);
         let repo_db = self
@@ -1934,22 +1850,16 @@ impl GitFs {
     #[allow(dead_code)]
     fn get_build_ino(&self, ino: NormalIno) -> anyhow::Result<u64> {
         let repo_ino = self.get_repo_ino(ino.to_norm_u64())?;
-        self.get_ino_from_db(repo_ino, OsStr::new(BUILD_FOLDER))?
-            .into()
+        self.get_ino_from_db(repo_ino, OsStr::new(BUILD_FOLDER))
     }
 
-    fn exists_by_name(&self, parent: u64, name: &OsStr) -> anyhow::Result<DbReturn<u64>> {
+    fn exists_by_name(&self, parent: u64, name: &OsStr) -> anyhow::Result<u64> {
         let repo = self.get_repo(parent)?;
-        match repo.dentry_cache.get_by_parent_and_name(parent, name) {
-            DbReturn::Found { value: d } => {
-                return Ok(DbReturn::Found {
-                    value: d.target_ino,
-                });
-            }
-            DbReturn::Negative => {
-                return Ok(DbReturn::Negative);
-            }
-            DbReturn::Missing => {}
+        if let Some(attr) = repo
+            .attr_cache
+            .get_by_parent_and_name(&(parent, name.to_os_string()))
+        {
+            return Ok(attr.ino);
         }
 
         let repo_id = GitFs::ino_to_repo_id(parent);
@@ -1965,13 +1875,11 @@ impl GitFs {
         &self,
         parent_ino: NormalIno,
         child_name: &OsStr,
-    ) -> anyhow::Result<DbReturn<FileAttr>> {
-        if let Ok(res) = self.lookup_in_cache(parent_ino.into(), child_name) {
-            match res {
-                DbReturn::Found { value: attr } => return Ok(DbReturn::Found { value: attr }),
-                DbReturn::Negative => return Ok(DbReturn::Negative),
-                DbReturn::Missing => {}
-            }
+    ) -> anyhow::Result<FileAttr> {
+        if let Ok(res) = self.lookup_in_cache(parent_ino.into(), child_name)
+            && let Some(attr) = res
+        {
+            return Ok(attr);
         }
         let repo_id = GitFs::ino_to_repo_id(parent_ino.into());
         let repo_db = self
@@ -1982,13 +1890,9 @@ impl GitFs {
         MetaDb::get_metadata_by_name(&conn, parent_ino.to_norm_u64(), child_name)
     }
 
-    pub fn get_metadata(&self, target_ino: u64) -> anyhow::Result<DbReturn<FileAttr>> {
+    pub fn get_metadata(&self, target_ino: u64) -> anyhow::Result<FileAttr> {
         if let Ok(res) = self.get_attr_from_cache(target_ino) {
-            match res {
-                DbReturn::Found { value: attr } => return Ok(DbReturn::Found { value: attr }),
-                DbReturn::Negative => return Ok(DbReturn::Negative),
-                DbReturn::Missing => {}
-            }
+            return Ok(res);
         }
         let repo_id = GitFs::ino_to_repo_id(target_ino);
         let repo_db = self
@@ -2073,16 +1977,13 @@ impl GitFs {
         (ino & VDIR_BIT) != 0
     }
 
-    fn get_ino_from_db(&self, parent: u64, name: &OsStr) -> anyhow::Result<DbReturn<u64>> {
+    fn get_ino_from_db(&self, parent: u64, name: &OsStr) -> anyhow::Result<u64> {
         let repo = self.get_repo(parent)?;
-        match repo.dentry_cache.get_by_parent_and_name(parent, name) {
-            DbReturn::Found { value: d } => {
-                return Ok(DbReturn::Found {
-                    value: d.target_ino,
-                });
-            }
-            DbReturn::Negative => return Ok(DbReturn::Negative),
-            DbReturn::Missing => {}
+        if let Some(attr) = repo
+            .attr_cache
+            .get_by_parent_and_name(&(parent, name.to_os_string()))
+        {
+            return Ok(attr.ino);
         }
 
         let repo_id = GitFs::ino_to_repo_id(parent);
@@ -2136,6 +2037,7 @@ impl GitFs {
             .context("writer_tx error on update_size_in_db")?;
 
         if size_res.is_err() {
+            tracing::error!("update_size_in_db cache err {}", ino);
             rx.recv()
                 .context("writer_rx disc on update_size_in_db for target")??;
         }
@@ -2146,7 +2048,7 @@ impl GitFs {
     /// Removes the directory entry (from dentries) for the target and decrements nlinks
     ///
     /// Send and forget but will log errors as `tracing::error!`
-    fn remove_db_dentry(&self, parent_ino: NormalIno, target_name: &OsStr) -> anyhow::Result<()> {
+    fn remove_db_entry(&self, parent_ino: NormalIno, target_name: &OsStr) -> anyhow::Result<()> {
         let repo_id = GitFs::ino_to_repo_id(parent_ino.into());
 
         self.remove_inode_from_cache(parent_ino.into(), target_name);
@@ -2158,7 +2060,7 @@ impl GitFs {
             guard.writer_tx.clone()
         };
 
-        let msg = DbWriteMsg::RemoveDentry {
+        let msg = DbWriteMsg::RemoveEntry {
             parent_ino,
             target_name: target_name.to_os_string(),
             resp: None,
@@ -2186,61 +2088,16 @@ impl GitFs {
         Ok(writer_tx)
     }
 
-    /// Must be passed a sender from [`crate::fs::GitFs::prepare_writemsg`]
-    fn cleanup_entry_with_writemsg(
-        target_ino: NormalIno,
-        writer_tx: &crossbeam_channel::Sender<DbWriteMsg>,
-    ) -> anyhow::Result<()> {
-        let msg = DbWriteMsg::CleanupEntry {
-            target_ino,
-            resp: None,
-        };
-        writer_tx
-            .send(msg)
-            .context("writer_tx error on cleanup_dentry")?;
-
-        Ok(())
-    }
-
-    /// Checks and removes the inode record from `inode_map`
-    ///
-    /// Must have nlinks == 0 and is only called when there are no open file handles
-    ///
-    /// Send and forget but will log errors as `tracing::error!`
-    fn cleanup_dentry(&self, target_ino: NormalIno) -> anyhow::Result<()> {
-        let repo_id = GitFs::ino_to_repo_id(target_ino.into());
-        let writer_tx = {
-            let guard = self
-                .conn_list
-                .get(&repo_id)
-                .ok_or_else(|| anyhow::anyhow!("No db for repo id {repo_id}"))?;
-            guard.writer_tx.clone()
-        };
-
-        let msg = DbWriteMsg::CleanupEntry {
-            target_ino,
-            resp: None,
-        };
-        writer_tx
-            .send(msg)
-            .context("writer_tx error on cleanup_dentry")?;
-
-        Ok(())
-    }
-
     /// Send and forget but will log errors as `tracing::error!`
     fn update_db_record(
         &self,
         old_parent: NormalIno,
         old_name: &OsStr,
-        node: StorageNode,
-    ) -> anyhow::Result<DbReturn<()>> {
-        let repo_id = GitFs::ino_to_repo_id(old_parent.into());
-        if let DbReturn::Negative =
-            self.update_cache_record(old_parent.into(), old_name, node.clone())?
-        {
-            return Ok(DbReturn::Negative);
-        }
+        node: FileAttr,
+    ) -> anyhow::Result<()> {
+        let target_ino = node.ino;
+        let repo_id = GitFs::ino_to_repo_id(target_ino);
+        let cache_res = self.update_cache_record(old_parent.into(), old_name, node.clone());
         let writer_tx = {
             let guard = self
                 .conn_list
@@ -2249,17 +2106,23 @@ impl GitFs {
             guard.writer_tx.clone()
         };
 
+        let (tx, rx) = oneshot::<()>();
+        let tx = if cache_res.is_ok() { None } else { Some(tx) };
         let msg = DbWriteMsg::UpdateRecord {
             old_parent,
             old_name: old_name.to_os_string(),
             node,
-            resp: None,
+            resp: tx,
         };
         writer_tx
             .send(msg)
             .context("writer_tx error on update_db_record")?;
 
-        Ok(DbReturn::Found { value: () })
+        if cache_res.is_err() {
+            rx.recv().context("writer_rx disc on write_inodes")??;
+        }
+
+        Ok(())
     }
 
     /// If ino is a Snap folder, it will walk the folders and add all entries to database
@@ -2275,7 +2138,7 @@ impl GitFs {
         };
 
         let mut stack: Vec<u64> = vec![ino.into()];
-        let mut nodes: Vec<StorageNode> = Vec::new();
+        let mut nodes: Vec<FileAttr> = Vec::new();
 
         while let Some(cur_dir) = stack.pop() {
             let direntries = self.readdirplus(cur_dir)?;
@@ -2287,11 +2150,7 @@ impl GitFs {
                     stack.push(e.entry.ino);
                 }
 
-                nodes.push(StorageNode {
-                    parent_ino: cur_dir,
-                    name: e.entry.name.clone(),
-                    attr: e.attr,
-                });
+                nodes.push(e.attr);
             }
 
             let batch = std::mem::take(&mut nodes);
@@ -2308,52 +2167,6 @@ impl GitFs {
         }
 
         Ok(())
-    }
-
-    pub fn write_dentry(&self, dentry: Dentry) -> anyhow::Result<()> {
-        let repo_id = GitFs::ino_to_repo_id(dentry.parent_ino);
-        let write_res = self.write_dentry_to_cache(dentry.clone());
-
-        let writer_tx = {
-            let guard = self
-                .conn_list
-                .get(&repo_id)
-                .ok_or_else(|| anyhow::anyhow!("No db for repo id {repo_id}"))?;
-            guard.writer_tx.clone()
-        };
-
-        let (tx, rx) = oneshot::<()>();
-        let tx = if write_res.is_ok() { None } else { Some(tx) };
-
-        let msg = DbWriteMsg::WriteDentry { dentry, resp: tx };
-        writer_tx
-            .send(msg)
-            .context("writer_tx error on write_dentry")?;
-
-        if write_res.is_err() {
-            rx.recv().context("writer_rx disc on write_dentry")??;
-        }
-
-        Ok(())
-    }
-
-    pub fn parent_commit_build_session(&self, ino: NormalIno) -> anyhow::Result<Oid> {
-        let oid = self.get_oid_from_db(ino.to_norm_u64())?;
-
-        let mut cur_oid = oid;
-        let mut cur_ino = ino.to_norm_u64();
-
-        let max_loops = 1000;
-        for _ in 0..max_loops {
-            if cur_oid != Oid::zero() {
-                break;
-            }
-
-            cur_ino = self.get_single_parent(cur_ino)?;
-            cur_oid = self.get_oid_from_db(cur_ino)?;
-        }
-
-        Ok(cur_oid)
     }
 
     fn get_path_from_db(&self, ino: NormalIno) -> anyhow::Result<PathBuf> {
@@ -2387,7 +2200,7 @@ impl GitFs {
     fn inode_exists(&self, ino: u64) -> anyhow::Result<bool> {
         let ino: Inodes = ino.into();
         let repo = self.get_repo(ino.to_u64_n())?;
-        if repo.attr_cache.get(&ino).is_found() {
+        if repo.attr_cache.get(&ino).is_some() {
             return Ok(true);
         }
         let repo_id = GitFs::ino_to_repo_id(ino.to_u64_n());
@@ -2439,10 +2252,8 @@ impl GitFs {
 
     fn get_name_from_db(&self, ino: u64) -> anyhow::Result<OsString> {
         let repo = self.get_repo(ino)?;
-        if let Some(entries) = repo.dentry_cache.get_by_target(ino)
-            && !entries.is_empty()
-        {
-            return Ok(entries[0].target_name.clone());
+        if let Some(name) = repo.attr_cache.with_get_mut(&ino, |a| a.name.clone()) {
+            return Ok(name);
         }
         let repo_id = GitFs::ino_to_repo_id(ino);
         let repo_db = self
@@ -2476,15 +2287,12 @@ impl GitFs {
         Ok(())
     }
 
-    fn write_inodes_to_db(&self, nodes: Vec<StorageNode>) -> anyhow::Result<()> {
+    fn write_inodes_to_db(&self, nodes: Vec<FileAttr>) -> anyhow::Result<()> {
         if nodes.is_empty() {
             return Ok(());
         }
-        let ino = nodes[0].attr.ino;
-        let mut cache_res = false;
-        if self.write_inodes_to_cache(ino, nodes.clone()).is_ok() {
-            cache_res = true;
-        }
+        let ino = nodes[0].ino;
+        let cache_res = self.write_inodes_to_cache(ino, nodes.clone());
 
         let repo_id = GitFs::ino_to_repo_id(ino);
         let writer_tx = {
@@ -2496,14 +2304,14 @@ impl GitFs {
         };
 
         let (tx, rx) = oneshot::<()>();
-        let tx = if cache_res { None } else { Some(tx) };
+        let tx = if cache_res.is_ok() { None } else { Some(tx) };
         let msg = DbWriteMsg::WriteInodes { nodes, resp: tx };
 
         writer_tx
             .send(msg)
             .context("writer_tx error on write_dentry")?;
 
-        if !cache_res {
+        if cache_res.is_err() {
             rx.recv().context("writer_rx disc on write_inodes")??;
         }
 
@@ -2515,26 +2323,9 @@ impl GitFs {
         Ok(GitFs::repo_id_to_ino(repo_id))
     }
 
-    fn write_inodes_to_cache(&self, ino: u64, entries: Vec<StorageNode>) -> anyhow::Result<()> {
+    fn write_inodes_to_cache(&self, ino: u64, entries: Vec<FileAttr>) -> anyhow::Result<()> {
         let repo = self.get_repo(ino)?;
-        let mut attrs: Vec<(u64, FileAttr)> = Vec::new();
-        let mut dentries: Vec<Dentry> = Vec::new();
-        #[allow(clippy::let_unit_value)]
-        let () = entries
-            .into_iter()
-            .map(|e| {
-                let dentry = Dentry {
-                    target_ino: e.attr.ino,
-                    parent_ino: e.parent_ino,
-                    target_name: e.name.clone(),
-                    is_active: true,
-                };
-                dentries.push(dentry);
-                attrs.push((e.attr.ino, e.attr));
-            })
-            .collect::<()>();
-        repo.attr_cache.insert_many(attrs);
-        repo.dentry_cache.insert_many(dentries);
+        repo.attr_cache.insert_many(entries);
         Ok(())
     }
 
@@ -2542,23 +2333,16 @@ impl GitFs {
         &self,
         parent_ino: u64,
         target_name: &OsStr,
-    ) -> anyhow::Result<DbReturn<FileAttr>> {
+    ) -> anyhow::Result<Option<FileAttr>> {
         let repo = self.get_repo(parent_ino)?;
         let target = match repo
-            .dentry_cache
-            .get_by_parent_and_name(parent_ino, target_name)
+            .attr_cache
+            .get_by_parent_and_name(&(parent_ino, target_name.to_os_string()))
         {
-            DbReturn::Found { value } => value,
-            DbReturn::Negative => return Ok(DbReturn::Negative),
-            DbReturn::Missing => return Ok(DbReturn::Missing),
+            Some(value) => value,
+            None => return Ok(None),
         };
-        Ok(repo.attr_cache.get(&target.target_ino))
-    }
-
-    fn remove_dentry_from_cache(&self, target_ino: u64, target_name: &OsStr) -> anyhow::Result<()> {
-        let repo = self.get_repo(target_ino)?;
-        repo.dentry_cache.remove_by_target(target_ino, target_name);
-        Ok(())
+        Ok(repo.attr_cache.get(&target.ino))
     }
 
     fn remove_inode_from_cache(&self, parent_ino: u64, target_name: &OsStr) {
@@ -2568,7 +2352,6 @@ impl GitFs {
         let Ok(target_ino) = self.get_ino_by_parent_cache(parent_ino, target_name) else {
             return;
         };
-        repo.dentry_cache.remove_by_parent(parent_ino, target_name);
         repo.attr_cache.remove(&target_ino);
         repo.file_cache.remove(&target_ino);
     }
@@ -2605,7 +2388,9 @@ impl GitFs {
                 a.flags = flags;
             }
         });
-        repo.attr_cache.get(&ino).into()
+        repo.attr_cache
+            .get(&ino)
+            .ok_or_else(|| anyhow!("SetAttr: Target does not exist {}", ino))
     }
 
     fn update_size_in_cache(&self, ino: u64, size: u64) -> anyhow::Result<u64> {
@@ -2621,53 +2406,23 @@ impl GitFs {
         }
     }
 
-    fn write_dentry_to_cache(&self, dentry: Dentry) -> anyhow::Result<()> {
-        let parent_ino = dentry.parent_ino;
-        let repo = self.get_repo(parent_ino)?;
-        repo.dentry_cache.insert(dentry);
-        Ok(())
-    }
-
-    fn get_single_dentry(&self, target_ino: u64) -> anyhow::Result<Dentry> {
-        let repo = self.get_repo(target_ino)?;
-        if let Some(entries) = repo.dentry_cache.get_by_target(target_ino)
-            && !entries.is_empty()
-        {
-            return Ok(entries[0].clone());
-        }
-
-        let repo_id = GitFs::ino_to_repo_id(target_ino);
-        let repo_db = self
-            .conn_list
-            .get(&repo_id)
-            .ok_or_else(|| anyhow::anyhow!("no db"))?;
-        let conn = repo_db.ro_pool.get()?;
-        let dentry = MetaDb::get_single_dentry(&conn, target_ino)?;
-        repo.dentry_cache.insert(dentry.clone());
-        Ok(dentry)
-    }
-
-    fn get_attr_from_cache(&self, ino: u64) -> anyhow::Result<DbReturn<FileAttr>> {
+    fn get_attr_from_cache(&self, ino: u64) -> anyhow::Result<FileAttr> {
         let repo = self.get_repo(ino)?;
-        let attr = repo.attr_cache.get(&ino);
-        Ok(attr)
+        if let Some(attr) = repo.attr_cache.get(&ino) {
+            Ok(attr)
+        } else {
+            bail!("No attr found in cache")
+        }
     }
 
     fn get_builctx_metadata_from_cache(&self, ino: NormalIno) -> anyhow::Result<BuildCtxMetadata> {
         let ino = ino.to_norm_u64();
         let repo = self.get_repo(ino)?;
-        let dentries = repo
-            .dentry_cache
-            .get_by_target(ino)
+        let attr = repo
+            .attr_cache
+            .get(&ino)
             .ok_or_else(|| anyhow!("Cannot find dentry in cache"))?;
-        let name = if dentries.is_empty() {
-            bail!("No dentries found")
-        } else {
-            dentries[0].target_name.clone()
-        };
-        let DbReturn::Found { value: attr } = repo.attr_cache.get(&ino) else {
-            bail!("Attribute not found for {ino}")
-        };
+        let name = attr.name.clone();
         let mode = repo::try_into_filemode(u64::from(attr.git_mode))
             .ok_or_else(|| anyhow!("Invalid filemode"))?;
         Ok(BuildCtxMetadata {
@@ -2685,9 +2440,9 @@ impl GitFs {
         let mut components: Vec<OsString> = Vec::new();
         let mut curr = target_ino;
 
-        while let Some(dentry) = repo.dentry_cache.get_single_dentry(curr) {
-            components.push(dentry.target_name);
-            curr = dentry.parent_ino;
+        while let Some(attr) = repo.attr_cache.get(&curr) {
+            components.push(attr.name);
+            curr = attr.parent_ino;
         }
         if components.is_empty() && target_ino != ROOT_INO {
             bail!(format!("Could not build path for {target_ino}"))
@@ -2700,128 +2455,35 @@ impl GitFs {
 
     fn get_ino_by_parent_cache(&self, parent_ino: u64, target_name: &OsStr) -> anyhow::Result<u64> {
         let repo = self.get_repo(parent_ino)?;
-        let dentry = repo
-            .dentry_cache
-            .get_by_parent_and_name(parent_ino, target_name);
-        if let DbReturn::Found { value: dentry } = dentry {
-            Ok(dentry.target_ino)
-        } else {
-            bail!("Could not find dentry in cache {}", target_name.display());
-        }
-    }
-
-    // If not in cache, insert it in cache
-    fn set_entry_negative(&self, parent_ino: NormalIno, name: &OsStr) -> anyhow::Result<()> {
-        let repo = self.get_repo(parent_ino.into())?;
-        let cache_res = repo
-            .dentry_cache
-            .set_inactive(parent_ino.into(), name)
-            .is_found();
-
-        let repo_id = GitFs::ino_to_repo_id(parent_ino.into());
-        let writer_tx = {
-            let guard = self
-                .conn_list
-                .get(&repo_id)
-                .ok_or_else(|| anyhow::anyhow!("No db for repo id {repo_id}"))?;
-            guard.writer_tx.clone()
-        };
-
-        let (tx, rx) = oneshot::<()>();
-        let tx = if cache_res { None } else { Some(tx) };
-        let msg = DbWriteMsg::SetNegative {
-            parent_ino,
-            target_name: name.to_owned(),
-            resp: tx,
-        };
-
-        writer_tx
-            .send(msg)
-            .context("writer_tx error on write_dentry")?;
-
-        if !cache_res {
-            rx.recv().context("writer_rx disc on write_inodes")??;
-
-            let repo_db = self
-                .conn_list
-                .get(&repo_id)
-                .ok_or_else(|| anyhow::anyhow!("no db"))?;
-            let conn = repo_db.ro_pool.get()?;
-            if let DbReturn::Found { value: dentry } =
-                MetaDb::get_dentry_from_db(&conn, parent_ino.into(), name)?
-            {
-                repo.dentry_cache.insert(dentry);
-            }
-        }
-
-        Ok(())
-    }
-
-    // `(target_ino, parent_ino, target_name)`
-    fn cleanup_neg_entries(
-        &self,
-        entries: &[(u64, u64, &OsStr)],
-        repo_id: u16,
-    ) -> anyhow::Result<()> {
-        let repo = self.get_repo(GitFs::repo_id_to_ino(repo_id))?;
-
-        let mut attr_targets = Vec::with_capacity(entries.len());
-        let mut cache_dentries = Vec::with_capacity(entries.len());
-        let mut db_entries = Vec::with_capacity(entries.len());
-
-        for &(target_ino, parent_ino, name) in entries {
-            attr_targets.push(target_ino);
-            cache_dentries.push((parent_ino, name));
-            db_entries.push((parent_ino, target_ino, name.to_os_string()));
-        }
-
-        repo.attr_cache.remove_many(&attr_targets);
-        // Dentries can only be uniquely identified by (parent_ino, target_name)
-        repo.dentry_cache.remove_many_by_parent(&cache_dentries);
-
-        let writer_tx = {
-            let guard = self
-                .conn_list
-                .get(&repo_id)
-                .ok_or_else(|| anyhow::anyhow!("No db for repo id {repo_id}"))?;
-            guard.writer_tx.clone()
-        };
-
-        // Dentries can only be uniquely identified by (parent_ino, target_name)
-        let msg = DbWriteMsg::CleanNegative {
-            entries: db_entries,
-            resp: None,
-        };
-
-        writer_tx
-            .send(msg)
-            .context("writer_tx error on write_dentry")?;
-
-        Ok(())
+        let attr = repo
+            .attr_cache
+            .get_by_parent_and_name(&(parent_ino, target_name.to_os_string()))
+            .ok_or_else(|| anyhow!("Could not find dentry in cache {}", target_name.display()))?;
+        Ok(attr.ino)
     }
 
     fn update_cache_record(
         &self,
         old_parent: u64,
         old_name: &OsStr,
-        node: StorageNode,
-    ) -> anyhow::Result<DbReturn<()>> {
-        let new_ino = node.attr.ino;
+        node: FileAttr,
+    ) -> anyhow::Result<()> {
+        let new_ino = node.ino;
         let repo = self.get_repo(new_ino)?;
 
         match repo
-            .dentry_cache
-            .get_by_parent_and_name(old_parent, old_name)
+            .attr_cache
+            .get_by_parent_and_name(&(old_parent, old_name.to_os_string()))
         {
-            DbReturn::Found { value: d } => {
-                // If old entry is found remove it and create the new entry
-                repo.dentry_cache.remove_by_parent(old_parent, old_name);
-                repo.attr_cache.remove(&d.target_ino);
+            Some(attr) => {
+                repo.attr_cache.remove(&attr.ino);
                 self.write_inodes_to_cache(new_ino, vec![node])?;
-                Ok(DbReturn::Found { value: () })
+                Ok(())
             }
-            DbReturn::Negative => Ok(DbReturn::Negative),
-            DbReturn::Missing => Ok(DbReturn::Missing),
+            None => {
+                self.write_inodes_to_cache(new_ino, vec![node])?;
+                Ok(())
+            }
         }
     }
 

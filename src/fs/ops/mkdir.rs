@@ -1,7 +1,10 @@
-use anyhow::bail;
+use std::ffi::OsStr;
 
-use crate::fs::builds::BuildOperationCtx;
-use crate::fs::fileattr::{FileAttr, StorageNode};
+use anyhow::bail;
+use git2::Oid;
+use uuid::Uuid;
+
+use crate::fs::fileattr::FileAttr;
 use crate::fs::{CreateFileAttr, GitFs, REPO_SHIFT, repo};
 use crate::inodes::NormalIno;
 use crate::mount::InvalMsg;
@@ -48,15 +51,16 @@ pub fn mkdir_live(
     std::fs::create_dir(&dir_path)?;
     let new_ino = fs.next_inode_checked(parent)?;
 
-    let mut attr: FileAttr = create_attr.into();
+    let attr = FileAttr::new(
+        create_attr,
+        new_ino,
+        OsStr::new(name),
+        parent,
+        Oid::zero(),
+        None,
+    );
 
-    attr.ino = new_ino;
-
-    let nodes = vec![StorageNode {
-        parent_ino: parent,
-        name: name.into(),
-        attr,
-    }];
+    let nodes = vec![attr.clone()];
     fs.write_inodes_to_db(nodes)?;
     let _ = fs.notifier.try_send(InvalMsg::Store {
         ino: new_ino,
@@ -78,23 +82,20 @@ pub fn mkdir_git(
     name: &str,
     create_attr: CreateFileAttr,
 ) -> anyhow::Result<FileAttr> {
-    let ctx = BuildOperationCtx::new(fs, parent)?;
-    let dir_path = ctx.path().join(name);
-
-    std::fs::create_dir(&dir_path)?;
+    let uuid = Uuid::new_v4().to_string();
     let new_ino = fs.next_inode_checked(parent.to_norm_u64())?;
 
-    let mut attr: FileAttr = create_attr.into();
-
-    attr.ino = new_ino;
     let commit_oid = fs.get_oid_from_db(parent.into())?;
-    attr.oid = commit_oid;
+    let attr = FileAttr::new(
+        create_attr,
+        new_ino,
+        OsStr::new(name),
+        parent.into(),
+        commit_oid,
+        Some(uuid),
+    );
 
-    let nodes = vec![StorageNode {
-        parent_ino: parent.to_norm_u64(),
-        name: name.into(),
-        attr,
-    }];
+    let nodes = vec![attr.clone()];
     fs.write_inodes_to_db(nodes)?;
 
     let _ = fs.notifier.try_send(InvalMsg::Store {

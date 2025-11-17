@@ -8,6 +8,7 @@ use std::{
 use anyhow::{anyhow, bail};
 use dashmap::Entry;
 use git2::{Oid, Time};
+use tracing::{Level, instrument};
 
 use crate::{
     fs::{
@@ -43,6 +44,7 @@ pub fn open_live(
     fs.handles.open(handle)
 }
 
+#[instrument(level = "debug", skip(fs), fields(ino = %ino), ret(level = Level::DEBUG), err(Display))]
 pub fn open_git(
     fs: &GitFs,
     ino: NormalIno,
@@ -58,11 +60,13 @@ pub fn open_git(
                 Err(_) => {
                     let repo = fs.get_repo(ino.to_norm_u64())?;
                     let build_root = &repo.build_dir;
-                    let dentry = fs.get_single_dentry(ino.into())?;
+                    let attr = fs.get_metadata(ino.into())?;
                     let session = repo.get_or_init_build_session(metadata.oid, build_root)?;
-                    let path = session
-                        .finish_path(fs, dentry.parent_ino.into())?
-                        .join(&dentry.target_name);
+                    let path = if let Some(uuid) = attr.uuid {
+                        session.folder.path().join(uuid)
+                    } else {
+                        bail!("No uuid for {}", attr.name.display())
+                    };
                     // Always open with write(true) because the file is cached
                     // Let the Handle decide if write is allowed
                     let open_file = OpenOptions::new()

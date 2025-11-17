@@ -5,7 +5,7 @@ use std::sync::{
 
 use dashmap::DashMap;
 
-use crate::fs::{GitFs, Handle, meta_db::DbWriteMsg};
+use crate::fs::Handle;
 
 pub struct FileHandles {
     current_handle: AtomicU64,
@@ -43,19 +43,8 @@ impl FileHandles {
     }
 
     /// Closes a file handle
-    pub fn close(
-        &self,
-        fh: u64,
-        writer_tx: Option<crossbeam_channel::Sender<DbWriteMsg>>,
-    ) -> anyhow::Result<bool> {
-        if let Some((_, handle_arc)) = self.handles.remove(&fh) {
-            let ino = handle_arc.ino;
-            if self.register_close(ino).is_some()
-                && let Some(writer_tx) = writer_tx
-                && let Err(e) = GitFs::cleanup_entry_with_writemsg(ino.into(), &writer_tx)
-            {
-                tracing::error!("cleanup_entry_with_writemsg failed for ino {ino}: {e}");
-            }
+    pub fn close(&self, fh: u64) -> anyhow::Result<bool> {
+        if self.handles.remove(&fh).is_some() {
             Ok(true)
         } else {
             Ok(false)

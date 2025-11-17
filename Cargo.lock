@@ -350,6 +350,7 @@ dependencies = [
  "thread_local",
  "tracing",
  "tracing-subscriber",
+ "uuid",
 ]
 
 [[package]]

@@ -10,9 +10,7 @@ use git2::{FileMode, ObjectType, Oid};
 use crate::{
     fs::{
         CHASE_FOLDER, FileAttr, GitFs, LIVE_FOLDER,
-        builds::BuildOperationCtx,
-        fileattr::{FileType, InoFlag, ObjectAttr, StorageNode, dir_attr, file_attr},
-        meta_db::DbReturn,
+        fileattr::{FileType, InoFlag, ObjectAttr, dir_attr, file_attr},
         repo::git2time_to_system,
     },
     inodes::{NormalIno, VirtualIno},
@@ -119,30 +117,13 @@ pub fn readdir_repo_dir(fs: &GitFs, parent: NormalIno) -> anyhow::Result<Vec<Dir
     let repo_id = GitFs::ino_to_repo_id(parent);
 
     if !fs.repos_list.contains_key(&repo_id) {
-        bail!("Repo not found!")
+        bail!("Repo does not exist!")
     }
 
     let mut entries: Vec<DirectoryEntry> = vec![];
 
-    // Add the live folder
-    let DbReturn::Found { value: live_ino } =
-        fs.get_ino_from_db(parent, OsStr::new(LIVE_FOLDER))?
-    else {
-        tracing::error!("Live entry not found");
-        bail!(std::io::Error::from_raw_os_error(libc::ENOENT))
-    };
-    let live_entry = DirectoryEntry::new(
-        live_ino,
-        Oid::zero(),
-        OsString::from(LIVE_FOLDER),
-        FileType::Directory,
-        libc::S_IFDIR,
-    );
-
     // Add the chase folder
-    let DbReturn::Found { value: chase_ino } =
-        fs.get_ino_from_db(parent, OsStr::new(CHASE_FOLDER))?
-    else {
+    let Ok(chase_ino) = fs.get_ino_from_db(parent, OsStr::new(CHASE_FOLDER)) else {
         tracing::error!("Chase entry not found");
         bail!(std::io::Error::from_raw_os_error(libc::ENOENT))
     };
@@ -154,6 +135,19 @@ pub fn readdir_repo_dir(fs: &GitFs, parent: NormalIno) -> anyhow::Result<Vec<Dir
         libc::S_IFDIR,
     );
 
+    // Add the live folder
+    let Ok(live_ino) = fs.get_ino_from_db(parent, OsStr::new(LIVE_FOLDER)) else {
+        tracing::error!("Live entry not found");
+        bail!(std::io::Error::from_raw_os_error(libc::ENOENT))
+    };
+    let live_entry = DirectoryEntry::new(
+        live_ino,
+        Oid::zero(),
+        OsString::from(LIVE_FOLDER),
+        FileType::Directory,
+        libc::S_IFDIR,
+    );
+
     entries.push(live_entry);
     entries.push(chase_entry);
 
@@ -161,30 +155,36 @@ pub fn readdir_repo_dir(fs: &GitFs, parent: NormalIno) -> anyhow::Result<Vec<Dir
     let repo = fs.get_repo(parent)?;
     let object_entries = { repo.month_folders()? };
 
-    let mut nodes: Vec<StorageNode> = vec![];
+    let mut nodes: Vec<FileAttr> = vec![];
     if !object_entries.is_empty() {
         for (_, month) in object_entries {
-            let dir_entry = match fs.exists_by_name(parent, &month.name)? {
-                DbReturn::Found { value: i } => DirectoryEntry::new(
+            let dir_entry = match fs.exists_by_name(parent, &month.name) {
+                Ok(i) => DirectoryEntry::new(
                     i,
                     Oid::zero(),
                     month.name,
                     FileType::Directory,
                     month.git_mode,
                 ),
-                DbReturn::Missing => {
+                Err(_) => {
                     let entry_ino = fs.next_inode_checked(parent)?;
-                    let mut attr: FileAttr = dir_attr(InoFlag::MonthFolder).into();
-                    attr.ino = entry_ino;
-                    nodes.push(StorageNode {
-                        parent_ino: parent,
-                        name: month.name.clone(),
-                        attr,
-                    });
-                    DirectoryEntry::new(entry_ino, attr.oid, month.name, attr.kind, attr.git_mode)
-                }
-                DbReturn::Negative => {
-                    continue;
+                    let attr = FileAttr::new(
+                        dir_attr(InoFlag::MonthFolder),
+                        entry_ino,
+                        &month.name,
+                        parent,
+                        Oid::zero(),
+                        None,
+                    );
+                    let entry = DirectoryEntry::new(
+                        entry_ino,
+                        attr.oid,
+                        month.name,
+                        attr.kind,
+                        attr.git_mode,
+                    );
+                    nodes.push(attr);
+                    entry
                 }
             };
             entries.push(dir_entry);
@@ -208,27 +208,28 @@ pub fn readdir_repo_dir(fs: &GitFs, parent: NormalIno) -> anyhow::Result<Vec<Dir
         }
     });
     for (ref_name, flag) in folders {
-        let dir_entry = match fs.exists_by_name(parent, &ref_name)? {
-            DbReturn::Found { value: i } => DirectoryEntry::new(
+        let dir_entry = match fs.exists_by_name(parent, &ref_name) {
+            Ok(i) => DirectoryEntry::new(
                 i,
                 Oid::zero(),
                 ref_name.clone(),
                 FileType::Directory,
                 libc::S_IFDIR,
             ),
-            DbReturn::Missing => {
+            Err(_) => {
                 let entry_ino = fs.next_inode_checked(parent)?;
-                let mut attr: FileAttr = dir_attr(flag).into();
-                attr.ino = entry_ino;
-                nodes.push(StorageNode {
-                    parent_ino: parent,
-                    name: ref_name.clone(),
-                    attr,
-                });
-                DirectoryEntry::new(entry_ino, attr.oid, ref_name, attr.kind, attr.git_mode)
-            }
-            DbReturn::Negative => {
-                continue;
+                let attr = FileAttr::new(
+                    dir_attr(flag),
+                    entry_ino,
+                    &ref_name,
+                    parent,
+                    Oid::zero(),
+                    None,
+                );
+                let entry =
+                    DirectoryEntry::new(entry_ino, attr.oid, ref_name, attr.kind, attr.git_mode);
+                nodes.push(attr);
+                entry
             }
         };
         entries.push(dir_entry);
@@ -245,7 +246,7 @@ pub fn readdir_live_dir(fs: &GitFs, ino: NormalIno) -> anyhow::Result<Vec<Direct
     let ino = u64::from(ino);
     let path = fs.get_live_path(ino.into())?;
     let mut entries: Vec<DirectoryEntry> = vec![];
-    let mut nodes: Vec<StorageNode> = vec![];
+    let mut nodes: Vec<FileAttr> = vec![];
     for node in path.read_dir()? {
         let node = node?;
         let node_name = node.file_name();
@@ -256,20 +257,20 @@ pub fn readdir_live_dir(fs: &GitFs, ino: NormalIno) -> anyhow::Result<Vec<Direct
         };
 
         let mut attr = fs.refresh_medata_using_path(node.path(), InoFlag::InsideLive)?;
-        match fs.get_ino_from_db(ino, &node_name)? {
-            DbReturn::Found { value: ino } => attr.ino = ino,
-            DbReturn::Missing => {
+        let ino = match fs.get_ino_from_db(ino, &node_name) {
+            Ok(ino) => {
+                attr.ino = ino;
+                ino
+            }
+            Err(_) => {
                 let new_ino = fs.next_inode_checked(ino)?;
                 attr.ino = new_ino;
-                nodes.push(StorageNode {
-                    parent_ino: ino,
-                    name: node_name.clone(),
-                    attr,
-                });
+                attr.parent_ino = ino;
+                nodes.push(attr);
+                new_ino
             }
-            DbReturn::Negative => continue,
         };
-        let entry = DirectoryEntry::new(attr.ino, Oid::zero(), node_name, kind, filemode);
+        let entry = DirectoryEntry::new(ino, Oid::zero(), node_name, kind, filemode);
         entries.push(entry);
     }
     fs.write_inodes_to_db(nodes)?;
@@ -317,9 +318,13 @@ pub fn classify_inode(meta: &BuildCtxMetadata) -> anyhow::Result<DirCase> {
 fn read_build_dir(fs: &GitFs, ino: NormalIno) -> anyhow::Result<Vec<DirectoryEntry>> {
     let mut out = Vec::new();
 
-    let ctx = BuildOperationCtx::new(fs, ino)?;
+    let ino_flag = fs.get_ino_flag_from_db(ino)?;
+    let mut entries = fs.read_children(ino)?;
 
-    let entries = populate_entries_by_path(fs, ino, &ctx.path())?;
+    if ino_flag == InoFlag::SnapFolder {
+        let snap_oid = fs.get_oid_from_db(ino.into())?;
+        entries.retain(|e| e.oid == snap_oid);
+    };
     out.extend(entries);
     Ok(out)
 }
@@ -367,9 +372,8 @@ fn populate_entries_by_path(
         } else {
             (FileType::RegularFile, libc::S_IFREG)
         };
-        let entry_ino = match fs.exists_by_name(ino.into(), &node_name)? {
-            DbReturn::Found { value: ino } => ino,
-            _ => continue,
+        let Ok(entry_ino) = fs.exists_by_name(ino.into(), &node_name) else {
+            continue;
         };
         let entry = DirectoryEntry::new(entry_ino, Oid::zero(), node_name, kind, filemode);
         out.push(entry);
@@ -409,7 +413,7 @@ pub fn build_dot_git_path(fs: &GitFs, target_ino: NormalIno) -> anyhow::Result<P
 
 fn read_inside_dot_git(fs: &GitFs, parent_ino: NormalIno) -> anyhow::Result<Vec<DirectoryEntry>> {
     let mut entries: Vec<DirectoryEntry> = vec![];
-    let mut nodes: Vec<StorageNode> = vec![];
+    let mut nodes: Vec<FileAttr> = vec![];
 
     let path = build_dot_git_path(fs, parent_ino)?;
     for node in path.read_dir()? {
@@ -429,21 +433,21 @@ fn read_inside_dot_git(fs: &GitFs, parent_ino: NormalIno) -> anyhow::Result<Vec<
 
         let mut attr = fs.refresh_medata_using_path(node.path(), ino_flag)?;
 
-        match fs.get_ino_from_db(parent_ino.into(), &node_name)? {
-            DbReturn::Found { value: ino } => attr.ino = ino,
-            DbReturn::Missing => {
+        let ino = match fs.get_ino_from_db(parent_ino.into(), &node_name) {
+            Ok(ino) => {
+                attr.ino = ino;
+                ino
+            }
+            Err(_) => {
                 let new_ino = fs.next_inode_checked(parent_ino.into())?;
                 attr.ino = new_ino;
-                nodes.push(StorageNode {
-                    parent_ino: parent_ino.into(),
-                    name: node_name.clone(),
-                    attr,
-                });
+                attr.parent_ino = parent_ino.into();
+                nodes.push(attr);
+                new_ino
             }
-            DbReturn::Negative => continue,
         };
 
-        let entry = DirectoryEntry::new(attr.ino, Oid::zero(), node_name, kind, filemode);
+        let entry = DirectoryEntry::new(ino, Oid::zero(), node_name, kind, filemode);
         entries.push(entry);
     }
 
@@ -457,21 +461,21 @@ fn dot_git_root(fs: &GitFs, parent_ino: u64) -> anyhow::Result<DirectoryEntry> {
     let st_mode = libc::S_IFDIR | perms;
 
     let name = OsStr::new(".git");
-    let entry_ino = match fs.exists_by_name(parent_ino, name)? {
-        DbReturn::Found { value: ino } => ino,
-        DbReturn::Missing => {
+    let entry_ino = match fs.exists_by_name(parent_ino, name) {
+        Ok(ino) => ino,
+        Err(_) => {
             let ino = fs.next_inode_checked(parent_ino)?;
-            let mut attr: FileAttr = dir_attr(InoFlag::DotGitRoot).into();
-            attr.ino = ino;
-            let nodes: Vec<StorageNode> = vec![StorageNode {
+            let attr = FileAttr::new(
+                dir_attr(InoFlag::DotGitRoot),
+                ino,
+                name,
                 parent_ino,
-                name: name.to_os_string(),
-                attr,
-            }];
-            fs.write_inodes_to_db(nodes)?;
+                Oid::zero(),
+                None,
+            );
+            fs.write_inodes_to_db(vec![attr])?;
             ino
         }
-        DbReturn::Negative => bail!(".git entry not found"),
     };
     let entry: DirectoryEntry = DirectoryEntry {
         ino: entry_ino,
@@ -567,31 +571,32 @@ fn objects_to_dir_entries(
     objects: Vec<ObjectAttr>,
     ino_flag: InoFlag,
 ) -> anyhow::Result<Vec<DirectoryEntry>> {
-    let mut nodes: Vec<StorageNode> = vec![];
+    let mut nodes: Vec<FileAttr> = vec![];
     let mut dir_entries: Vec<DirectoryEntry> = vec![];
     for entry in objects {
-        let ino = match fs.exists_by_name(parent.to_norm_u64(), &entry.name)? {
-            DbReturn::Found { value: i } => i,
-            DbReturn::Missing => {
+        let ino = match fs.exists_by_name(parent.to_norm_u64(), &entry.name) {
+            Ok(i) => i,
+            Err(_) => {
                 let ino = fs.next_inode_checked(parent.to_norm_u64())?;
-                let mut attr: FileAttr = match entry.kind {
-                    ObjectType::Tree | ObjectType::Commit => dir_attr(ino_flag).into(),
-                    _ => file_attr(ino_flag).into(),
+                let create = match entry.kind {
+                    ObjectType::Tree | ObjectType::Commit => dir_attr(ino_flag),
+                    _ => file_attr(ino_flag),
                 };
-                attr.oid = entry.oid;
-                attr.ino = ino;
+                let mut attr = FileAttr::new(
+                    create,
+                    ino,
+                    &entry.name,
+                    parent.to_norm_u64(),
+                    entry.oid,
+                    None,
+                );
                 attr.size = entry.size;
                 attr.atime = git2time_to_system(entry.commit_time);
                 attr.mtime = git2time_to_system(entry.commit_time);
                 attr.ctime = git2time_to_system(entry.commit_time);
-                nodes.push(StorageNode {
-                    parent_ino: parent.to_norm_u64(),
-                    name: entry.name.clone(),
-                    attr,
-                });
+                nodes.push(attr);
                 ino
             }
-            DbReturn::Negative => continue,
         };
         let mut dir_entry: DirectoryEntry = entry.into();
         dir_entry.ino = ino;

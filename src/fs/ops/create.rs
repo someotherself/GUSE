@@ -1,10 +1,12 @@
 use std::{ffi::OsStr, sync::Arc};
 
+use git2::Oid;
+use uuid::Uuid;
+
 use crate::{
     fs::{
         GitFs, SourceTypes,
-        builds::BuildOperationCtx,
-        fileattr::{FileAttr, InoFlag, StorageNode, file_attr},
+        fileattr::{FileAttr, InoFlag, file_attr},
     },
     inodes::NormalIno,
     mount::InvalMsg,
@@ -17,16 +19,18 @@ pub fn create_live(
     write: bool,
 ) -> anyhow::Result<(FileAttr, u64)> {
     let ino = fs.next_inode_checked(parent)?;
-    let mut attr: FileAttr = file_attr(InoFlag::InsideLive).into();
-    attr.ino = ino;
+    let attr = FileAttr::new(
+        file_attr(InoFlag::InsideLive),
+        ino,
+        name,
+        parent,
+        Oid::zero(),
+        None,
+    );
     let file_path = fs.get_live_path(parent.into())?.join(name);
     std::fs::File::create_new(&file_path)?;
 
-    let nodes = vec![StorageNode {
-        parent_ino: parent,
-        name: name.into(),
-        attr,
-    }];
+    let nodes = vec![attr.clone()];
     fs.write_inodes_to_db(nodes)?;
     {
         let _ = fs.notifier.try_send(InvalMsg::Store {
@@ -50,15 +54,24 @@ pub fn create_git(
     name: &OsStr,
     write: bool,
 ) -> anyhow::Result<(FileAttr, u64)> {
-    let ctx = BuildOperationCtx::new(fs, parent)?;
+    let oid = fs.get_oid_from_db(parent.into())?;
 
-    let file_path = ctx.path().join(name);
+    let repo = fs.get_repo(parent.into())?;
+    let ctx = repo.get_or_init_build_session(oid, &repo.build_dir)?;
+
+    let uuid = Uuid::new_v4().to_string();
+    let file_path = ctx.folder.path().join(&uuid);
+
     let ino = fs.next_inode_checked(parent.to_norm_u64())?;
-    let mut attr: FileAttr = file_attr(InoFlag::InsideBuild).into();
-    attr.ino = ino;
-    // Add the commit_oid to the attr
     let parent_oid = fs.get_oid_from_db(parent.into())?;
-    attr.oid = parent_oid;
+    let attr = FileAttr::new(
+        file_attr(InoFlag::InsideBuild),
+        ino,
+        name,
+        parent.to_norm_u64(),
+        parent_oid,
+        Some(uuid),
+    );
 
     let file = std::fs::File::create_new(&file_path)?;
     {
@@ -67,11 +80,7 @@ pub fn create_git(
         repo.file_cache.insert(ino, real_file);
     }
 
-    let nodes = vec![StorageNode {
-        parent_ino: parent.to_norm_u64(),
-        name: name.into(),
-        attr,
-    }];
+    let nodes = vec![attr.clone()];
     fs.write_inodes_to_db(nodes)?;
     let _ = fs.notifier.try_send(InvalMsg::Store {
         ino,

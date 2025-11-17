@@ -224,10 +224,10 @@ fn test_mkdir_normal() -> anyhow::Result<()> {
             let attr_vdir = attr_vdir.unwrap();
             assert!(fs.is_virtual(attr_vdir.ino));
 
-            dbg!(attr_real_file.unwrap().ino);
+            dbg!(attr_real_file.clone().unwrap().ino);
             dbg!(attr_vdir.ino);
 
-            dbg!(attr_real_file.unwrap().kind);
+            dbg!(attr_real_file.clone().unwrap().kind);
             assert!(!fs.is_virtual(attr_real_file.unwrap().ino));
             dbg!(attr_vdir.kind);
 

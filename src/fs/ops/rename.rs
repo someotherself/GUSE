@@ -3,11 +3,7 @@ use std::ffi::{OsStr, OsString};
 use anyhow::bail;
 
 use crate::{
-    fs::{
-        GitFs,
-        fileattr::{InoFlag, StorageNode},
-        meta_db::DbReturn,
-    },
+    fs::{GitFs, fileattr::InoFlag},
     inodes::NormalIno,
     mount::InvalMsg,
 };
@@ -25,16 +21,11 @@ pub fn rename_live(
         bail!(format!("New parent {} not allowed", new_parent));
     }
 
-    let src_attr = match fs.get_metadata_by_name(old_parent, old_name)? {
-        DbReturn::Found { value } => value,
-        _ => bail!(std::io::Error::from_raw_os_error(libc::ENOENT)),
-    };
+    let src_attr = fs.get_metadata_by_name(old_parent, old_name)?;
 
     let mut dest_exists = false;
 
-    if let Ok(res) = fs.get_metadata_by_name(new_parent, new_name)
-        && let DbReturn::Found { value } = res
-    {
+    if let Ok(value) = fs.get_metadata_by_name(new_parent, new_name) {
         dest_exists = true;
 
         if value.kind != src_attr.kind {
@@ -48,7 +39,7 @@ pub fn rename_live(
     std::fs::rename(src, &dest)?;
 
     if dest_exists {
-        fs.remove_db_dentry(new_parent, new_name)?;
+        fs.remove_db_entry(new_parent, new_name)?;
     }
 
     let ino_flag = if dest_in_live {
@@ -61,13 +52,10 @@ pub fn rename_live(
 
     let mut new_attr = GitFs::attr_from_path(ino_flag, &dest.clone())?;
     new_attr.ino = src_attr.ino;
+    new_attr.parent_ino = new_parent.to_norm_u64();
+    new_attr.name = new_name.into();
 
-    let node = StorageNode {
-        parent_ino: new_parent.to_norm_u64(),
-        name: new_name.into(),
-        attr: new_attr,
-    };
-    fs.update_db_record(old_parent, old_name, node)?;
+    fs.update_db_record(old_parent, old_name, new_attr)?;
 
     {
         let _ = fs.notifier.try_send(InvalMsg::Entry {
@@ -110,16 +98,11 @@ pub fn rename_git_build(
     if !dest_in_build && !is_commit_folder {
         bail!(format!("New parent {} not allowed", new_parent));
     }
-    let src_attr = match fs.get_metadata_by_name(old_parent, old_name)? {
-        DbReturn::Found { value } => value,
-        _ => bail!(std::io::Error::from_raw_os_error(libc::ENOENT)),
-    };
+    let src_attr = fs.get_metadata_by_name(old_parent, old_name)?;
 
     let mut dest_exists = false;
 
-    if let Ok(res) = fs.get_metadata_by_name(new_parent, new_name)
-        && let DbReturn::Found { value } = res
-    {
+    if let Ok(value) = fs.get_metadata_by_name(new_parent, new_name) {
         dest_exists = true;
 
         if value.kind != src_attr.kind {
@@ -127,43 +110,13 @@ pub fn rename_git_build(
         }
     };
 
-    let repo = fs.get_repo(old_parent.to_norm_u64())?;
-    let build_root = &repo.build_dir;
-    let commit_oid = fs.get_oid_from_db(old_parent.into())?;
-    let src = {
-        let ino = old_parent;
-        let session = repo.get_or_init_build_session(commit_oid, build_root)?;
-        session.finish_path(fs, ino)?.join(old_name)
-    };
-
-    let dest = {
-        let ino = new_parent;
-        let session = repo.get_or_init_build_session(commit_oid, build_root)?;
-        session.finish_path(fs, ino)?.join(new_name)
-    };
-
-    std::fs::rename(&src, &dest)?;
-
     if dest_exists {
-        fs.remove_db_dentry(new_parent, new_name)?;
+        fs.remove_db_entry(new_parent, new_name)?;
     }
 
-    let ino_flag = if dest_in_build {
-        InoFlag::InsideBuild
-    } else {
-        bail!("Invalid location")
-    };
+    let new_attr = src_attr.clone();
 
-    let mut new_attr = GitFs::attr_from_path(ino_flag, &dest.clone())?;
-    new_attr.ino = src_attr.ino;
-    new_attr.oid = src_attr.oid;
-
-    let node = StorageNode {
-        parent_ino: new_parent.to_norm_u64(),
-        name: new_name.into(),
-        attr: new_attr,
-    };
-    fs.update_db_record(old_parent, old_name, node)?;
+    fs.update_db_record(old_parent, old_name, new_attr)?;
 
     {
         let _ = fs.notifier.try_send(InvalMsg::Entry {

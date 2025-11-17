@@ -1,14 +1,16 @@
 use std::{
-    ffi::OsString,
+    ffi::{OsStr, OsString},
     time::{SystemTime, UNIX_EPOCH},
 };
 
 use anyhow::bail;
 use git2::{ObjectType, Oid};
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct FileAttr {
     pub ino: u64,
+    pub parent_ino: u64,
+    pub name: OsString,
     pub ino_flag: InoFlag,
     pub oid: Oid,
     pub size: u64,
@@ -20,21 +22,47 @@ pub struct FileAttr {
     pub kind: FileType,
     pub perm: u16,
     pub git_mode: u32,
-    pub nlink: u32,
     pub uid: u32,
     pub gid: u32,
     pub rdev: u32,
     pub blksize: u32,
     pub flags: u32,
+    pub uuid: Option<String>,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct Dentry {
-    pub target_ino: u64,
-    pub parent_ino: u64,
-    pub target_name: OsString,
-    /// Is this entry active or marked for deletion?
-    pub is_active: bool,
+impl FileAttr {
+    pub fn new(
+        create: CreateFileAttr,
+        ino: u64,
+        name: &OsStr,
+        parent_ino: u64,
+        oid: Oid,
+        uuid: Option<String>,
+    ) -> Self {
+        let now = SystemTime::now();
+        Self {
+            ino,
+            parent_ino,
+            name: name.to_os_string(),
+            ino_flag: create.ino_flag,
+            oid,
+            size: 0,
+            blocks: 0,
+            atime: now,
+            mtime: now,
+            ctime: now,
+            crtime: now,
+            kind: create.kind,
+            perm: create.perm,
+            git_mode: create.mode,
+            uid: unsafe { libc::getuid() },
+            gid: unsafe { libc::getgid() },
+            rdev: create.rdev,
+            blksize: 0,
+            flags: create.flags,
+            uuid,
+        }
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -111,6 +139,8 @@ impl From<CreateFileAttr> for FileAttr {
         let now = SystemTime::now();
         Self {
             ino: 0,
+            parent_ino: 0,
+            name: OsString::new(),
             ino_flag: value.ino_flag,
             oid: Oid::zero(),
             size: 0,
@@ -122,12 +152,12 @@ impl From<CreateFileAttr> for FileAttr {
             kind: value.kind,
             perm: value.perm,
             git_mode: value.mode,
-            nlink: 1,
             uid: unsafe { libc::getuid() },
             gid: unsafe { libc::getgid() },
             rdev: value.rdev,
             blksize: 0,
             flags: value.flags,
+            uuid: None,
         }
     }
 }
@@ -171,14 +201,6 @@ pub struct SetFileAttr {
     pub rdev: Option<u32>,
     pub blksize: Option<u32>,
     pub flags: Option<u32>,
-}
-
-/// Used for passing to Gitfs::write_inodes_to_db()
-#[derive(Debug, Clone)]
-pub struct StorageNode {
-    pub parent_ino: u64,
-    pub name: OsString,
-    pub attr: FileAttr,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]

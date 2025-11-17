@@ -1,8 +1,9 @@
-use std::{collections::HashMap, fmt::Debug, num::NonZeroUsize};
+use std::{collections::HashMap, ffi::OsString, fmt::Debug, num::NonZeroUsize};
 
+use dashmap::DashMap;
 use parking_lot::RwLock;
 
-use crate::fs::meta_db::DbReturn;
+use crate::fs::fileattr::FileAttr;
 
 type NodeId = usize;
 
@@ -32,6 +33,69 @@ pub struct Inner<K: Debug, V: Clone, S = std::hash::DefaultHasher> {
     head: Option<NodeId>, // MRU
     tail: Option<NodeId>, // LRU
     capacity: NonZeroUsize,
+}
+
+type TargetInode = u64;
+type ParentInode = u64;
+
+pub struct AttrCache {
+    pub cache: LruCache<TargetInode, FileAttr>,
+    pub names_map: DashMap<(TargetInode, OsString), TargetInode>,
+}
+
+impl AttrCache {
+    pub fn new(capacity: usize) -> Self {
+        let cache = LruCache::new(capacity);
+        Self {
+            cache,
+            names_map: DashMap::new(),
+        }
+    }
+
+    pub fn get(&self, key: &u64) -> Option<FileAttr> {
+        self.cache.get(key)
+    }
+
+    pub fn with_get_mut<R>(&self, key: &u64, f: impl FnOnce(&mut FileAttr) -> R) -> Option<R> {
+        self.cache.with_get_mut(key, f)
+    }
+
+    pub fn get_by_parent_and_name(&self, key: &(u64, OsString)) -> Option<FileAttr> {
+        if let Some(target_ino) = self.names_map.get(key) {
+            self.cache.get(target_ino.value())
+        } else {
+            None
+        }
+    }
+
+    pub fn remove(&self, key: &u64) {
+        if let Some(evicted) = self.cache.remove(key) {
+            self.names_map.remove(&(evicted.parent_ino, evicted.name));
+        }
+    }
+
+    pub fn remove_many(&self, keys: &[u64]) {
+        for key in keys {
+            self.remove(key);
+        }
+    }
+
+    pub fn insert(&self, value: FileAttr) {
+        self.names_map
+            .insert((value.parent_ino, value.name.clone()), value.ino);
+        if let Some(evicted) = self.cache.insert(value.ino, value) {
+            self.names_map.remove(&(evicted.parent_ino, evicted.name));
+        }
+    }
+
+    pub fn insert_many<I>(&self, entries: I)
+    where
+        I: IntoIterator<Item = FileAttr>,
+    {
+        for value in entries {
+            self.insert(value);
+        }
+    }
 }
 
 impl<K: Debug, V: Clone, S> Inner<K, V, S>
@@ -119,7 +183,8 @@ where
         }
     }
 
-    fn evict(&mut self) -> Option<()> {
+    /// Returns the EVICTED value
+    fn evict(&mut self) -> Option<V> {
         // Get tail entry. If it's None, there is nothing to evict
         let tail = self.tail?;
         let tail_e = self.nodes.get_mut(tail)?.take()?;
@@ -143,7 +208,7 @@ where
         let old_tail = tail_e.key;
         let _ = self.map.remove_entry(&old_tail);
         self.free.push(tail);
-        Some(())
+        Some(tail_e.value)
     }
 
     fn insert_front(&mut self, key: K, value: V) -> NodeId {
@@ -204,17 +269,15 @@ where
         }
     }
 
-    pub fn get(&self, key: &K) -> DbReturn<V> {
+    pub fn get(&self, key: &K) -> Option<V> {
         let mut guard = self.list.write();
-        let Some(&id) = guard.map.get(key) else {
-            return DbReturn::Missing;
-        };
+        let &id = guard.map.get(key)?;
         if guard.free.contains(&id) {
-            return DbReturn::Missing;
+            return None;
         }
         guard.unlink(id);
         guard.push_front(id);
-        guard.peek(id).into()
+        guard.peek(id)
     }
 
     pub fn with_get_mut<R>(&self, key: &K, f: impl FnOnce(&mut V) -> R) -> Option<R> {
@@ -232,7 +295,7 @@ where
         None
     }
 
-    // Returns the old value if it already exists
+    // Returns the EVICTED value if any
     pub fn insert(&self, key: K, value: V) -> Option<V> {
         let mut guard = self.list.write();
         {
@@ -342,25 +405,25 @@ mod test {
         let lru: LruCache<u64, FileAttr> = LruCache::new(3);
         let attr: FileAttr = dir_attr(crate::fs::fileattr::InoFlag::LiveRoot).into();
 
-        lru.insert(1, attr);
+        lru.insert(1, attr.clone());
         assert!(lru.peek(&1).is_some());
 
-        lru.insert(2, attr);
+        lru.insert(2, attr.clone());
         assert!(lru.peek(&1).is_some());
         assert!(lru.peek(&2).is_some());
 
-        lru.insert(3, attr);
+        lru.insert(3, attr.clone());
         assert!(lru.peek(&1).is_some());
         assert!(lru.peek(&2).is_some());
         assert!(lru.peek(&3).is_some());
 
-        lru.insert(4, attr);
+        lru.insert(4, attr.clone());
         assert!(lru.peek(&1).is_none());
 
-        lru.insert(5, attr);
+        lru.insert(5, attr.clone());
         assert!(lru.peek(&2).is_none());
 
-        lru.insert(6, attr);
+        lru.insert(6, attr.clone());
         assert!(lru.peek(&3).is_none());
 
         lru.get(&4);
@@ -376,11 +439,11 @@ mod test {
         let lru: LruCache<u64, FileAttr> = LruCache::new(3);
         let attr: FileAttr = dir_attr(crate::fs::fileattr::InoFlag::LiveRoot).into();
 
-        lru.insert(1, attr);
-        lru.insert(2, attr);
-        lru.insert(3, attr);
+        lru.insert(1, attr.clone());
+        lru.insert(2, attr.clone());
+        lru.insert(3, attr.clone());
 
-        assert!(lru.get(&1).is_found());
+        assert!(lru.get(&1).is_some());
 
         lru.insert(4, attr);
 
@@ -395,9 +458,9 @@ mod test {
         let lru: LruCache<u64, FileAttr> = LruCache::new(3);
         let attr: FileAttr = dir_attr(crate::fs::fileattr::InoFlag::LiveRoot).into();
 
-        lru.insert(1, attr);
-        lru.insert(2, attr);
-        lru.insert(3, attr);
+        lru.insert(1, attr.clone());
+        lru.insert(2, attr.clone());
+        lru.insert(3, attr.clone());
 
         assert!(lru.peek(&1).is_some());
 
@@ -414,8 +477,8 @@ mod test {
         let lru: LruCache<u64, FileAttr> = LruCache::new(2);
         let attr: FileAttr = dir_attr(crate::fs::fileattr::InoFlag::LiveRoot).into();
 
-        lru.insert(10, attr);
-        lru.insert(20, attr);
+        lru.insert(10, attr.clone());
+        lru.insert(20, attr.clone());
 
         lru.insert(30, attr);
 
@@ -429,14 +492,14 @@ mod test {
         let lru: LruCache<u64, FileAttr> = LruCache::new(3);
         let attr: FileAttr = dir_attr(crate::fs::fileattr::InoFlag::LiveRoot).into();
 
-        lru.insert(1, attr);
-        lru.insert(2, attr);
-        lru.insert(3, attr);
+        lru.insert(1, attr.clone());
+        lru.insert(2, attr.clone());
+        lru.insert(3, attr.clone());
 
         assert!(lru.remove(&2).is_some());
         assert!(lru.peek(&2).is_none());
 
-        lru.insert(4, attr);
+        lru.insert(4, attr.clone());
         lru.insert(5, attr);
         let survivors = (lru.peek(&1).is_some() as u8) + (lru.peek(&3).is_some() as u8);
         assert_eq!(survivors, 1);
@@ -446,7 +509,7 @@ mod test {
     #[test]
     fn test_lru_get_miss_returns_none() {
         let lru: LruCache<u64, FileAttr> = LruCache::new(2);
-        assert!(!lru.get(&9999).is_found());
+        assert!(!lru.get(&9999).is_some());
         assert!(lru.peek(&9999).is_none());
         assert!(lru.remove(&9999).is_none());
     }
@@ -456,10 +519,10 @@ mod test {
         let lru: LruCache<u64, FileAttr> = LruCache::new(1);
         let attr: FileAttr = dir_attr(crate::fs::fileattr::InoFlag::LiveRoot).into();
 
-        lru.insert(1, attr);
+        lru.insert(1, attr.clone());
         assert!(lru.peek(&1).is_some());
 
-        assert!(lru.get(&1).is_found());
+        assert!(lru.get(&1).is_some());
 
         lru.insert(2, attr);
         assert!(lru.peek(&1).is_none());
@@ -471,11 +534,11 @@ mod test {
         let lru: LruCache<u64, FileAttr> = LruCache::new(3);
         let attr: FileAttr = dir_attr(crate::fs::fileattr::InoFlag::LiveRoot).into();
 
-        lru.insert(1, attr);
-        lru.insert(2, attr);
-        lru.insert(3, attr);
+        lru.insert(1, attr.clone());
+        lru.insert(2, attr.clone());
+        lru.insert(3, attr.clone());
 
-        assert!(lru.get(&2).is_found());
+        assert!(lru.get(&2).is_some());
 
         lru.insert(4, attr);
         assert!(lru.peek(&1).is_none());
@@ -489,13 +552,13 @@ mod test {
         let lru: LruCache<u64, FileAttr> = LruCache::new(3);
         let attr: FileAttr = dir_attr(crate::fs::fileattr::InoFlag::LiveRoot).into();
 
-        lru.insert(1, attr);
-        lru.insert(2, attr);
-        lru.insert(3, attr);
+        lru.insert(1, attr.clone());
+        lru.insert(2, attr.clone());
+        lru.insert(3, attr.clone());
 
-        assert!(lru.get(&3).is_found());
-        assert!(lru.get(&3).is_found());
-        assert!(lru.get(&3).is_found());
+        assert!(lru.get(&3).is_some());
+        assert!(lru.get(&3).is_some());
+        assert!(lru.get(&3).is_some());
 
         lru.insert(4, attr);
         assert!(lru.peek(&1).is_none());
@@ -622,7 +685,7 @@ mod test {
 
         lru.insert(1, attr);
         lru.with_get_mut(&1, |a| a.size = 12);
-        let attr = lru.get(&1).try_unwrap();
+        let attr = lru.get(&1).unwrap();
         assert_eq!(attr.size, 12);
     }
 }

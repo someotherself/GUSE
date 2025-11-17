@@ -25,7 +25,6 @@ use std::{num::NonZeroU32, path::PathBuf};
 use crate::fs::fileattr::{
     FileAttr, FileType, InoFlag, SetFileAttr, dir_attr, pair_to_system_time, system_time_to_pair,
 };
-use crate::fs::meta_db::DbReturn;
 use crate::fs::ops::readdir::{DirectoryEntry, DirectoryEntryPlus};
 use crate::fs::{GitFs, REPO_SHIFT, ROOT_INO, SourceTypes, repo};
 use crate::internals::sock::{socket_path, start_control_server};
@@ -756,10 +755,7 @@ impl fuser::Filesystem for GitFsAdapter {
         };
 
         let mut attr = match fs.update_db_metadata(set_stored_attr) {
-            Ok(a) => match a {
-                DbReturn::Found { value: a } => a,
-                _ => return reply.error(ENOENT),
-            },
+            Ok(a) => a,
             Err(e) => return reply.error(errno_from_anyhow(&e)),
         };
 
@@ -836,23 +832,6 @@ impl fuser::Filesystem for GitFsAdapter {
         }
     }
 
-    fn link(
-        &mut self,
-        _req: &fuser::Request<'_>,
-        ino: u64,
-        newparent: u64,
-        newname: &OsStr,
-        reply: ReplyEntry,
-    ) {
-        let fs = self.getfs();
-
-        let res = fs.link(ino, newparent, newname);
-        match res {
-            Ok(attr) => reply.entry(&TTL, &attr.into(), 0),
-            Err(e) => reply.error(errno_from_anyhow(&e)),
-        }
-    }
-
     fn create(
         &mut self,
         req: &fuser::Request<'_>,
@@ -899,7 +878,7 @@ impl From<FileAttr> for fuser::FileAttr {
                 fuser::FileType::RegularFile
             },
             perm: from.perm,
-            nlink: from.nlink,
+            nlink: 1,
             uid: from.uid,
             gid: from.gid,
             rdev: from.rdev,

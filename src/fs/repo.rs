@@ -18,10 +18,10 @@ use crate::{
     fs::{
         GitFs, LIVE_FOLDER, ObjectAttr, SourceTypes,
         builds::{BuildSession, inject::InjectedMetadata},
-        fileattr::{FileAttr, InoFlag},
+        fileattr::InoFlag,
     },
     inodes::VirtualIno,
-    internals::{cache::LruCache, cache_dentry::DentryLru},
+    internals::cache::{AttrCache, LruCache},
 };
 
 pub struct GitRepo {
@@ -34,9 +34,7 @@ pub struct GitRepo {
     pub inner: Mutex<Repository>,
     pub state: RwLock<State>,
     /// LruCache<target_ino, FileAttr>
-    pub attr_cache: LruCache<u64, FileAttr>,
-    /// LruCache<Dentry>
-    pub dentry_cache: DentryLru,
+    pub attr_cache: AttrCache,
     /// LruCache<ino, SourceTypes::RealFile>
     pub file_cache: LruCache<u64, SourceTypes>,
     pub injected_files: DashMap<u64, InjectedMetadata>,

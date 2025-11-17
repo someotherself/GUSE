@@ -7,8 +7,7 @@ use parking_lot::Mutex;
 use crate::{
     fs::{
         GitFs, Handle, SourceTypes,
-        fileattr::{FileAttr, InoFlag, ObjectAttr, StorageNode, file_attr},
-        meta_db::DbReturn,
+        fileattr::{FileAttr, InoFlag, ObjectAttr, file_attr},
         ops::readdir::DirectoryStreamCookie,
         repo::VirtualNode,
     },
@@ -143,25 +142,22 @@ fn log_entries(
     };
 
     let mut log_entries: BTreeMap<OsString, (u64, ObjectAttr)> = BTreeMap::new();
-    let mut nodes: Vec<StorageNode> = Vec::with_capacity(entries.len());
+    let mut nodes: Vec<FileAttr> = Vec::with_capacity(entries.len());
     for e in entries {
         let name = OsString::from(format!("{}{file_ext}", e.name.display()));
-        let new_ino = match fs.exists_by_name(parent, &e.name)? {
-            DbReturn::Found { value: ino } => ino,
-            DbReturn::Missing => {
+        let new_ino = match fs.exists_by_name(parent, &e.name) {
+            Ok(ino) => ino,
+            Err(_) => {
                 let new_ino = fs.next_inode_checked(parent)?;
                 let mut attr: FileAttr = file_attr(InoFlag::InsideSnap).into();
                 attr.oid = e.oid;
                 attr.ino = new_ino;
                 attr.size = e.size;
-                nodes.push(StorageNode {
-                    parent_ino: parent,
-                    name: name.clone(),
-                    attr,
-                });
+                attr.name = name.clone();
+                attr.parent_ino = parent;
+                nodes.push(attr);
                 new_ino
             }
-            DbReturn::Negative => continue,
         };
         // Format the name as 0001.<7char oid>.<orig file ext> (0001_e1ca722.txt)
         log_entries.insert(name, (new_ino, e));
