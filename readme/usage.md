@@ -55,10 +55,8 @@ cd live
 ```
 
 ```
-Inside the new repository there will only be a folder called "live".
+Inside the new repository there will only be a folder called "live". The live folder will contain an empty, initialized git repository.
 Inside the "live" folder is where all the user files and folders can be created normally. The user only has write permissions inside the live folder.
-
-Any snapshots (commits/not implemented) wil be displayed in the same folder as live.
 ```
 
 ### 2. Fetched repositories
@@ -83,12 +81,19 @@ This fetches the following:
 +------------------------+---------------------------------+
 ```
 
-Inside the new repo, the commits will be grouped by MONTH.
+Inside the new repo, the commits will be grouped by MONTH. The MONTH folders, by default, will contains commits from main/master.
 Inside the MONTH folders, each commit will be found in a directory. The folder name followed the format:
 ```
 Snap001_6fd06aa
 001 -> Consecutive numbers, in order of commit time
 6fd06aa -> Commit HASH (Oid) as 
+```
+Optionally, there can be the following folders: Branches, Pr, PrMerge, Tags. These are only created if they exist in the remote.
+```
+Pr: Only open Pr's will show and will contain folder with number Pr number as name. Each folder contains the commits made on the Pr, since the branch was created.
+PrMerge: Contains a folder for each open Pr, but will only contain the syntethic commit created by Github.
+Branches: Contains a folder for each branch with the name of the branch. Contains all the commits made on the branch since it was created. A git merge-base is done with main/master and then with the other branches as fall back.
+Tags: Contains a folder for each tag, with the name of the tag. Only the single tag commit can be found inside.
 ```
 
 ```bash
@@ -97,11 +102,11 @@ cd MOUNT
 mkdir github.tokio-rs.tokio.git
 ls tokio
 2016-07  2017-05  2018-03  2019-01  2019-11  2020-09  2021-07  2022-05  2023-03  2024-01  2024-11  2025-09
-2016-08  2017-06  2018-04  2019-02  2019-12  2020-10  2021-08  2022-06  2023-04  2024-02  2024-12  live
-2016-09  2017-07  2018-05  2019-03  2020-01  2020-11  2021-09  2022-07  2023-05  2024-03  2025-01
-2016-10  2017-08  2018-06  2019-04  2020-02  2020-12  2021-10  2022-08  2023-06  2024-04  2025-02
-2016-11  2017-09  2018-07  2019-05  2020-03  2021-01  2021-11  2022-09  2023-07  2024-05  2025-03
-2016-12  2017-10  2018-08  2019-06  2020-04  2021-02  2021-12  2022-10  2023-08  2024-06  2025-04
+2016-08  2017-06  2018-04  2019-02  2019-12  2020-10  2021-08  2022-06  2023-04  2024-02  2024-12  Branches
+2016-09  2017-07  2018-05  2019-03  2020-01  2020-11  2021-09  2022-07  2023-05  2024-03  2025-01  Pr
+2016-10  2017-08  2018-06  2019-04  2020-02  2020-12  2021-10  2022-08  2023-06  2024-04  2025-02  PrMerge
+2016-11  2017-09  2018-07  2019-05  2020-03  2021-01  2021-11  2022-09  2023-07  2024-05  2025-03  live
+2016-12  2017-10  2018-08  2019-06  2020-04  2021-02  2021-12  2022-10  2023-08  2024-06  2025-04  Tags
 2017-01  2017-11  2018-09  2019-07  2020-05  2021-03  2022-01  2022-11  2023-09  2024-07  2025-05
 2017-02  2017-12  2018-10  2019-08  2020-06  2021-04  2022-02  2022-12  2023-10  2024-08  2025-06
 2017-03  2018-01  2018-11  2019-09  2020-07  2021-05  2022-03  2023-01  2023-11  2024-09  2025-07
@@ -173,7 +178,7 @@ cat 2024-06@
 
 cd 2024-06
 cat Snap001_75c953b@
--> Will output the same as git show 75c953b (TODO)
+-> Will output the same as git show 75c953b
 ``` 
 
 ## Commit-history
