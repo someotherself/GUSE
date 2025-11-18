@@ -13,7 +13,7 @@ pub fn rmdir_live(fs: &GitFs, parent: NormalIno, name: &OsStr) -> anyhow::Result
         bail!(std::io::Error::from_raw_os_error(libc::ENOENT))
     };
     std::fs::remove_dir(path)?;
-    fs.remove_db_entry(parent, name)?;
+    fs.set_inactive(parent.into(), name)?;
     {
         let _ = fs.notifier.try_send(InvalMsg::Entry {
             parent: parent.into(),
@@ -30,7 +30,7 @@ pub fn rmdir_live(fs: &GitFs, parent: NormalIno, name: &OsStr) -> anyhow::Result
 }
 
 pub fn rmdir_git(fs: &GitFs, parent: NormalIno, name: &OsStr) -> anyhow::Result<()> {
-    fs.remove_db_entry(parent, name)?;
+    fs.set_inactive(parent.into(), name)?;
     {
         let _ = fs.notifier.try_send(InvalMsg::Entry {
             parent: parent.to_norm_u64(),

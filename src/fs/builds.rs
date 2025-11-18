@@ -1,7 +1,4 @@
-use std::{
-    path::PathBuf,
-    sync::atomic::{AtomicBool, AtomicUsize},
-};
+use std::path::PathBuf;
 
 use git2::Oid;
 use tempfile::TempDir;
@@ -22,8 +19,6 @@ pub mod runtime;
 pub struct BuildSession {
     /// Relative path to tempdir
     pub folder: TempDir,
-    pub open_count: AtomicUsize,
-    pub pinned: AtomicBool,
 }
 
 /// Used by readdir, create, mkdir and link

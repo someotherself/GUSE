@@ -7,10 +7,7 @@ use std::{
     collections::{BTreeMap, BTreeSet, HashMap, HashSet},
     ffi::{OsStr, OsString},
     path::{Path, PathBuf},
-    sync::{
-        Arc,
-        atomic::{AtomicBool, AtomicUsize},
-    },
+    sync::Arc,
     time::{Duration, SystemTime},
 };
 
@@ -47,17 +44,12 @@ pub struct State {
     pub vdir_cache: BTreeMap<VirtualIno, VirtualNode>,
     /// Oid = Commit Oid
     pub build_sessions: HashMap<Oid, Arc<BuildSession>>,
-    /// Map of the Snap and Month folders
-    ///
-    /// <folder name, (MONTH name, Snap name)>
-    /// TODO: remove and add to snapshots
-    pub snaps_map: HashMap<Oid, (OsString, OsString)>,
     /// Maps all the commits to one of more refs
     pub snaps_to_ref: HashMap<Oid, BTreeSet<RefKind>>,
     /// Lists all the commits for a respective ref
     ///
     /// i64 -> commit_time -> seconds since EPOCH. Used to create MONTH and Snap folders
-    pub refs_to_snaps: HashMap<RefKind, Vec<(i64, Oid)>>, // HashMap<RefKind, Vec<(Oid, short name)>>
+    pub refs_to_snaps: HashMap<RefKind, Vec<(i64, Oid)>>,
     /// Lists the unique namespace types
     ///
     /// To keep track which kinds of refs are available (branches, tags, pr, pr-merge)
@@ -862,11 +854,7 @@ impl GitRepo {
         let folder = tempfile::Builder::new()
             .prefix(&format!("build_{}", &commit_oid.to_string()[..=7]))
             .tempdir_in(build_folder)?;
-        let session = Arc::new(BuildSession {
-            folder,
-            open_count: AtomicUsize::new(0),
-            pinned: AtomicBool::new(false),
-        });
+        let session = Arc::new(BuildSession { folder });
         Ok(session)
     }
 
@@ -884,11 +872,7 @@ impl GitRepo {
                 let folder = tempfile::Builder::new()
                     .prefix(&format!("build_{}", &commit_oid.to_string()[..=7]))
                     .tempdir_in(build_folder)?;
-                let session = Arc::new(BuildSession {
-                    folder,
-                    open_count: AtomicUsize::new(0),
-                    pinned: AtomicBool::new(false),
-                });
+                let session = Arc::new(BuildSession { folder });
                 slot.insert(session.clone());
                 Ok(session)
             }

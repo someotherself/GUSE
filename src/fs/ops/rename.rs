@@ -99,25 +99,9 @@ pub fn rename_git_build(
     new_parent: NormalIno,
     new_name: &OsStr,
 ) -> anyhow::Result<()> {
-    let dest_in_build = fs.is_in_build(new_parent)?;
-    let oid = fs.get_oid_from_db(new_parent.into())?;
-    let is_commit_folder = fs.is_commit(new_parent, oid)?;
-    if !dest_in_build && !is_commit_folder {
-        bail!(format!("New parent {} not allowed", new_parent));
-    }
     let src_attr = fs
         .get_metadata_by_name(old_parent, old_name)?
         .ok_or_else(|| anyhow!(std::io::Error::from_raw_os_error(libc::ENOENT)))?;
-
-    let mut dest_exists = false;
-
-    if fs.exists_by_name(new_parent.into(), new_name).is_ok() {
-        dest_exists = true;
-    };
-
-    if dest_exists {
-        fs.remove_db_entry(new_parent, new_name)?;
-    }
 
     let mut new_attr = src_attr.clone();
     new_attr.parent_ino = new_parent.into();

@@ -88,6 +88,15 @@ impl AttrCache {
         }
     }
 
+    pub fn set_inactive(&self, key: &(u64, OsString)) -> Option<u64> {
+        let target = self.names_map.remove(key)?.1;
+        self.with_get_mut(&target, |a| {
+            a.name = OsString::from("");
+            a.parent_ino = 0;
+        });
+        Some(target)
+    }
+
     pub fn insert_many<I>(&self, entries: I)
     where
         I: IntoIterator<Item = FileAttr>,

@@ -11,7 +11,7 @@ pub fn unlink_live(fs: &GitFs, parent: u64, name: &OsStr) -> anyhow::Result<()> 
     };
     let path = fs.build_full_path(parent.into())?.join(name);
     std::fs::remove_file(path)?;
-    fs.remove_db_entry(parent.into(), name)?;
+    fs.set_inactive(parent, name)?;
 
     let _ = fs.notifier.try_send(InvalMsg::Entry {
         parent,
@@ -27,22 +27,19 @@ pub fn unlink_live(fs: &GitFs, parent: u64, name: &OsStr) -> anyhow::Result<()> 
 }
 
 pub fn unlink_build_dir(fs: &GitFs, parent: NormalIno, name: &OsStr) -> anyhow::Result<()> {
-    let path = {
-        let commit_oid = fs.get_oid_from_db(parent.into())?;
-        let repo = fs.get_repo(parent.to_norm_u64())?;
-        let build_root = &repo.build_dir;
-        let session = repo.get_or_init_build_session(commit_oid, build_root)?;
-        session.folder.path().to_path_buf()
-    };
-
     let Some(attr) = fs.get_metadata_by_name(parent, name)? else {
         return Ok(());
+    };
+    let path = {
+        let repo = fs.get_repo(parent.to_norm_u64())?;
+        let build_root = &repo.build_dir;
+        let session = repo.get_or_init_build_session(attr.oid, build_root)?;
+        session.folder.path().to_path_buf()
     };
     if let Some(uuid) = attr.uuid {
         std::fs::remove_file(path.join(uuid))?;
     }
-    tracing::info!("Unlinking {}", attr.ino);
-    fs.remove_db_entry(parent, name)?;
+    fs.set_inactive(parent.into(), name)?;
 
     let _ = fs.notifier.try_send(InvalMsg::Entry {
         parent: parent.to_norm_u64(),

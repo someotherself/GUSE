@@ -382,7 +382,6 @@ impl GitFs {
             res_inodes: HashSet::new(),
             vdir_cache: BTreeMap::new(),
             build_sessions: HashMap::new(),
-            snaps_map: HashMap::new(),
             refs_to_snaps: HashMap::new(),
             snaps_to_ref: HashMap::new(),
             unique_namespaces: HashSet::new(),
@@ -559,7 +558,6 @@ impl GitFs {
             res_inodes: HashSet::new(),
             vdir_cache: BTreeMap::new(),
             build_sessions: HashMap::new(),
-            snaps_map: HashMap::new(),
             refs_to_snaps: HashMap::new(),
             snaps_to_ref: HashMap::new(),
             unique_namespaces: HashSet::new(),
@@ -729,8 +727,8 @@ impl GitFs {
             r#"
             CREATE TABLE IF NOT EXISTS inode_map (
                 inode        INTEGER NOT NULL,
-                parent_inode INTEGER NOT NULL,
-                name         BLOB    NOT NULL,
+                parent_inode INTEGER,
+                name         BLOB,
                 oid          TEXT    NOT NULL,
                 git_mode     INTEGER NOT NULL,
                 size         INTEGER NOT NULL,
@@ -747,7 +745,6 @@ impl GitFs {
                 flags        INTEGER NOT NULL,
                 uuid         TEXT,
                 PRIMARY KEY (inode),
-                UNIQUE (parent_inode, name),
                 FOREIGN KEY (parent_inode)
                     REFERENCES inode_map(inode)
                     ON DELETE CASCADE
@@ -1567,7 +1564,6 @@ impl GitFs {
             .context("writer_tx error on update_db_metadata")?;
 
         if cache_res.is_err() {
-            tracing::error!("update_db_record cache err {}", target_ino);
             rx.recv()
                 .context("writer_rx disc on update_db_metadata")??;
         }
@@ -1861,6 +1857,38 @@ impl GitFs {
         Ok(attr)
     }
 
+    pub fn set_inactive(&self, parent: u64, target_name: &OsStr) -> anyhow::Result<()> {
+        let repo_id = GitFs::ino_to_repo_id(parent);
+        let repo = self.get_repo(parent)?;
+        let cache_res = repo
+            .attr_cache
+            .set_inactive(&(parent, target_name.to_os_string()));
+        let writer_tx = {
+            let guard = self
+                .conn_list
+                .get(&repo_id)
+                .ok_or_else(|| anyhow::anyhow!("No db for repo id {repo_id}"))?;
+            guard.writer_tx.clone()
+        };
+
+        let (tx, rx) = oneshot::<()>();
+        let tx = if cache_res.is_some() { None } else { Some(tx) };
+        let msg = DbWriteMsg::SetInactive {
+            parent_ino: parent.into(),
+            target_name: target_name.to_os_string(),
+            resp: tx,
+        };
+        writer_tx
+            .send(msg)
+            .context("writer_tx error on update_db_record")?;
+
+        if cache_res.is_none() {
+            rx.recv().context("writer_rx disc on write_inodes")??;
+        }
+
+        Ok(())
+    }
+
     fn get_builctx_metadata(&self, ino: NormalIno) -> anyhow::Result<BuildCtxMetadata> {
         if let Ok(meta) = self.get_builctx_metadata_from_cache(ino) {
             return Ok(meta);
@@ -1994,7 +2022,6 @@ impl GitFs {
             .context("writer_tx error on update_size_in_db")?;
 
         if size_res.is_err() {
-            tracing::error!("update_size_in_db cache err {}", ino);
             rx.recv()
                 .context("writer_rx disc on update_size_in_db for target")??;
         }
@@ -2053,7 +2080,6 @@ impl GitFs {
             .context("writer_tx error on update_db_record")?;
 
         if cache_res.is_err() {
-            tracing::error!("update_db_record cache err {}", target_ino);
             rx.recv().context("writer_rx disc on write_inodes")??;
         }
 
@@ -2247,7 +2273,6 @@ impl GitFs {
             .context("writer_tx error on write_dentry")?;
 
         if cache_res.is_err() {
-            tracing::error!("update_db_record cache err {}", target_ino);
             rx.recv().context("writer_rx disc on write_inodes")??;
         }
 

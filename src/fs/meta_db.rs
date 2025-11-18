@@ -109,6 +109,11 @@ pub enum DbWriteMsg {
         target_name: OsString,
         resp: Option<Resp<()>>,
     },
+    SetInactive {
+        parent_ino: NormalIno,
+        target_name: OsString,
+        resp: Option<Resp<()>>,
+    },
 }
 
 fn spawn_repo_writer(
@@ -250,6 +255,25 @@ where
                 None => {
                     if let Err(e) = &res {
                         tracing::warn!("db remove_db_dentry failed: {e}");
+                    }
+                    Ok(())
+                }
+            }
+        }
+        DbWriteMsg::SetInactive {
+            parent_ino,
+            target_name,
+            resp,
+        } => {
+            let res = MetaDb::set_inactive(conn, parent_ino.into(), &target_name);
+            match resp {
+                Some(tx) => {
+                    results.push(tx);
+                    Ok(())
+                }
+                None => {
+                    if let Err(e) = &res {
+                        tracing::warn!("db set_inactive failed: {e}");
                     }
                     Ok(())
                 }
@@ -721,6 +745,24 @@ impl MetaDb {
         DELETE FROM inode_map
         WHERE parent_inode = ?1 AND name = ?2
         "#,
+            params![parent_ino as i64, target_name.as_bytes()],
+        )?;
+
+        Ok(())
+    }
+
+    pub fn set_inactive<C>(tx: &C, parent_ino: u64, target_name: &OsStr) -> anyhow::Result<()>
+    where
+        C: std::ops::Deref<Target = rusqlite::Connection>,
+    {
+        tx.execute(
+            r#"
+            UPDATE inode_map
+            SET parent_inode = NULL,
+                name         = NULL
+            WHERE parent_inode = ?1
+            AND name         = ?2
+            "#,
             params![parent_ino as i64, target_name.as_bytes()],
         )?;
 
