@@ -40,7 +40,7 @@ type ParentInode = u64;
 
 pub struct AttrCache {
     pub cache: LruCache<TargetInode, FileAttr>,
-    pub names_map: DashMap<(TargetInode, OsString), TargetInode>,
+    pub names_map: DashMap<(ParentInode, OsString), TargetInode>,
 }
 
 impl AttrCache {
@@ -69,8 +69,8 @@ impl AttrCache {
     }
 
     pub fn remove(&self, key: &u64) {
-        if let Some(evicted) = self.cache.remove(key) {
-            self.names_map.remove(&(evicted.parent_ino, evicted.name));
+        if let Some(removed) = self.cache.remove(key) {
+            self.names_map.remove(&(removed.parent_ino, removed.name));
         }
     }
 

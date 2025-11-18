@@ -80,8 +80,7 @@ pub fn create_git(
         repo.file_cache.insert(ino, real_file);
     }
 
-    let nodes = vec![attr.clone()];
-    fs.write_inodes_to_db(nodes)?;
+    fs.write_inodes_to_db(vec![attr.clone()])?;
     let _ = fs.notifier.try_send(InvalMsg::Store {
         ino,
         off: 0,

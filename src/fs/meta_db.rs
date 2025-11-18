@@ -1,5 +1,4 @@
 use std::{
-    collections::HashSet,
     ffi::{OsStr, OsString},
     os::unix::ffi::{OsStrExt, OsStringExt},
     path::{Path, PathBuf},
@@ -102,8 +101,6 @@ pub enum DbWriteMsg {
         resp: Option<Resp<()>>,
     },
     UpdateRecord {
-        old_parent: NormalIno,
-        old_name: OsString,
         node: FileAttr,
         resp: Option<Resp<()>>,
     },
@@ -224,13 +221,8 @@ where
                 }
             }
         }
-        DbWriteMsg::UpdateRecord {
-            old_parent,
-            old_name,
-            node,
-            resp,
-        } => {
-            let res = MetaDb::update_db_record(conn, old_parent.into(), &old_name, node);
+        DbWriteMsg::UpdateRecord { node, resp } => {
+            let res = MetaDb::update_db_record(conn, node);
             match resp {
                 Some(tx) => {
                     results.push(tx);
@@ -420,16 +412,6 @@ impl MetaDb {
         Ok(())
     }
 
-    pub fn populate_res_inodes(conn: &rusqlite::Connection) -> anyhow::Result<HashSet<u64>> {
-        let mut set = HashSet::new();
-        let mut stmt = conn.prepare("SELECT inode FROM inode_map")?;
-        let rows = stmt.query_map(params![], |row| row.get::<_, i64>(0))?;
-        for r in rows {
-            set.insert(r? as u64);
-        }
-        Ok(set)
-    }
-
     pub fn get_dir_parent(conn: &rusqlite::Connection, ino: NormalIno) -> anyhow::Result<u64> {
         let ino = ino.to_norm_u64();
         let parent: Option<i64> = conn
@@ -438,7 +420,6 @@ impl MetaDb {
                 SELECT parent_inode
                 FROM inode_map
                 WHERE inode = ?1
-                ORDER BY parent_inode
                 LIMIT 1
                 "#,
                 [ino as i64],
@@ -450,19 +431,6 @@ impl MetaDb {
             Some(p) => Ok(p as u64),
             None => Err(anyhow!("get_dir_parent: no parent found for dir ino={ino}")),
         }
-    }
-
-    pub fn count_children(conn: &rusqlite::Connection, ino: u64) -> anyhow::Result<usize> {
-        let mut stmt = conn.prepare(
-            "
-            SELECT COUNT(*) 
-            FROM inode_map
-            WHERE parent_inode = ?1
-            ",
-        )?;
-
-        let count: usize = stmt.query_row([ino], |row| row.get(0))?;
-        Ok(count)
     }
 
     pub fn read_children(
@@ -683,49 +651,67 @@ impl MetaDb {
         }
     }
 
-    pub fn get_name_in_parent(
-        conn: &rusqlite::Connection,
-        parent_ino: u64,
-        ino: u64,
-    ) -> anyhow::Result<OsString> {
-        let mut stmt = conn.prepare(
-            r#"
-        SELECT name
-        FROM inode_map
-        WHERE parent_inode = ?1 AND inode = ?2
-        "#,
-        )?;
-        let name_opt: Option<Vec<u8>> = stmt
-            .query_row(rusqlite::params![parent_ino as i64, ino as i64], |row| {
-                row.get(0)
-            })
-            .optional()?;
-
-        match name_opt {
-            Some(n) => Ok(OsString::from_vec(n)),
-            None => bail!("name not found for ino={ino} in parent={parent_ino}"),
-        }
-    }
-
     // Used by rename (mv)
-    pub fn update_db_record<C>(
-        tx: &C,
-        old_parent: u64,
-        old_name: &OsStr,
-        node: FileAttr,
-    ) -> anyhow::Result<()>
+    pub fn update_db_record<C>(tx: &C, attr: FileAttr) -> anyhow::Result<()>
     where
         C: std::ops::Deref<Target = rusqlite::Connection>,
     {
-        MetaDb::write_inodes_to_db(tx, vec![node])?;
-        MetaDb::remove_db_entry(tx, old_parent, old_name)?;
+        let (atime_secs, atime_nsecs) = system_time_to_pair(attr.atime);
+        let (mtime_secs, mtime_nsecs) = system_time_to_pair(attr.mtime);
+        let (ctime_secs, ctime_nsecs) = system_time_to_pair(attr.ctime);
+
+        let changed = tx.execute(
+            r#"
+            UPDATE inode_map
+               SET parent_inode = ?2,
+                   name         = ?3,
+                   oid          = ?4,
+                   git_mode     = ?5,
+                   size         = ?6,
+                   inode_flag   = ?7,
+                   uid          = ?8,
+                   gid          = ?9,
+                   atime_secs   = ?10,
+                   atime_nsecs  = ?11,
+                   mtime_secs   = ?12,
+                   mtime_nsecs  = ?13,
+                   ctime_secs   = ?14,
+                   ctime_nsecs  = ?15,
+                   rdev         = ?16,
+                   flags        = ?17,
+                   uuid         = ?18
+             WHERE inode = ?1
+            "#,
+            params![
+                attr.ino as i64,
+                attr.parent_ino,
+                attr.name.as_bytes(),
+                attr.oid.to_string(),
+                attr.git_mode as i64,
+                attr.size as i64,
+                attr.ino_flag as i64,
+                attr.uid as i64,
+                attr.gid as i64,
+                atime_secs,
+                atime_nsecs,
+                mtime_secs,
+                mtime_nsecs,
+                ctime_secs,
+                ctime_nsecs,
+                attr.rdev as i64,
+                attr.flags as i64,
+                attr.uuid.as_ref(),
+            ],
+        )?;
+
+        if changed == 0 {
+            // nothing updated: inode does not exist
+            anyhow::bail!("update_inode_from_attr: inode {} not found", attr.ino);
+        }
+
         Ok(())
     }
 
-    /// Will only remove the dentry and decrement the nlink in inode_map
-    ///
-    /// Record is removed from inode_map when there are no more open file handles
-    /// (see [`crate::fs::GitFs::release`])
     pub fn remove_db_entry<C>(tx: &C, parent_ino: u64, target_name: &OsStr) -> anyhow::Result<()>
     where
         C: std::ops::Deref<Target = rusqlite::Connection>,
@@ -786,7 +772,7 @@ impl MetaDb {
         conn: &rusqlite::Connection,
         parent_ino: u64,
         child_name: &OsStr,
-    ) -> anyhow::Result<FileAttr> {
+    ) -> anyhow::Result<Option<FileAttr>> {
         let mut stmt = conn.prepare(
             r#"
         SELECT
@@ -854,10 +840,7 @@ impl MetaDb {
             uuid,
         ) = match res {
             Ok(row) => row,
-            Err(rusqlite::Error::QueryReturnedNoRows) => {
-                bail!("Entry does not exist {}", child_name.display());
-            }
-            Err(e) => return Err(e.into()),
+            Err(_) => return Ok(None),
         };
 
         let oid = Oid::from_str(&oid)?;
@@ -896,7 +879,7 @@ impl MetaDb {
             uuid,
         };
 
-        Ok(attr)
+        Ok(Some(attr))
     }
 
     pub fn get_metadata(conn: &rusqlite::Connection, target_ino: u64) -> anyhow::Result<FileAttr> {
@@ -1019,7 +1002,7 @@ impl MetaDb {
         ino: u64,
     ) -> anyhow::Result<BuildCtxMetadata> {
         let sql = r#"
-        SELECT git_mode, oid, ino_flag, name
+        SELECT git_mode, oid, inode_flag, name
         FROM inode_map
         WHERE inode = ?1
         LIMIT 1

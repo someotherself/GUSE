@@ -72,11 +72,11 @@ pub fn lookup_live(
     name: &OsStr,
 ) -> anyhow::Result<Option<FileAttr>> {
     match fs.get_metadata_by_name(parent, name) {
-        Ok(value) => Ok(Some(value)),
+        Ok(attr) => Ok(attr),
         Err(_) => {
             fs::ops::readdir::readdir_live_dir(fs, parent)?;
             match fs.get_metadata_by_name(parent, name) {
-                Ok(attr) => Ok(Some(attr)),
+                Ok(attr) => Ok(attr),
                 Err(_) => Ok(None),
             }
         }
@@ -85,7 +85,7 @@ pub fn lookup_live(
 
 pub fn lookup_git(fs: &GitFs, parent: NormalIno, name: &OsStr) -> anyhow::Result<Option<FileAttr>> {
     match fs.get_metadata_by_name(parent, name) {
-        Ok(value) => Ok(Some(value)),
+        Ok(attr) => Ok(attr),
         Err(_) => {
             let p_flag = fs.get_ino_flag_from_db(parent)?;
             if p_flag == InoFlag::InsideSnap
@@ -94,8 +94,11 @@ pub fn lookup_git(fs: &GitFs, parent: NormalIno, name: &OsStr) -> anyhow::Result
             {
                 fs::ops::readdir::readdir_git_dir(fs, parent)?;
                 match fs.get_metadata_by_name(parent, name) {
-                    Ok(value) => Ok(Some(value)),
-                    Err(_) => Ok(None),
+                    Ok(attr) => Ok(attr),
+                    Err(_) => {
+                        tracing::error!("Lookup returned err");
+                        Ok(None)
+                    }
                 }
             } else {
                 Ok(None)

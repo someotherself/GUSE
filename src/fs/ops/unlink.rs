@@ -35,10 +35,13 @@ pub fn unlink_build_dir(fs: &GitFs, parent: NormalIno, name: &OsStr) -> anyhow::
         session.folder.path().to_path_buf()
     };
 
-    let attr = fs.get_metadata_by_name(parent, name)?;
+    let Some(attr) = fs.get_metadata_by_name(parent, name)? else {
+        return Ok(());
+    };
     if let Some(uuid) = attr.uuid {
         std::fs::remove_file(path.join(uuid))?;
     }
+    tracing::info!("Unlinking {}", attr.ino);
     fs.remove_db_entry(parent, name)?;
 
     let _ = fs.notifier.try_send(InvalMsg::Entry {
@@ -50,6 +53,5 @@ pub fn unlink_build_dir(fs: &GitFs, parent: NormalIno, name: &OsStr) -> anyhow::
         off: 0,
         len: 0,
     });
-
     Ok(())
 }

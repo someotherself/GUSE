@@ -258,6 +258,7 @@ impl fuser::Filesystem for GitFsAdapter {
         let fs = self.getfs();
         match fs.getattr(ino) {
             Err(err) => {
+                tracing::error!("getattr error or {}", ino);
                 reply.error(ENOENT);
             }
             Ok(attr) => reply.attr(&TTL, &attr.into()),
@@ -319,6 +320,7 @@ impl fuser::Filesystem for GitFsAdapter {
             Err(e) => {
                 if let Some(ioe) = e.downcast_ref::<std::io::Error>() {
                     if ioe.kind() == std::io::ErrorKind::NotFound {
+                        tracing::error!("unlink error or {} {}", parent, name.display());
                         reply.error(ENOENT)
                     } else {
                         error!(e = %e, "UNLINK");
@@ -344,6 +346,7 @@ impl fuser::Filesystem for GitFsAdapter {
             Err(e) => {
                 if let Some(ioe) = e.downcast_ref::<std::io::Error>() {
                     if ioe.kind() == std::io::ErrorKind::NotFound {
+                        tracing::error!("rmdir error or {} {}", parent, name.display());
                         reply.error(ENOENT)
                     } else {
                         error!(e = %e, "RMDIR");
@@ -371,6 +374,7 @@ impl fuser::Filesystem for GitFsAdapter {
             Ok(()) => reply.ok(),
             Err(e) => {
                 error!(e = %e);
+                tracing::error!("rename error or {} {}", parent, name.display());
                 reply.error(ENOENT)
             }
         }
@@ -414,7 +418,10 @@ impl fuser::Filesystem for GitFsAdapter {
 
         match fs.open(ino, read, write, truncate) {
             Ok(fh) => reply.opened(fh, open_flag),
-            Err(e) => reply.error(libc::ENOENT),
+            Err(e) => {
+                tracing::error!("open error or {}", ino);
+                reply.error(libc::ENOENT)
+            }
         }
     }
 

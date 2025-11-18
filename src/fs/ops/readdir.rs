@@ -117,7 +117,7 @@ pub fn readdir_repo_dir(fs: &GitFs, parent: NormalIno) -> anyhow::Result<Vec<Dir
     let repo_id = GitFs::ino_to_repo_id(parent);
 
     if !fs.repos_list.contains_key(&repo_id) {
-        bail!("Repo does not exist!")
+        bail!("Repo does not exist. ID: {}", repo_id)
     }
 
     let mut entries: Vec<DirectoryEntry> = vec![];
@@ -282,14 +282,12 @@ pub fn readdir_live_dir(fs: &GitFs, ino: NormalIno) -> anyhow::Result<Vec<Direct
 // 1 - ino is for a month folder -> show days folders
 // 2 - ino is for a commit or inside a commit -> show commit contents
 pub fn classify_inode(meta: &BuildCtxMetadata) -> anyhow::Result<DirCase> {
-    if (meta.mode == FileMode::Tree || meta.mode == FileMode::Commit) && meta.oid == Oid::zero() {
-        // Branch 1
-        if let Some((y, m)) = namespec::split_once_os(&meta.name, b'-')
-            && let (Some(year), Some(month)) =
-                (namespec::parse_i32_os(&y), namespec::parse_u32_os(&m))
-        {
-            return Ok(DirCase::Month { year, month });
-        }
+    if (meta.mode == FileMode::Tree || meta.mode == FileMode::Commit)
+        && meta.oid == Oid::zero()
+        && let Some((y, m)) = namespec::split_once_os(&meta.name, b'-')
+        && let (Some(year), Some(month)) = (namespec::parse_i32_os(&y), namespec::parse_u32_os(&m))
+    {
+        return Ok(DirCase::Month { year, month });
     }
 
     // Add Pr, Pr-Merge, Branch, Tags
@@ -306,7 +304,6 @@ pub fn classify_inode(meta: &BuildCtxMetadata) -> anyhow::Result<DirCase> {
         return Ok(DirCase::Tags);
     }
 
-    // Branch 2
     // Will be a commit_id for the root folder of the commit
     // Or a Tree or Blob for anything inside
     Ok(DirCase::Commit { oid: meta.oid })

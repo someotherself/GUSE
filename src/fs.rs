@@ -1079,45 +1079,6 @@ impl GitFs {
         }
     }
 
-    // #[instrument(level = "debug", skip(self), fields(ino = %ino, newparent = %newparent), ret(level = Level::DEBUG), err(Display))]
-    // pub fn link(&self, ino: u64, newparent: u64, newname: &OsStr) -> anyhow::Result<FileAttr> {
-    //     let ino: Inodes = ino.into();
-    //     let newparent: Inodes = newparent.into();
-    //     if newname.is_empty() || newname == "." || newname == ".." {
-    //         bail!(std::io::Error::from_raw_os_error(libc::EINVAL));
-    //     }
-
-    //     if memchr::memchr2(b'/', b'\\', newname.as_bytes()).is_some() {
-    //         tracing::error!("invalid name: contains '/' or '\\' {}", newname.display());
-    //         bail!(format!("Invalid name {}", newname.display()));
-    //     }
-
-    //     if self.read_only {
-    //         bail!("Filesystem is in read only");
-    //     }
-    //     if !self.exists(ino)? {
-    //         bail!(format!("Parent {} does not exist", ino));
-    //     }
-
-    //     let ctx = FsOperationContext::get_operation(self, ino);
-    //     match ctx? {
-    //         FsOperationContext::Root => {
-    //             tracing::error!("This directory is read only");
-    //             bail!("This directory is read only")
-    //         }
-    //         FsOperationContext::RepoDir => {
-    //             tracing::error!("This directory is read only");
-    //             bail!("This directory is read only")
-    //         }
-    //         FsOperationContext::InsideLiveDir => {
-    //             ops::link::link_live(self, ino.to_norm(), newparent.to_norm(), newname)
-    //         }
-    //         FsOperationContext::InsideGitDir => {
-    //             ops::link::link_git(self, ino.to_norm(), newparent.to_norm(), newname)
-    //         }
-    //     }
-    // }
-
     #[instrument(level = "debug", skip(self), fields(parent = %parent), ret(level = Level::DEBUG), err(Display))]
     pub fn create(
         &self,
@@ -1320,7 +1281,7 @@ impl GitFs {
         for entry in entries {
             let attr = self
                 .lookup(parent, &entry.name)?
-                .ok_or_else(|| anyhow!("Repo not found"))?;
+                .ok_or_else(|| anyhow!("Lookup failed for: {}", entry.name.display()))?;
             let entry_plus = DirectoryEntryPlus { entry, attr };
             entries_plus.push(entry_plus);
         }
@@ -1543,6 +1504,7 @@ impl GitFs {
         ino_flag: InoFlag,
     ) -> anyhow::Result<FileAttr> {
         let metadata = path.as_ref().metadata()?;
+        let name = path.as_ref().file_name().unwrap_or(OsStr::new(""));
         let std_type = metadata.file_type();
 
         let mut attr: FileAttr = if std_type.is_dir() {
@@ -1564,6 +1526,7 @@ impl GitFs {
             UNIX_EPOCH - Duration::new(u64::try_from(-secs)?, nsecs)
         };
 
+        attr.name = name.to_os_string();
         attr.atime = atime;
         attr.mtime = mtime;
         attr.crtime = crtime;
@@ -1582,7 +1545,7 @@ impl GitFs {
     pub fn update_db_metadata(&self, stored_attr: SetFileAttr) -> anyhow::Result<FileAttr> {
         let target_ino = stored_attr.ino;
         let cache_res = self.update_attr_in_cache(&stored_attr.clone());
-        // Update the DB
+        // Update the DB get_metadata
         let repo_id = GitFs::ino_to_repo_id(target_ino);
         let writer_tx = {
             let guard = self
@@ -1604,7 +1567,7 @@ impl GitFs {
             .context("writer_tx error on update_db_metadata")?;
 
         if cache_res.is_err() {
-            tracing::error!("update_db_metadata cache err {}", target_ino);
+            tracing::error!("update_db_record cache err {}", target_ino);
             rx.recv()
                 .context("writer_rx disc on update_db_metadata")??;
         }
@@ -1612,7 +1575,13 @@ impl GitFs {
         // Fetch the new metadata
         match cache_res {
             Ok(attr) => Ok(attr),
-            Err(_) => self.get_metadata(target_ino),
+            Err(_) => {
+                let res = self.get_metadata(target_ino);
+                if res.is_err() {
+                    tracing::error!("getattr failed for {}", target_ino)
+                };
+                res
+            }
         }
     }
 
@@ -1772,16 +1741,6 @@ impl GitFs {
         MetaDb::get_dir_parent(&conn, ino.into())
     }
 
-    pub fn count_children(&self, ino: NormalIno) -> anyhow::Result<usize> {
-        let repo_id = GitFs::ino_to_repo_id(ino.into());
-        let repo_db = self
-            .conn_list
-            .get(&repo_id)
-            .ok_or_else(|| anyhow::anyhow!("no db"))?;
-        let conn = repo_db.ro_pool.get()?;
-        MetaDb::count_children(&conn, ino.to_norm_u64())
-    }
-
     pub fn read_children(&self, parent_ino: NormalIno) -> anyhow::Result<Vec<DirectoryEntry>> {
         let repo_id = GitFs::ino_to_repo_id(parent_ino.into());
         let repo_db = self
@@ -1875,10 +1834,8 @@ impl GitFs {
         &self,
         parent_ino: NormalIno,
         child_name: &OsStr,
-    ) -> anyhow::Result<FileAttr> {
-        if let Ok(res) = self.lookup_in_cache(parent_ino.into(), child_name)
-            && let Some(attr) = res
-        {
+    ) -> anyhow::Result<Option<FileAttr>> {
+        if let Ok(attr) = self.lookup_in_cache(parent_ino.into(), child_name) {
             return Ok(attr);
         }
         let repo_id = GitFs::ino_to_repo_id(parent_ino.into());
@@ -2045,8 +2002,6 @@ impl GitFs {
         Ok(())
     }
 
-    /// Removes the directory entry (from dentries) for the target and decrements nlinks
-    ///
     /// Send and forget but will log errors as `tracing::error!`
     fn remove_db_entry(&self, parent_ino: NormalIno, target_name: &OsStr) -> anyhow::Result<()> {
         let repo_id = GitFs::ino_to_repo_id(parent_ino.into());
@@ -2072,22 +2027,6 @@ impl GitFs {
         Ok(())
     }
 
-    /// Returns a sender for `DbWriteMsg` to be used when no reference to `GitFs` is available
-    fn prepare_writemsg(
-        &self,
-        ino: NormalIno,
-    ) -> anyhow::Result<crossbeam_channel::Sender<DbWriteMsg>> {
-        let repo_id = GitFs::ino_to_repo_id(ino.into());
-        let writer_tx = {
-            let guard = self
-                .conn_list
-                .get(&repo_id)
-                .ok_or_else(|| anyhow::anyhow!("No db for repo id {repo_id}"))?;
-            guard.writer_tx.clone()
-        };
-        Ok(writer_tx)
-    }
-
     /// Send and forget but will log errors as `tracing::error!`
     fn update_db_record(
         &self,
@@ -2108,17 +2047,13 @@ impl GitFs {
 
         let (tx, rx) = oneshot::<()>();
         let tx = if cache_res.is_ok() { None } else { Some(tx) };
-        let msg = DbWriteMsg::UpdateRecord {
-            old_parent,
-            old_name: old_name.to_os_string(),
-            node,
-            resp: tx,
-        };
+        let msg = DbWriteMsg::UpdateRecord { node, resp: tx };
         writer_tx
             .send(msg)
             .context("writer_tx error on update_db_record")?;
 
         if cache_res.is_err() {
+            tracing::error!("update_db_record cache err {}", target_ino);
             rx.recv().context("writer_rx disc on write_inodes")??;
         }
 
@@ -2291,10 +2226,10 @@ impl GitFs {
         if nodes.is_empty() {
             return Ok(());
         }
-        let ino = nodes[0].ino;
-        let cache_res = self.write_inodes_to_cache(ino, nodes.clone());
+        let target_ino = nodes[0].ino;
+        let cache_res = self.write_inodes_to_cache(target_ino, nodes.clone());
 
-        let repo_id = GitFs::ino_to_repo_id(ino);
+        let repo_id = GitFs::ino_to_repo_id(target_ino);
         let writer_tx = {
             let guard = self
                 .conn_list
@@ -2312,6 +2247,7 @@ impl GitFs {
             .context("writer_tx error on write_dentry")?;
 
         if cache_res.is_err() {
+            tracing::error!("update_db_record cache err {}", target_ino);
             rx.recv().context("writer_rx disc on write_inodes")??;
         }
 

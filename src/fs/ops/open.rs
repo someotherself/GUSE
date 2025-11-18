@@ -60,7 +60,9 @@ pub fn open_git(
                 Err(_) => {
                     let repo = fs.get_repo(ino.to_norm_u64())?;
                     let build_root = &repo.build_dir;
-                    let attr = fs.get_metadata(ino.into())?;
+                    let Ok(attr) = fs.get_metadata(ino.into()) else {
+                        bail!("Open failed")
+                    };
                     let session = repo.get_or_init_build_session(metadata.oid, build_root)?;
                     let path = if let Some(uuid) = attr.uuid {
                         session.folder.path().join(uuid)

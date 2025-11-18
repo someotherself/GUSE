@@ -1,6 +1,9 @@
-use std::ffi::{OsStr, OsString};
+use std::{
+    ffi::{OsStr, OsString},
+    time::SystemTime,
+};
 
-use anyhow::bail;
+use anyhow::{anyhow, bail};
 
 use crate::{
     fs::{GitFs, fileattr::InoFlag},
@@ -21,14 +24,18 @@ pub fn rename_live(
         bail!(format!("New parent {} not allowed", new_parent));
     }
 
-    let src_attr = fs.get_metadata_by_name(old_parent, old_name)?;
+    let src_attr = fs
+        .get_metadata_by_name(old_parent, old_name)?
+        .ok_or_else(|| anyhow!(std::io::Error::from_raw_os_error(libc::ENOENT)))?;
 
     let mut dest_exists = false;
 
-    if let Ok(value) = fs.get_metadata_by_name(new_parent, new_name) {
+    if let Ok(value) = fs.get_metadata_by_name(new_parent, new_name)
+        && let Some(attr) = value
+    {
         dest_exists = true;
 
-        if value.kind != src_attr.kind {
+        if attr.kind != src_attr.kind {
             bail!("Source and destination are not the same type")
         }
     };
@@ -98,23 +105,24 @@ pub fn rename_git_build(
     if !dest_in_build && !is_commit_folder {
         bail!(format!("New parent {} not allowed", new_parent));
     }
-    let src_attr = fs.get_metadata_by_name(old_parent, old_name)?;
+    let src_attr = fs
+        .get_metadata_by_name(old_parent, old_name)?
+        .ok_or_else(|| anyhow!(std::io::Error::from_raw_os_error(libc::ENOENT)))?;
 
     let mut dest_exists = false;
 
-    if let Ok(value) = fs.get_metadata_by_name(new_parent, new_name) {
+    if fs.exists_by_name(new_parent.into(), new_name).is_ok() {
         dest_exists = true;
-
-        if value.kind != src_attr.kind {
-            bail!("Source and destination are not the same type")
-        }
     };
 
     if dest_exists {
         fs.remove_db_entry(new_parent, new_name)?;
     }
 
-    let new_attr = src_attr.clone();
+    let mut new_attr = src_attr.clone();
+    new_attr.parent_ino = new_parent.into();
+    new_attr.name = new_name.to_os_string();
+    new_attr.ctime = SystemTime::now();
 
     fs.update_db_record(old_parent, old_name, new_attr)?;
 
