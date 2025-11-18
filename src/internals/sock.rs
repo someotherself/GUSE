@@ -182,7 +182,7 @@ pub fn send_req(sock: &Path, req: &ControlReq) -> anyhow::Result<ControlRes> {
             }
             other => {
                 final_res = Some(other);
-                println!("Ending GUSE chase.")
+                println!("Ending GUSE command.")
             }
         }
     }

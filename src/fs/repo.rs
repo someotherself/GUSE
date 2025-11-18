@@ -135,6 +135,19 @@ impl RefKind {
         if full.starts_with("refs/tags/") {
             return Some(RefKind::Tag(short.into()));
         }
+
+        if full.starts_with("refs/merge-requests/") {
+            let parts: Vec<_> = full.split('/').collect();
+            if parts.len() == 4 {
+                let id = parts[2];
+                match parts[3] {
+                    "head" => Some(RefKind::Pr(id.into())),
+                    "merge" => Some(RefKind::PrMerge(id.into())),
+                    _ => None,
+                };
+            }
+        }
+
         if full.starts_with("refs/remotes/") {
             if full.contains("/pr/") {
                 Some(RefKind::Pr(short.into()))
@@ -231,21 +244,23 @@ impl GitRepo {
                 snaps_to_ref.entry(tip).or_default().insert(rf.clone());
                 continue;
             }
-
             if matches!(rf, RefKind::Pr(_)) {
                 let merge_name = name.replace("/pr/", "/pr-merge/");
                 // If pr merge ref does not exist, PR was probably closed or merged. Ignore these for now.
                 let Ok(merge_ref) = repo.find_reference(&merge_name) else {
                     continue;
                 };
-                let merge_commit = merge_ref.peel_to_commit()?;
-                let base = merge_commit.parent(0)?;
-                let head = merge_commit.parent(1)?;
-                revwalk.reset()?;
-                revwalk.push(head.id())?;
-                revwalk.hide(base.id())?;
+                let Ok(merge_commit) = merge_ref.peel_to_commit() else {
+                    continue;
+                };
+                if let Ok(base) = merge_commit.parent(0)
+                    && let Ok(head) = merge_commit.parent(1)
+                {
+                    revwalk.reset()?;
+                    revwalk.push(head.id())?;
+                    revwalk.hide(base.id())?;
+                }
             }
-
             if matches!(rf, RefKind::Branch(_)) {
                 let mut target_ref = all_namespaces
                     .iter()
@@ -262,7 +277,9 @@ impl GitRepo {
                 if let Some(main_ref) = target_ref {
                     let main_commit = main_ref.peel_to_commit()?.id();
 
-                    let base = repo.merge_base(tip, main_commit)?;
+                    let Ok(base) = repo.merge_base(tip, main_commit) else {
+                        continue;
+                    };
                     revwalk.reset()?;
                     revwalk.push_range(&format!("{}..{}", base, tip))?;
                 }
@@ -489,9 +506,14 @@ impl GitRepo {
             "+refs/tags/*:refs/tags/*".to_string(),
             "+HEAD:refs/remotes/upstream/HEAD".to_string(),
         ];
-        if url.contains("github") {
+        if url.contains("github.com") {
             refspecs.push("+refs/pull/*/head:refs/remotes/upstream/pr/*".to_string());
             refspecs.push("+refs/pull/*/merge:refs/remotes/upstream/pr-merge/*".to_string());
+        }
+        if url.contains("gitlab.com") {
+            refspecs.push("+refs/merge-requests/*/head:refs/remotes/upstream/pr/*".to_string());
+            refspecs
+                .push("+refs/merge-requests/*/merge:refs/remotes/upstream/pr-merge/*".to_string());
         }
 
         let refs_as_str: Vec<&str> = refspecs.iter().map(|s| s.as_str()).collect();
