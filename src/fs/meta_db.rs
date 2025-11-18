@@ -351,33 +351,23 @@ where
             target_name,
             resp,
         } => {
-            let res = MetaDb::remove_db_dentry(conn, parent_ino.into(), &target_name);
+            let _ = MetaDb::remove_db_dentry(conn, parent_ino.into(), &target_name);
             match resp {
                 Some(tx) => {
                     results.push(tx);
                     Ok(())
                 }
-                None => {
-                    if let Err(e) = &res {
-                        tracing::warn!("db remove_db_dentry failed: {e}");
-                    }
-                    Ok(())
-                }
+                None => Ok(()),
             }
         }
         DbWriteMsg::CleanupEntry { target_ino, resp } => {
-            let res = MetaDb::cleanup_dentry(conn, target_ino.into());
+            let _ = MetaDb::cleanup_dentry(conn, target_ino.into());
             match resp {
                 Some(tx) => {
                     results.push(tx);
                     Ok(())
                 }
-                None => {
-                    if let Err(e) = &res {
-                        tracing::warn!("db cleanup_dentry failed: {e}");
-                    }
-                    Ok(())
-                }
+                None => Ok(()),
             }
         }
         DbWriteMsg::SetNegative {
@@ -651,49 +641,81 @@ impl MetaDb {
         Ok(count)
     }
 
+    /// build_dir: If true, will ignore entries which are not in the build dir
+    ///
+    /// true: used for readdir / false: Used by getattr to check children
     pub fn read_children(
         conn: &rusqlite::Connection,
         parent_ino: u64,
+        build_dir: bool,
     ) -> anyhow::Result<Vec<DirectoryEntry>> {
-        let sql = r#"
-            SELECT d.name, d.target_inode, im.oid, im.git_mode
-            FROM dentries AS d
-            JOIN inode_map AS im ON im.inode = d.target_inode
-            WHERE d.parent_inode = ?1 AND d.is_active = 1
-            ORDER BY d.name
-        "#;
+        let sql_1 = r#"
+        SELECT
+            target_inode,
+            name
+        FROM dentries
+        WHERE parent_inode = ?1
+        ORDER BY name
+    "#;
 
-        let mut stmt = conn
-            .prepare_cached(sql)
-            .context("prepare read_dir_entries")?;
+        let mut stmt = conn.prepare_cached(sql_1)?;
 
-        let mut rows = stmt
-            .query(params![parent_ino as i64])
-            .context("query read_dir_entries")?;
+        let mut targets = vec![];
+
+        let mut rows = stmt.query(params![parent_ino as i64])?;
+
+        while let Some(row) = rows.next()? {
+            let t_ino_i64: i64 = row.get(0)?;
+            let target_ino = u64::try_from(t_ino_i64)?;
+
+            let name_bytes: Vec<u8> = row.get(1)?;
+            let name = OsString::from_vec(name_bytes);
+
+            targets.push((target_ino, name));
+        }
+
+        let sql_2 = r#"
+        SELECT
+            oid,
+            git_mode,
+            inode_flag
+        FROM inode_map
+        WHERE inode = ?1
+    "#;
 
         let mut out = Vec::new();
+        for (target_ino, name) in targets {
+            let mut stmt_2 = conn.prepare_cached(sql_2)?;
 
-        while let Some(row) = rows.next().context("iterate read_dir_entries rows")? {
-            let name = OsString::from_vec(row.get(0)?);
-            let child_i64: i64 = row.get(1)?;
-            let oid_str: String = row.get(2)?;
-            let git_mode_i64: i64 = row.get(3)?;
+            let mut rows_2 = stmt_2.query(params![target_ino as i64])?;
 
-            let ino = u64::try_from(child_i64)
-                .map_err(|_| anyhow!("child_ino out of range: {}", child_i64))?;
-            let git_mode = u32::try_from(git_mode_i64)
-                .map_err(|_| anyhow!("git_mode out of range: {}", git_mode_i64))?;
+            let Some(row) = rows_2.next()? else {
+                continue;
+            };
+
+            let oid_str: String = row.get(0)?;
+            let oid = Oid::from_str(&oid_str)?;
+
+            let git_mode_i64: i64 = row.get(1)?;
+            let git_mode = u32::try_from(git_mode_i64)?;
+
+            if build_dir {
+                let ino_flag_i64: i64 = row.get(2)?;
+                let ino_flag = u64::try_from(ino_flag_i64)?;
+                let ino_flag = InoFlag::try_from(ino_flag)?;
+                if ino_flag != InoFlag::InsideBuild {
+                    continue;
+                }
+            }
+
             let kind = match git_mode & 0o170000 {
                 0o040000 => FileType::Directory,
                 0o120000 => FileType::Symlink,
                 _ => FileType::RegularFile,
             };
 
-            let oid = Oid::from_str(&oid_str)
-                .with_context(|| format!("invalid OID '{}' for inode {}", oid_str, ino))?;
-
             out.push(DirectoryEntry {
-                ino,
+                ino: target_ino,
                 oid,
                 name,
                 kind,
@@ -821,7 +843,7 @@ impl MetaDb {
         let mut stmt = tx.prepare(
             "SELECT size
             FROM inode_map
-            WHERE inode = ?1 AND is_active = 1",
+            WHERE inode = ?1 AND",
         )?;
 
         let size_opt: i64 = stmt.query_row(params![ino as i64], |row| row.get(0))?;

@@ -10,7 +10,6 @@ use git2::{FileMode, ObjectType, Oid};
 use crate::{
     fs::{
         CHASE_FOLDER, FileAttr, GitFs, LIVE_FOLDER,
-        builds::BuildOperationCtx,
         fileattr::{FileType, InoFlag, ObjectAttr, StorageNode, dir_attr, file_attr},
         meta_db::DbReturn,
         repo::git2time_to_system,
@@ -314,12 +313,15 @@ pub fn classify_inode(meta: &BuildCtxMetadata) -> anyhow::Result<DirCase> {
 // Performance is a priority
 // Build folder does not persist on disk
 // Get metadata from DB, do not check files on disk for metadata
-fn read_build_dir(fs: &GitFs, ino: NormalIno) -> anyhow::Result<Vec<DirectoryEntry>> {
+fn read_build_dir(
+    fs: &GitFs,
+    ino: NormalIno,
+    build_dir: bool,
+) -> anyhow::Result<Vec<DirectoryEntry>> {
     let mut out = Vec::new();
 
-    let ctx = BuildOperationCtx::new(fs, ino)?;
+    let entries = fs.read_children(ino, build_dir)?;
 
-    let entries = populate_entries_by_path(fs, ino, &ctx.path())?;
     out.extend(entries);
     Ok(out)
 }
@@ -523,7 +525,7 @@ pub fn readdir_git_dir(fs: &GitFs, parent: NormalIno) -> anyhow::Result<Vec<Dire
             // git objects
             let mut dir_entries = objects_to_dir_entries(fs, parent, objects, InoFlag::InsideSnap)?;
             // build files/folders
-            let build_objects = read_build_dir(fs, parent)?;
+            let build_objects = read_build_dir(fs, parent, true)?;
             dir_entries.extend(build_objects);
             // .git folder
             dir_entries.push(dot_git_root(fs, parent.into())?);
@@ -541,7 +543,7 @@ pub fn readdir_git_dir(fs: &GitFs, parent: NormalIno) -> anyhow::Result<Vec<Dire
         }
         InoFlag::InsideBuild => {
             // Only contains the build folder
-            read_build_dir(fs, parent)?
+            read_build_dir(fs, parent, false)?
         }
         InoFlag::InsideChase | InoFlag::ChaseRoot => {
             // read_chase_dir(fs, parent)?

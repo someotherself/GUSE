@@ -1850,14 +1850,18 @@ impl GitFs {
         MetaDb::count_children(&conn, ino.to_norm_u64())
     }
 
-    pub fn read_children(&self, parent_ino: NormalIno) -> anyhow::Result<Vec<DirectoryEntry>> {
+    pub fn read_children(
+        &self,
+        parent_ino: NormalIno,
+        build_dir: bool,
+    ) -> anyhow::Result<Vec<DirectoryEntry>> {
         let repo_id = GitFs::ino_to_repo_id(parent_ino.into());
         let repo_db = self
             .conn_list
             .get(&repo_id)
             .ok_or_else(|| anyhow::anyhow!("no db"))?;
         let conn = repo_db.ro_pool.get()?;
-        MetaDb::read_children(&conn, parent_ino.to_norm_u64())
+        MetaDb::read_children(&conn, parent_ino.to_norm_u64(), build_dir)
     }
 
     pub fn get_all_parents(&self, ino: u64) -> anyhow::Result<Vec<u64>> {

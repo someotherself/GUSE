@@ -1,4 +1,7 @@
-use std::ffi::{OsStr, OsString};
+use std::{
+    ffi::{OsStr, OsString},
+    time::SystemTime,
+};
 
 use anyhow::bail;
 
@@ -104,12 +107,6 @@ pub fn rename_git_build(
     new_parent: NormalIno,
     new_name: &OsStr,
 ) -> anyhow::Result<()> {
-    let dest_in_build = fs.is_in_build(new_parent)?;
-    let oid = fs.get_oid_from_db(new_parent.into())?;
-    let is_commit_folder = fs.is_commit(new_parent, oid)?;
-    if !dest_in_build && !is_commit_folder {
-        bail!(format!("New parent {} not allowed", new_parent));
-    }
     let src_attr = match fs.get_metadata_by_name(old_parent, old_name)? {
         DbReturn::Found { value } => value,
         _ => bail!(std::io::Error::from_raw_os_error(libc::ENOENT)),
@@ -117,14 +114,8 @@ pub fn rename_git_build(
 
     let mut dest_exists = false;
 
-    if let Ok(res) = fs.get_metadata_by_name(new_parent, new_name)
-        && let DbReturn::Found { value } = res
-    {
+    if fs.get_metadata_by_name(new_parent, new_name).is_ok() {
         dest_exists = true;
-
-        if value.kind != src_attr.kind {
-            bail!("Source and destination are not the same type")
-        }
     };
 
     let repo = fs.get_repo(old_parent.to_norm_u64())?;
@@ -145,18 +136,11 @@ pub fn rename_git_build(
     std::fs::rename(&src, &dest)?;
 
     if dest_exists {
-        fs.remove_db_dentry(new_parent, new_name)?;
+        let _ = fs.remove_db_dentry(new_parent, new_name);
     }
 
-    let ino_flag = if dest_in_build {
-        InoFlag::InsideBuild
-    } else {
-        bail!("Invalid location")
-    };
-
-    let mut new_attr = GitFs::attr_from_path(ino_flag, &dest.clone())?;
-    new_attr.ino = src_attr.ino;
-    new_attr.oid = src_attr.oid;
+    let mut new_attr = src_attr;
+    new_attr.atime = SystemTime::now();
 
     let node = StorageNode {
         parent_ino: new_parent.to_norm_u64(),

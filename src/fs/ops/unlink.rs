@@ -35,7 +35,7 @@ pub fn unlink_build_dir(fs: &GitFs, parent: NormalIno, name: &OsStr) -> anyhow::
         session.finish_path(fs, parent)?.join(name)
     };
 
-    std::fs::remove_file(path)?;
+    let _ = std::fs::remove_file(path);
     fs.remove_db_dentry(parent, name)?;
 
     let _ = fs.notifier.try_send(InvalMsg::Entry {
