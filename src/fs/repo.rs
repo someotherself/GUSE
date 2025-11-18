@@ -320,9 +320,9 @@ impl GitRepo {
                 return;
             };
             for (secs, _) in objects.1 {
-                // TODO: the unwrap_or makes no sense???
-                let dt = chrono::DateTime::from_timestamp(*secs, 0)
-                    .unwrap_or(chrono::DateTime::UNIX_EPOCH);
+                let Some(dt) = chrono::DateTime::from_timestamp(*secs, 0) else {
+                    continue;
+                };
                 let folder_name = OsString::from(format!("{:04}-{:02}", dt.year(), dt.month()));
 
                 if out.iter().any(|(_, attr)| attr.name == folder_name) {
@@ -367,8 +367,9 @@ impl GitRepo {
                 return;
             };
             for (secs_utc, commit_oid) in objects.1 {
-                let dt =
-                    DateTime::from_timestamp(*secs_utc, 0).unwrap_or(chrono::DateTime::UNIX_EPOCH);
+                let Some(dt) = DateTime::from_timestamp(*secs_utc, 0) else {
+                    continue;
+                };
 
                 if dt.year() != year || dt.month() != month {
                     continue;
