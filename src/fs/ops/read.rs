@@ -12,13 +12,15 @@ pub fn read_live(
     fh: u64,
 ) -> anyhow::Result<usize> {
     let Some(ctx) = fs.handles.get_context(fh) else {
-        bail!(format!("Handle {} for ino {} does not exist", fh, ino))
+        tracing::error!("Handle {} for ino {} does not exist", fh, ino);
+        bail!(std::io::Error::from_raw_os_error(libc::EBADF))
     };
     if !ctx.source.is_file() {
-        bail!("Invalid handle - wrong file type")
+        tracing::error!("Handle {} for ino {} is not a file", fh, ino);
+        bail!(std::io::Error::from_raw_os_error(libc::EBADF))
     }
     if ctx.ino != *ino {
-        bail!("Invalid handle - wrong inode")
+        bail!(std::io::Error::from_raw_os_error(libc::EBADF))
     }
 
     let len = fs.get_file_size_from_db(ino.to_norm())?;
@@ -46,10 +48,11 @@ pub fn read_git(
     fh: u64,
 ) -> anyhow::Result<usize> {
     let Some(ctx) = fs.handles.get_context(fh) else {
-        bail!(format!("Handle {} for ino {} does not exist", fh, ino))
+        tracing::error!("Handle {} for ino {} does not exist", fh, ino);
+        bail!(std::io::Error::from_raw_os_error(libc::EBADF))
     };
     if ctx.ino != *ino {
-        bail!("Invalid handle - wrong inode")
+        bail!(std::io::Error::from_raw_os_error(libc::EBADF))
     }
     // handle blobs and files separately
     Ok(ctx.source.read_at(buf, offset)?)

@@ -118,7 +118,8 @@ pub fn readdir_repo_dir(fs: &GitFs, parent: NormalIno) -> anyhow::Result<Vec<Dir
     let repo_id = GitFs::ino_to_repo_id(parent);
 
     if !fs.repos_list.contains_key(&repo_id) {
-        bail!("Repo not found!")
+        tracing::error!("Repo not found. Try restarting the session.");
+        bail!(std::io::Error::from_raw_os_error(libc::ENOENT))
     }
 
     let mut entries: Vec<DirectoryEntry> = vec![];
@@ -473,7 +474,10 @@ fn dot_git_root(fs: &GitFs, parent_ino: u64) -> anyhow::Result<DirectoryEntry> {
             fs.write_inodes_to_db(nodes)?;
             ino
         }
-        DbReturn::Negative => bail!(".git entry not found"),
+        DbReturn::Negative => {
+            tracing::error!(".git entry not found");
+            bail!(std::io::Error::from_raw_os_error(libc::ENOENT))
+        }
     };
     let entry: DirectoryEntry = DirectoryEntry {
         ino: entry_ino,
@@ -492,7 +496,8 @@ pub fn readdir_git_dir(fs: &GitFs, parent: NormalIno) -> anyhow::Result<Vec<Dire
         InoFlag::MonthFolder => {
             // The objects are Snap folders
             let Ok(DirCase::Month { year, month }) = classify_inode(&metadata) else {
-                bail!("Invalid MONTH folder name")
+                tracing::error!("Invalid MONTH folder name");
+                bail!(std::io::Error::from_raw_os_error(libc::EINVAL))
             };
             let objects = repo.month_commits(&format!("{year:04}-{month:02}"))?;
             objects_to_dir_entries(fs, parent, objects, InoFlag::SnapFolder)?
@@ -552,8 +557,7 @@ pub fn readdir_git_dir(fs: &GitFs, parent: NormalIno) -> anyhow::Result<Vec<Dire
         }
         InoFlag::DotGitRoot | InoFlag::InsideDotGit => read_inside_dot_git(fs, parent)?,
         _ => {
-            tracing::error!("WRONG BRANCH");
-            bail!("Wrong ino_flag")
+            bail!(std::io::Error::from_raw_os_error(libc::EPERM))
         }
     };
     dir_entries.sort_unstable_by(|a, b| a.name.as_encoded_bytes().cmp(b.name.as_encoded_bytes()));
@@ -611,7 +615,9 @@ pub fn read_virtual_dir(fs: &GitFs, ino: VirtualIno) -> anyhow::Result<Vec<Direc
     let v_node_opt = repo.with_state(|s| s.vdir_cache.get(&ino).cloned());
     let v_node = match v_node_opt {
         Some(o) => o,
-        None => bail!("Oid missing"),
+        None => {
+            bail!(std::io::Error::from_raw_os_error(libc::ENOENT))
+        }
     };
     for (name, (ino, entry)) in v_node.log.iter() {
         dir_entries.push(DirectoryEntry::new(

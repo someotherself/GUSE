@@ -34,7 +34,8 @@ pub fn start_chase(
     stream: &mut UnixStream,
 ) -> anyhow::Result<()> {
     let Some(repo_entry) = fs.repos_map.get(repo_name) else {
-        bail!("Repo does not exist")
+        tracing::error!("Repo does not exist. Please check correct spelling");
+        bail!(std::io::Error::from_raw_os_error(libc::ENOENT))
     };
     let repo_ino = GitFs::repo_id_to_ino(*repo_entry.value());
     let repo = fs.get_repo(repo_ino)?;

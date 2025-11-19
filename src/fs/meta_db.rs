@@ -90,7 +90,10 @@ impl<U: Debug> From<DbReturn<U>> for anyhow::Result<U> {
     fn from(value: DbReturn<U>) -> Self {
         match value {
             DbReturn::Found { value } => Ok(value),
-            DbReturn::Missing | DbReturn::Negative => bail!("Value {:?} is missing", value),
+            DbReturn::Missing | DbReturn::Negative => {
+                tracing::error!("Value {:?} is missing", value);
+                bail!(std::io::Error::from_raw_os_error(libc::ENOENT))
+            }
         }
     }
 }
@@ -724,7 +727,10 @@ impl MetaDb {
         };
 
         match first {
-            None => bail!("no parent found for ino={ino}"),
+            None => {
+                tracing::error!("DB: no parent found for ino={ino}");
+                bail!(std::io::Error::from_raw_os_error(libc::ENOENT))
+            }
             Some(p1) => Ok(u64::try_from(p1)?),
         }
     }
@@ -782,10 +788,7 @@ impl MetaDb {
             .map_err(|_| anyhow!("child_ino out of range: {}", child_i64))?;
 
         if rows.next()?.is_some() {
-            bail!(
-                "DB invariant violation: multiple dentries for ({parent}, {})",
-                name.display()
-            );
+            bail!("Multiple dentries for ({parent}, {})", name.display());
         }
         let dentry: Dentry = Dentry {
             target_ino: child,
@@ -909,7 +912,11 @@ impl MetaDb {
         };
 
         match first {
-            None => bail!("No name found for ino={ino}"),
+            None => {
+                tracing::error!("DB: No name found for ino={ino}");
+                bail!(std::io::Error::from_raw_os_error(libc::ENOENT))
+            }
+
             Some(p1) => Ok(OsString::from_vec(p1)),
         }
     }
@@ -934,7 +941,10 @@ impl MetaDb {
 
         match name_opt {
             Some(n) => Ok(OsString::from_vec(n)),
-            None => bail!("name not found for ino={ino} in parent={parent_ino}"),
+            None => {
+                tracing::error!("DB: name not found for ino={ino} in parent={parent_ino}");
+                bail!(std::io::Error::from_raw_os_error(libc::ENOENT))
+            }
         }
     }
 

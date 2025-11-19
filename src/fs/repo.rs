@@ -963,7 +963,8 @@ pub fn parse_mkdir_url(name: &str) -> anyhow::Result<Option<(String, String)>> {
     }
     let mut comp = name.splitn(4, ".");
     if comp.clone().count() != 4 {
-        bail!("Invalid input")
+        tracing::error!("Invalid input. If you are trying to fetch, check docs for formatting.");
+        bail!(std::io::Error::from_raw_os_error(libc::EINVAL))
     }
     let website = comp
         .next()

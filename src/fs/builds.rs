@@ -81,7 +81,6 @@ impl BuildOperationCtx {
         {
             metadata.oid
         } else {
-            tracing::error!("Wrong ino_flag: {}", metadata.ino_flag);
             bail!(std::io::Error::from_raw_os_error(libc::EPERM))
         };
 

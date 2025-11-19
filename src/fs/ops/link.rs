@@ -19,7 +19,7 @@ pub fn link_live(
 ) -> anyhow::Result<FileAttr> {
     if !fs.is_in_live(newparent)? {
         tracing::error!("This directory is read only");
-        bail!(std::io::Error::from_raw_os_error(libc::EACCES))
+        bail!(std::io::Error::from_raw_os_error(libc::EPERM))
     }
 
     let original = fs.get_live_path(source_ino)?;
@@ -51,7 +51,7 @@ pub fn link_git(
 ) -> anyhow::Result<FileAttr> {
     if !fs.is_in_build(newparent)? {
         tracing::error!("This directory is read only");
-        bail!(std::io::Error::from_raw_os_error(libc::EACCES))
+        bail!(std::io::Error::from_raw_os_error(libc::EPERM))
     }
     let repo = fs.get_repo(source_ino.to_norm_u64())?;
     let build_root = &repo.build_dir;

@@ -35,7 +35,7 @@ pub fn mkdir_repo(
     _name: &str,
     _create_attr: CreateFileAttr,
 ) -> anyhow::Result<FileAttr> {
-    bail!("This directory is read only")
+    bail!(std::io::Error::from_raw_os_error(libc::EPERM))
 }
 
 pub fn mkdir_live(

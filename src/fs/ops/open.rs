@@ -319,10 +319,10 @@ pub fn open_vdir(
     let repo = fs.get_repo(ino.into())?;
     let v_node_opt = repo.with_state(|s| s.vdir_cache.get(&parent).cloned());
     let Some(v_node) = v_node_opt else {
-        bail!("File not found!")
+        bail!(std::io::Error::from_raw_os_error(libc::ENOENT))
     };
     let Some((_, object)) = v_node.log.get(&name) else {
-        bail!("File not found!")
+        bail!(std::io::Error::from_raw_os_error(libc::ENOENT))
     };
     let oid = object.oid;
     open_blob(fs, oid, ino.into())

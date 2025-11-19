@@ -9,13 +9,13 @@ pub fn write_live(fs: &GitFs, ino: u64, offset: u64, buf: &[u8], fh: u64) -> any
         bail!(format!("Handle {} for ino {} does not exist", fh, ino))
     };
     if ctx.ino != ino {
-        bail!("Invalid filehandle")
+        bail!(std::io::Error::from_raw_os_error(libc::EBADF))
     }
     if !ctx.write {
-        bail!("Write not permitted")
+        bail!(std::io::Error::from_raw_os_error(libc::EPERM))
     };
     if !ctx.source.is_file() {
-        bail!("Invalid handle.")
+        bail!(std::io::Error::from_raw_os_error(libc::EBADF))
     }
     let old_size = fs.get_file_size_from_db(ino.into())?;
     let bytes_written = ctx.source.write_at(buf, offset)?;
@@ -40,13 +40,13 @@ pub fn write_git(
         bail!(format!("Handle {} for ino {} does not exist", fh, ino))
     };
     if ctx.ino != ino.to_norm_u64() {
-        bail!("Invalid filehandle")
+        bail!(std::io::Error::from_raw_os_error(libc::EBADF))
     }
     if ctx.source.is_blob() {
-        bail!("Cannot write to blobs")
+        bail!(std::io::Error::from_raw_os_error(libc::EPERM))
     }
     if !ctx.write {
-        bail!("Write not permitted")
+        bail!(std::io::Error::from_raw_os_error(libc::EPERM))
     };
     let old_size = fs.get_file_size_from_db(ino)?;
     let bytes_written = ctx.source.write_at(buf, offset)?;

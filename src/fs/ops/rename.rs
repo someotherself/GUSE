@@ -36,13 +36,9 @@ pub fn rename_live(
     let mut dest_exists = false;
 
     if let Ok(res) = fs.get_metadata_by_name(new_parent, new_name)
-        && let DbReturn::Found { value } = res
+        && let DbReturn::Found { value: _ } = res
     {
         dest_exists = true;
-
-        if value.kind != src_attr.kind {
-            bail!("Source and destination are not the same type")
-        }
     };
 
     let src = fs.build_full_path(old_parent)?.join(old_name);
@@ -59,7 +55,7 @@ pub fn rename_live(
     } else if dest_in_build {
         InoFlag::InsideBuild
     } else {
-        bail!("Invalid location")
+        bail!(std::io::Error::from_raw_os_error(libc::EPERM))
     };
 
     let mut new_attr = GitFs::attr_from_path(ino_flag, &dest.clone())?;

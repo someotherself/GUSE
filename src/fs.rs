@@ -213,14 +213,14 @@ impl SourceTypes {
     pub fn try_clone(&self) -> anyhow::Result<Self> {
         match self {
             Self::RealFile(file) => Ok(Self::RealFile(Arc::new(file.try_clone()?))),
-            _ => bail!(std::io::Error::from_raw_os_error(libc::EROFS)),
+            _ => bail!(std::io::Error::from_raw_os_error(libc::EPERM)),
         }
     }
 
     pub fn trucate(&self, size: u64) -> anyhow::Result<()> {
         match self {
             Self::RealFile(file) => file.set_len(size).context("Failed to truncate the file"),
-            _ => bail!(std::io::Error::from_raw_os_error(libc::EROFS)),
+            _ => bail!(std::io::Error::from_raw_os_error(libc::EPERM)),
         }
     }
 
@@ -228,7 +228,7 @@ impl SourceTypes {
         match self {
             Self::RealFile(file) => Ok(file.metadata()?.size()),
             Self::Blob { oid: _, data } => Ok(data.len() as u64),
-            _ => bail!(std::io::Error::from_raw_os_error(libc::EROFS)),
+            _ => bail!(std::io::Error::from_raw_os_error(libc::EPERM)),
         }
     }
 }
@@ -806,7 +806,7 @@ impl GitFs {
         let ino: Inodes = ino.into();
 
         if write && self.read_only {
-            bail!("Filesystem is in read only");
+            bail!(std::io::Error::from_raw_os_error(libc::EROFS))
         }
 
         let parent = self.get_single_parent(ino.to_u64_n())?;
@@ -826,8 +826,8 @@ impl GitFs {
 
         let ctx = FsOperationContext::get_operation(self, ino);
         match ctx? {
-            FsOperationContext::Root => bail!(std::io::Error::from_raw_os_error(libc::EISDIR)),
-            FsOperationContext::RepoDir => bail!(std::io::Error::from_raw_os_error(libc::EISDIR)),
+            FsOperationContext::Root => bail!(std::io::Error::from_raw_os_error(libc::EPERM)),
+            FsOperationContext::RepoDir => bail!(std::io::Error::from_raw_os_error(libc::EPERM)),
             FsOperationContext::InsideLiveDir => match parent_kind {
                 FileType::Directory => {
                     ops::open::open_live(self, ino.to_norm(), read, write, truncate)
@@ -840,7 +840,7 @@ impl GitFs {
                     truncate,
                     parent.to_virt(),
                 ),
-                _ => bail!("Invalid filemode"),
+                _ => bail!(std::io::Error::from_raw_os_error(libc::EINVAL)),
             },
             FsOperationContext::InsideGitDir => {
                 match parent_kind {
@@ -852,7 +852,7 @@ impl GitFs {
                         }
                         // and target is a directory, open as vfile (to create commit summary etc)
                         FileType::Directory => ops::open::open_vfile(self, ino, read, write),
-                        _ => bail!("Invalid filemode"),
+                        _ => bail!(std::io::Error::from_raw_os_error(libc::EINVAL)),
                     },
                     // If parent is a file, open target as vdir
                     FileType::RegularFile => ops::open::open_vdir(
@@ -863,7 +863,7 @@ impl GitFs {
                         truncate,
                         parent.to_virt(),
                     ),
-                    _ => bail!("Invalid filemode"),
+                    _ => bail!(std::io::Error::from_raw_os_error(libc::EINVAL)),
                 }
             }
         }
@@ -899,8 +899,10 @@ impl GitFs {
             let ctx = FsOperationContext::get_operation(self, ino);
 
             match ctx? {
-                FsOperationContext::Root => bail!("Not allowed"),
-                FsOperationContext::RepoDir => bail!("Not allowed"),
+                FsOperationContext::Root => bail!(std::io::Error::from_raw_os_error(libc::EPERM)),
+                FsOperationContext::RepoDir => {
+                    bail!(std::io::Error::from_raw_os_error(libc::EPERM))
+                }
                 FsOperationContext::InsideLiveDir => {
                     ops::read::read_live(self, ino, offset, buf, fh)
                 }
@@ -920,8 +922,10 @@ impl GitFs {
             let ino = ino.into();
             let ctx = FsOperationContext::get_operation(self, ino);
             match ctx? {
-                FsOperationContext::Root => bail!("Not allowed"),
-                FsOperationContext::RepoDir => bail!("Not allowed"),
+                FsOperationContext::Root => bail!(std::io::Error::from_raw_os_error(libc::EPERM)),
+                FsOperationContext::RepoDir => {
+                    bail!(std::io::Error::from_raw_os_error(libc::EPERM))
+                }
                 FsOperationContext::InsideLiveDir => {
                     ops::write::write_live(self, ino.into(), offset, buf, fh)
                 }
@@ -941,8 +945,8 @@ impl GitFs {
         let ino = ino.into();
         let ctx = FsOperationContext::get_operation(self, ino)?;
         match ctx {
-            FsOperationContext::Root => bail!("Not allowed"),
-            FsOperationContext::RepoDir => bail!("Not allowed"),
+            FsOperationContext::Root => bail!(std::io::Error::from_raw_os_error(libc::EPERM)),
+            FsOperationContext::RepoDir => bail!(std::io::Error::from_raw_os_error(libc::EPERM)),
             FsOperationContext::InsideLiveDir => {
                 ops::truncate::truncate_live(self, ino.to_norm(), size, fh)
             }
@@ -1067,7 +1071,7 @@ impl GitFs {
                         // If original is a directory, create a virtual file
                         // Used when trying to cat a directory
                         FileType::Directory => self.prepare_virtual_file(ino.to_virt()),
-                        _ => bail!("Invalid attr"),
+                        _ => bail!(std::io::Error::from_raw_os_error(libc::EINVAL)),
                     }
                 }
             },
@@ -1083,7 +1087,7 @@ impl GitFs {
                         // If original is a directory, create a virtual file
                         // Used when trying to cat a directory
                         FileType::Directory => self.prepare_virtual_file(ino.to_virt()),
-                        _ => bail!("Invalid attr"),
+                        _ => bail!(std::io::Error::from_raw_os_error(libc::EINVAL)),
                     }
                 }
             },
@@ -1097,17 +1101,20 @@ impl GitFs {
     pub fn mkdir(&self, parent: u64, os_name: &OsStr) -> anyhow::Result<FileAttr> {
         let parent: Inodes = parent.into();
         if self.read_only {
-            bail!("Filesystem is in read only");
+            bail!(std::io::Error::from_raw_os_error(libc::EROFS))
         }
         if !self.exists(parent)? {
-            bail!(format!("Parent {} does not exist", parent));
+            tracing::error!("Parent {} does not exist", parent);
+            bail!(std::io::Error::from_raw_os_error(libc::ENOENT))
         }
         if !self.is_dir(parent)? {
-            bail!(format!("Parent {} is not a directory", parent));
+            tracing::error!("Parent {} is not a directory", parent);
+            bail!(std::io::Error::from_raw_os_error(libc::ENOTDIR))
         }
-        let name = os_name
-            .to_str()
-            .ok_or_else(|| anyhow!("Not a valid UTF-8 name"))?;
+        let Some(name) = os_name.to_str() else {
+            tracing::error!("Not a valid UTF-8 name");
+            bail!(std::io::Error::from_raw_os_error(libc::EINVAL))
+        };
 
         let ctx = FsOperationContext::get_operation(self, parent);
         match ctx? {
@@ -1136,25 +1143,24 @@ impl GitFs {
 
         if memchr::memchr2(b'/', b'\\', newname.as_bytes()).is_some() {
             tracing::error!("invalid name: contains '/' or '\\' {}", newname.display());
-            bail!(format!("Invalid name {}", newname.display()));
+            bail!(std::io::Error::from_raw_os_error(libc::EINVAL))
         }
 
         if self.read_only {
-            bail!("Filesystem is in read only");
+            bail!(std::io::Error::from_raw_os_error(libc::EROFS))
         }
         if !self.exists(ino)? {
-            bail!(format!("Parent {} does not exist", ino));
+            tracing::error!("Parent {} does not exist", ino);
+            bail!(std::io::Error::from_raw_os_error(libc::ENOENT))
         }
 
         let ctx = FsOperationContext::get_operation(self, ino);
         match ctx? {
             FsOperationContext::Root => {
-                tracing::error!("This directory is read only");
-                bail!("This directory is read only")
+                bail!(std::io::Error::from_raw_os_error(libc::EPERM))
             }
             FsOperationContext::RepoDir => {
-                tracing::error!("This directory is read only");
-                bail!("This directory is read only")
+                bail!(std::io::Error::from_raw_os_error(libc::EPERM))
             }
             FsOperationContext::InsideLiveDir => {
                 ops::link::link_live(self, ino.to_norm(), newparent.to_norm(), newname)
@@ -1176,16 +1182,17 @@ impl GitFs {
         let parent = parent.into();
 
         if self.read_only {
-            bail!("Filesystem is in read only");
+            bail!(std::io::Error::from_raw_os_error(libc::EROFS))
         }
         if !self.exists(parent)? {
-            bail!(format!("Parent {} does not exist", parent));
+            tracing::error!("Parent {} does not exist", parent);
+            bail!(std::io::Error::from_raw_os_error(libc::ENOENT))
         }
 
         let ctx = FsOperationContext::get_operation(self, parent);
         match ctx? {
             FsOperationContext::Root | FsOperationContext::RepoDir => {
-                bail!("This directory is read only")
+                bail!(std::io::Error::from_raw_os_error(libc::EPERM))
             }
             FsOperationContext::InsideLiveDir => {
                 ops::create::create_live(self, parent.into(), name, write)
@@ -1212,26 +1219,26 @@ impl GitFs {
 
         if self.read_only {
             tracing::error!("Filesystem is in read only");
-            bail!(std::io::Error::from_raw_os_error(libc::EACCES))
+            bail!(std::io::Error::from_raw_os_error(libc::EROFS))
         }
         if !self.exists(parent)? {
             tracing::error!("Parent {} does not exist", parent);
-            bail!(std::io::Error::from_raw_os_error(libc::EIO))
+            bail!(std::io::Error::from_raw_os_error(libc::ENOENT))
         }
         if name == "." || name == ".." {
             tracing::error!("invalid name");
-            bail!(std::io::Error::from_raw_os_error(libc::EIO))
+            bail!(std::io::Error::from_raw_os_error(libc::EINVAL))
         }
 
         let ctx = FsOperationContext::get_operation(self, parent);
         match ctx? {
             FsOperationContext::Root => {
                 tracing::error!("This directory is read only");
-                bail!(std::io::Error::from_raw_os_error(libc::EACCES))
+                bail!(std::io::Error::from_raw_os_error(libc::EPERM))
             }
             FsOperationContext::RepoDir => {
                 tracing::error!("Not allowed");
-                bail!(std::io::Error::from_raw_os_error(libc::EACCES))
+                bail!(std::io::Error::from_raw_os_error(libc::EPERM))
             }
             FsOperationContext::InsideLiveDir => {
                 ops::unlink::unlink_live(self, parent.into(), name)
@@ -1253,31 +1260,35 @@ impl GitFs {
         let parent: Inodes = parent.into();
         let new_parent: Inodes = new_parent.into();
         if self.read_only {
-            bail!("Filesystem is in read only");
+            bail!(std::io::Error::from_raw_os_error(libc::EROFS))
         }
         if !self.exists(parent)? {
-            bail!(format!("Parent {} does not exist", parent));
+            tracing::error!("Parent {} does not exist", parent);
+            bail!(std::io::Error::from_raw_os_error(libc::ENOENT))
         }
         if !self.exists(new_parent)? {
-            bail!(format!("New parent {} does not exist", new_parent));
+            tracing::error!("New parent {} does not exist", new_parent);
+            bail!(std::io::Error::from_raw_os_error(libc::ENOENT))
         }
 
         if self.lookup(parent.to_u64_n(), name).is_err() {
-            bail!(format!("Source {} does not exist", name.display()));
+            tracing::error!("Source {} does not exist", name.display());
+            bail!(std::io::Error::from_raw_os_error(libc::ENOENT))
         }
 
         if name == "." || name == ".." || new_name == "." || new_name == ".." {
-            bail!("invalid name");
+            tracing::error!("invalid name: . and .. not allowed");
+            bail!(std::io::Error::from_raw_os_error(libc::EINVAL))
         }
 
         if memchr::memchr2(b'/', b'\\', name.as_bytes()).is_some() {
             tracing::error!("invalid name: contains '/' or '\\' {}", name.display());
-            bail!(format!("Invalid name {}", name.display()));
+            bail!(std::io::Error::from_raw_os_error(libc::EINVAL))
         }
 
         if memchr::memchr2(b'/', b'\\', new_name.as_bytes()).is_some() {
             tracing::error!("invalid name: contains '/' or '\\' {}", new_name.display());
-            bail!(format!("Invalid name {}", new_name.display()));
+            bail!(std::io::Error::from_raw_os_error(libc::EINVAL))
         }
 
         if parent.to_norm() == new_parent.to_norm() && name == new_name {
@@ -1287,10 +1298,10 @@ impl GitFs {
         let ctx = FsOperationContext::get_operation(self, parent);
         match ctx? {
             FsOperationContext::Root => {
-                bail!("This directory is read only")
+                bail!(std::io::Error::from_raw_os_error(libc::EPERM))
             }
             FsOperationContext::RepoDir => {
-                bail!("Not allowed")
+                bail!(std::io::Error::from_raw_os_error(libc::EPERM))
             }
             FsOperationContext::InsideLiveDir => ops::rename::rename_live(
                 self,
@@ -1314,19 +1325,23 @@ impl GitFs {
         let parent = parent.into();
 
         if self.read_only {
-            bail!("Filesystem is in read only");
+            bail!(std::io::Error::from_raw_os_error(libc::EROFS))
         }
         if !self.exists(parent)? {
-            bail!(format!("Parent {} does not exist", parent));
+            tracing::error!("Parent {} does not exist", parent);
+            bail!(std::io::Error::from_raw_os_error(libc::ENOENT))
         }
 
         if name == "." || name == ".." {
-            bail!("invalid name");
+            tracing::error!("invalid name: . and .. not allowed");
+            bail!(std::io::Error::from_raw_os_error(libc::EINVAL))
         }
 
         let ctx = FsOperationContext::get_operation(self, parent);
         match ctx? {
-            FsOperationContext::Root | FsOperationContext::RepoDir => bail!("Not allowed"),
+            FsOperationContext::Root | FsOperationContext::RepoDir => {
+                bail!(std::io::Error::from_raw_os_error(libc::EPERM))
+            }
             FsOperationContext::InsideLiveDir => {
                 ops::rmdir::rmdir_live(self, parent.to_norm(), name)
             }
@@ -1385,10 +1400,12 @@ impl GitFs {
         let parent: Inodes = parent.into();
 
         if !self.exists(parent)? {
-            bail!(format!("Parent {} does not exist", parent));
+            tracing::error!("Parent {} does not exist", parent);
+            bail!(std::io::Error::from_raw_os_error(libc::ENOENT))
         }
         if !self.is_dir(parent)? {
-            bail!(format!("Parent {} is not a directory", parent));
+            tracing::error!("Parent {} is not a directory", parent);
+            bail!(std::io::Error::from_raw_os_error(libc::ENOTDIR))
         }
 
         let ctx = FsOperationContext::get_operation(self, parent);
@@ -1419,7 +1436,7 @@ impl GitFs {
                         FileType::Directory => {
                             return Ok(Some(self.prepare_virtual_file(ino.to_virt())?));
                         }
-                        _ => bail!("Invalid attr"),
+                        _ => bail!(std::io::Error::from_raw_os_error(libc::EINVAL)),
                     }
                 }
                 // If the parent dir is virtual
@@ -1447,7 +1464,7 @@ impl GitFs {
                         FileType::Directory => {
                             return Ok(Some(self.prepare_virtual_file(ino.to_virt())?));
                         }
-                        _ => bail!("Invalid attr"),
+                        _ => bail!(std::io::Error::from_raw_os_error(libc::EINVAL)),
                     }
                 }
                 match parent {
@@ -1565,7 +1582,7 @@ impl GitFs {
             self.repos_map.insert(repo_name.to_string(), repo_id);
             info!("Repo {repo_name} added");
         } else {
-            bail!("Repo id already exists");
+            tracing::error!("Repo {repo_name} already exists");
         }
         Ok(())
     }
@@ -1574,7 +1591,8 @@ impl GitFs {
         if let Some(repo_id) = self.repos_map.get(repo_name) {
             self.repos_list.remove(&repo_id);
         } else {
-            bail!("Repo does not exist");
+            tracing::error!("Repo does not exist");
+            bail!(std::io::Error::from_raw_os_error(libc::EINVAL))
         }
         self.repos_map.remove(repo_name);
         {
@@ -1599,7 +1617,7 @@ impl GitFs {
         } else if std_type.is_file() {
             file_attr(ino_flag).into()
         } else {
-            bail!("Invalid input")
+            bail!(std::io::Error::from_raw_os_error(libc::EINVAL))
         };
 
         let atime: SystemTime = metadata.accessed()?;
@@ -1760,7 +1778,8 @@ impl GitFs {
 
             cur = parent_ino;
             if i == max_steps {
-                bail!("Parent commit not found")
+                tracing::error!("Parent commit not found");
+                bail!(std::io::Error::from_raw_os_error(libc::EIO))
             }
         }
         Ok(oid)
@@ -1824,7 +1843,7 @@ impl GitFs {
 
     pub fn get_dir_parent(&self, ino: u64) -> anyhow::Result<u64> {
         if !self.is_dir(ino.into())? {
-            bail!("Not a directory")
+            bail!(std::io::Error::from_raw_os_error(libc::ENOTDIR))
         }
 
         if ROOT_INO == ino {
@@ -2621,7 +2640,8 @@ impl GitFs {
         if let Some(s) = final_size {
             Ok(s)
         } else {
-            bail!("Could not set size in cache")
+            tracing::error!("Could not set size in cache");
+            bail!(std::io::Error::from_raw_os_error(libc::ENOENT))
         }
     }
 
@@ -2665,12 +2685,14 @@ impl GitFs {
             .get_by_target(ino)
             .ok_or_else(|| anyhow!("Cannot find dentry in cache"))?;
         let name = if dentries.is_empty() {
-            bail!("No dentries found")
+            tracing::error!("No dentries found");
+            bail!(std::io::Error::from_raw_os_error(libc::ENOENT))
         } else {
             dentries[0].target_name.clone()
         };
         let DbReturn::Found { value: attr } = repo.attr_cache.get(&ino) else {
-            bail!("Attribute not found for {ino}")
+            tracing::error!("Attribute not found for {ino}");
+            bail!(std::io::Error::from_raw_os_error(libc::ENOENT))
         };
         let mode = repo::try_into_filemode(u64::from(attr.git_mode))
             .ok_or_else(|| anyhow!("Invalid filemode"))?;
@@ -2694,7 +2716,8 @@ impl GitFs {
             curr = dentry.parent_ino;
         }
         if components.is_empty() && target_ino != ROOT_INO {
-            bail!(format!("Could not build path for {target_ino}"))
+            tracing::error!("Could not build path for {target_ino}");
+            bail!(std::io::Error::from_raw_os_error(libc::ENOENT))
         }
 
         components.reverse();
@@ -2710,7 +2733,8 @@ impl GitFs {
         if let DbReturn::Found { value: dentry } = dentry {
             Ok(dentry.target_ino)
         } else {
-            bail!("Could not find dentry in cache {}", target_name.display());
+            tracing::error!("Could not find dentry in cache {}", target_name.display());
+            bail!(std::io::Error::from_raw_os_error(libc::ENOENT))
         }
     }
 
