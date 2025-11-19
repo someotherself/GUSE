@@ -649,19 +649,21 @@ impl MetaDb {
         parent_ino: u64,
         build_dir: bool,
     ) -> anyhow::Result<Vec<DirectoryEntry>> {
-        let sql_1 = r#"
+        let sql = r#"
         SELECT
-            target_inode,
-            name
-        FROM dentries
-        WHERE parent_inode = ?1
-        ORDER BY name
+            d.target_inode,
+            d.name,
+            m.oid,
+            m.git_mode,
+            m.inode_flag
+        FROM dentries AS d
+        LEFT JOIN inode_map as m ON m.inode = d.target_inode
+        WHERE d.parent_inode = ?1
+        ORDER BY d.name
     "#;
 
-        let mut stmt = conn.prepare_cached(sql_1)?;
-
-        let mut targets = vec![];
-
+        let mut out = vec![];
+        let mut stmt = conn.prepare_cached(sql)?;
         let mut rows = stmt.query(params![parent_ino as i64])?;
 
         while let Some(row) = rows.next()? {
@@ -671,36 +673,14 @@ impl MetaDb {
             let name_bytes: Vec<u8> = row.get(1)?;
             let name = OsString::from_vec(name_bytes);
 
-            targets.push((target_ino, name));
-        }
-
-        let sql_2 = r#"
-        SELECT
-            oid,
-            git_mode,
-            inode_flag
-        FROM inode_map
-        WHERE inode = ?1
-    "#;
-
-        let mut out = Vec::new();
-        for (target_ino, name) in targets {
-            let mut stmt_2 = conn.prepare_cached(sql_2)?;
-
-            let mut rows_2 = stmt_2.query(params![target_ino as i64])?;
-
-            let Some(row) = rows_2.next()? else {
-                continue;
-            };
-
-            let oid_str: String = row.get(0)?;
+            let oid_str: String = row.get(2)?;
             let oid = Oid::from_str(&oid_str)?;
 
-            let git_mode_i64: i64 = row.get(1)?;
+            let git_mode_i64: i64 = row.get(3)?;
             let git_mode = u32::try_from(git_mode_i64)?;
 
             if build_dir {
-                let ino_flag_i64: i64 = row.get(2)?;
+                let ino_flag_i64: i64 = row.get(4)?;
                 let ino_flag = u64::try_from(ino_flag_i64)?;
                 let ino_flag = InoFlag::try_from(ino_flag)?;
                 if ino_flag != InoFlag::InsideBuild {
