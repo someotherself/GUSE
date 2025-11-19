@@ -205,6 +205,7 @@ pub enum InoFlag {
     PrMergeRoot = 1 << 18,
     PrFolder = 1 << 19,
     BranchFolder = 1 << 20,
+    IndexFile = 1 << 21,
 }
 impl InoFlag {
     pub const fn as_str(&self) -> &'static str {
@@ -230,6 +231,7 @@ impl InoFlag {
             InoFlag::PrMergeRoot => "PrMergeRoot",
             InoFlag::PrFolder => "PrFolder",
             InoFlag::BranchFolder => "BranchFolder",
+            InoFlag::IndexFile => "IndexFile",
         }
     }
 }
@@ -265,6 +267,7 @@ impl TryFrom<u64> for InoFlag {
             x if x == InoFlag::PrMergeRoot as u64 => Ok(InoFlag::PrMergeRoot),
             x if x == InoFlag::PrFolder as u64 => Ok(InoFlag::PrFolder),
             x if x == InoFlag::BranchFolder as u64 => Ok(InoFlag::BranchFolder),
+            x if x == InoFlag::IndexFile as u64 => Ok(InoFlag::IndexFile),
             _ => {
                 tracing::error!("Unknown InoFlag valueL {v:#x}");
                 bail!(std::io::Error::from_raw_os_error(libc::ENOENT))

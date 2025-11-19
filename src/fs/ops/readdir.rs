@@ -413,6 +413,8 @@ pub fn build_dot_git_path(fs: &GitFs, target_ino: NormalIno) -> anyhow::Result<P
 fn read_inside_dot_git(fs: &GitFs, parent_ino: NormalIno) -> anyhow::Result<Vec<DirectoryEntry>> {
     let mut entries: Vec<DirectoryEntry> = vec![];
     let mut nodes: Vec<StorageNode> = vec![];
+    let parent_flag = fs.get_ino_flag_from_db(parent_ino)?;
+    let mut index_exists = false;
 
     let path = build_dot_git_path(fs, parent_ino)?;
     for node in path.read_dir()? {
@@ -421,6 +423,9 @@ fn read_inside_dot_git(fs: &GitFs, parent_ino: NormalIno) -> anyhow::Result<Vec<
 
         let ino_flag = if node_name == "HEAD" {
             InoFlag::HeadFile
+        } else if node_name == "index" {
+            index_exists = true;
+            InoFlag::IndexFile
         } else {
             InoFlag::InsideDotGit
         };
@@ -451,6 +456,26 @@ fn read_inside_dot_git(fs: &GitFs, parent_ino: NormalIno) -> anyhow::Result<Vec<
 
         let entry = DirectoryEntry::new(attr.ino, Oid::zero(), node_name, kind, filemode);
         entries.push(entry);
+    }
+
+    if parent_flag == InoFlag::DotGitRoot && !index_exists {
+        let index_ino = fs.next_inode_checked(parent_ino.into())?;
+        let mut index_attr: FileAttr = file_attr(InoFlag::IndexFile).into();
+        index_attr.ino = index_ino;
+        let index_entry = DirectoryEntry::new(
+            index_ino,
+            Oid::zero(),
+            OsString::from("index"),
+            FileType::RegularFile,
+            libc::S_IFREG,
+        );
+        entries.push(index_entry);
+
+        nodes.push(StorageNode {
+            parent_ino: parent_ino.into(),
+            name: OsString::from("index"),
+            attr: index_attr,
+        });
     }
 
     fs.write_inodes_to_db(nodes)?;
@@ -589,6 +614,10 @@ fn objects_to_dir_entries(
                 };
                 attr.oid = entry.oid;
                 attr.ino = ino;
+                if attr.kind == FileType::RegularFile {
+                    // Needs to match the gitmode, else index will not show correctly
+                    attr.perm = 0o655;
+                }
                 attr.size = entry.size;
                 attr.atime = git2time_to_system(entry.commit_time);
                 attr.mtime = git2time_to_system(entry.commit_time);

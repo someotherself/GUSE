@@ -1,8 +1,11 @@
 use anyhow::{Context, anyhow, bail};
 use chrono::{DateTime, Datelike};
 use dashmap::DashMap;
-use git2::{Commit, Delta, Direction, FileMode, ObjectType, Oid, Repository, Time, Tree};
+use git2::{
+    Commit, Delta, Direction, FileMode, ObjectType, Oid, Repository, Time, Tree, TreeWalkResult,
+};
 use parking_lot::{Mutex, RwLock};
+use sha1::{Digest, Sha1};
 use std::{
     collections::{BTreeMap, BTreeSet, HashMap, HashSet},
     ffi::{OsStr, OsString},
@@ -552,6 +555,91 @@ impl GitRepo {
             });
         }
         Ok(entries)
+    }
+
+    pub fn build_index_for_snap(&self, commit_oid: Oid) -> anyhow::Result<Vec<u8>> {
+        let repo = self.inner.lock();
+        let commit = repo.find_commit(commit_oid)?;
+        let tree = commit.tree()?;
+
+        let mut entries: Vec<Entry> = vec![];
+
+        struct Entry {
+            path: String,
+            hash: Oid,
+            mode: u32,
+        }
+
+        tree.walk(git2::TreeWalkMode::PreOrder, |root, entry| {
+            if entry.kind() == Some(ObjectType::Blob)
+                && let Some(name) = entry.name()
+            {
+                entries.push(Entry {
+                    path: format!("{root}{name}"),
+                    hash: entry.id(),
+                    mode: entry.filemode() as u32,
+                });
+            }
+            TreeWalkResult::Ok
+        })?;
+
+        entries.sort_by(|a, b| a.path.as_bytes().cmp(b.path.as_bytes()));
+
+        let mut out = vec![];
+
+        out.extend([b'D', b'I', b'R', b'C']);
+        out.extend(2_u32.to_be_bytes());
+        out.extend((entries.len() as u32).to_be_bytes());
+
+        for entry in &entries {
+            let mut e = Vec::<u8>::new();
+
+            e.extend_from_slice(&[0u8; 24]);
+
+            e.extend_from_slice(&entry.mode.to_be_bytes());
+
+            e.extend_from_slice(&[0u8; 12]);
+
+            e.extend_from_slice(entry.hash.as_bytes());
+
+            let path_bytes = entry.path.as_bytes();
+            let name_len = path_bytes.len();
+            let name_len_field = if name_len >= 0x0fff {
+                0x0fff
+            } else {
+                name_len as u16
+            };
+
+            #[allow(clippy::identity_op)]
+            let flags: u16 = (0b00u16 << 12) | name_len_field;
+
+            e.extend(flags.to_be_bytes());
+
+            e.extend_from_slice(path_bytes);
+            e.push(0u8);
+
+            // let size = 62;
+            // let len = path_bytes.len();
+
+            // let pad = ((size + len + 8) & !7) - (size + len);
+            // e.extend(std::iter::repeat(0u8).take(pad));
+
+            let padding = (8 - (e.len() % 8)) % 8;
+            e.extend(vec![0u8; padding]);
+            // tracing::warn!("{:?}/{:?}", e[60], e[61]);
+            // tracing::warn!("e length: {:?}", e.len());
+            // tracing::warn!("padding: {:?}", padding);
+
+            // tracing::warn!("out length: {:?} {} div by 8: {}/ ", out.len(), out.len() - 12, (out.len() - 12) % 8);
+            out.extend_from_slice(&e);
+        }
+
+        let mut hasher = Sha1::new();
+        hasher.update(&out);
+        let checksum = hasher.finalize();
+        out.extend_from_slice(&checksum);
+
+        Ok(out)
     }
 
     pub fn commit_to_objects(

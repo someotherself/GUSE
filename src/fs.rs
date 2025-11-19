@@ -2690,7 +2690,6 @@ impl GitFs {
             dentries[0].target_name.clone()
         };
         let DbReturn::Found { value: attr } = repo.attr_cache.get(&ino) else {
-            tracing::error!("Attribute not found for {ino}");
             bail!(std::io::Error::from_raw_os_error(libc::ENOENT))
         };
         let mode = repo::try_into_filemode(u64::from(attr.git_mode))
