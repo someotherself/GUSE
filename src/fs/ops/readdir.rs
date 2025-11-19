@@ -437,6 +437,9 @@ fn read_inside_dot_git(fs: &GitFs, parent_ino: NormalIno) -> anyhow::Result<Vec<
             DbReturn::Missing => {
                 let new_ino = fs.next_inode_checked(parent_ino.into())?;
                 attr.ino = new_ino;
+                if ino_flag == InoFlag::HeadFile {
+                    attr.size = 41;
+                }
                 nodes.push(StorageNode {
                     parent_ino: parent_ino.into(),
                     name: node_name.clone(),
