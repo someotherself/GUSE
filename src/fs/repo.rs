@@ -557,6 +557,7 @@ impl GitRepo {
         Ok(entries)
     }
 
+        // Why doesn't git2 make this easier?
     pub fn build_index_for_snap(&self, commit_oid: Oid) -> anyhow::Result<Vec<u8>> {
         let repo = self.inner.lock();
         let commit = repo.find_commit(commit_oid)?;
@@ -618,19 +619,9 @@ impl GitRepo {
             e.extend_from_slice(path_bytes);
             e.push(0u8);
 
-            // let size = 62;
-            // let len = path_bytes.len();
-
-            // let pad = ((size + len + 8) & !7) - (size + len);
-            // e.extend(std::iter::repeat(0u8).take(pad));
-
             let padding = (8 - (e.len() % 8)) % 8;
             e.extend(vec![0u8; padding]);
-            // tracing::warn!("{:?}/{:?}", e[60], e[61]);
-            // tracing::warn!("e length: {:?}", e.len());
-            // tracing::warn!("padding: {:?}", padding);
 
-            // tracing::warn!("out length: {:?} {} div by 8: {}/ ", out.len(), out.len() - 12, (out.len() - 12) % 8);
             out.extend_from_slice(&e);
         }
 
