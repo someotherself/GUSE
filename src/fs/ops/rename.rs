@@ -114,7 +114,9 @@ pub fn rename_git_build(
 
     let mut dest_exists = false;
 
-    if fs.get_metadata_by_name(new_parent, new_name).is_ok() {
+    if let Ok(res) = fs.get_metadata_by_name(new_parent, new_name)
+        && let DbReturn::Found { value: _ } = res
+    {
         dest_exists = true;
     };
 
