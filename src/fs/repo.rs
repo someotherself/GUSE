@@ -498,8 +498,6 @@ impl GitRepo {
         fo.remote_callbacks(cbs);
 
         remote.connect(Direction::Fetch)?;
-        // What branch does HEAD point to
-        let default_branch = remote.default_branch();
         remote.disconnect()?;
 
         let mut refspecs = vec![
@@ -521,32 +519,6 @@ impl GitRepo {
 
         remote.fetch(&refs_as_str, Some(&mut fo), None)?;
 
-        if repo.head().is_err() {
-            if let Ok(ref buf) = default_branch
-                && let Ok(src) = std::str::from_utf8(buf.as_ref())
-            {
-                let short = src
-                    .rsplit('/')
-                    .next()
-                    .ok_or_else(|| anyhow!("Invalid ref"))?;
-                let target = format!("refs/remotes/upstream/{short}");
-                if repo.refname_to_id(&target).is_ok() {
-                    repo.set_head(&target)?;
-                } else if let Ok(r) = repo.find_reference("refs/remotes/upstream/HEAD") {
-                    if let Some(sym) = r.symbolic_target() {
-                        repo.set_head(sym)?;
-                    } else if let Some(oid) = r.target() {
-                        repo.set_head_detached(oid)?;
-                    }
-                }
-            }
-        } else if let Ok(r) = repo.find_reference("refs/remotes/upstream/HEAD") {
-            if let Some(sym) = r.symbolic_target() {
-                repo.set_head(sym)?;
-            } else if let Some(oid) = r.target() {
-                repo.set_head_detached(oid)?;
-            }
-        }
         Ok(())
     }
 
