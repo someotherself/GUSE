@@ -1591,7 +1591,6 @@ impl GitFs {
         if let Some(repo_id) = self.repos_map.get(repo_name) {
             self.repos_list.remove(&repo_id);
         } else {
-            tracing::error!("Repo does not exist");
             bail!(std::io::Error::from_raw_os_error(libc::EINVAL))
         }
         self.repos_map.remove(repo_name);
@@ -2733,7 +2732,6 @@ impl GitFs {
         if let DbReturn::Found { value: dentry } = dentry {
             Ok(dentry.target_ino)
         } else {
-            tracing::error!("Could not find dentry in cache {}", target_name.display());
             bail!(std::io::Error::from_raw_os_error(libc::ENOENT))
         }
     }

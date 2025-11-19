@@ -91,7 +91,6 @@ impl<U: Debug> From<DbReturn<U>> for anyhow::Result<U> {
         match value {
             DbReturn::Found { value } => Ok(value),
             DbReturn::Missing | DbReturn::Negative => {
-                tracing::error!("Value {:?} is missing", value);
                 bail!(std::io::Error::from_raw_os_error(libc::ENOENT))
             }
         }
