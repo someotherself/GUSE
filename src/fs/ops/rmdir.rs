@@ -48,7 +48,7 @@ pub fn rmdir_git(fs: &GitFs, parent: NormalIno, name: &OsStr) -> anyhow::Result<
         session.finish_path(fs, parent)?.join(name)
     };
 
-    let _ = std::fs::remove_dir_all(path);
+    let _ = std::fs::remove_dir(path);
     fs.remove_db_dentry(parent, name)?;
     {
         let _ = fs.notifier.try_send(InvalMsg::Entry {
