@@ -557,7 +557,7 @@ impl GitRepo {
         Ok(entries)
     }
 
-        // Why doesn't git2 make this easier?
+    // Why doesn't git2 make this easier?
     pub fn build_index_for_snap(&self, commit_oid: Oid) -> anyhow::Result<Vec<u8>> {
         let repo = self.inner.lock();
         let commit = repo.find_commit(commit_oid)?;
