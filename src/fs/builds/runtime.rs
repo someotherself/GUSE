@@ -8,12 +8,12 @@ use mlua::Lua;
 use crate::fs::builds::reporter::{ChaseError, GuseResult};
 
 #[derive(Debug)]
-pub enum ChaseMode {
+pub enum ChaseRunMode {
     Continuous,
     Binary,
 }
 
-impl ChaseMode {
+impl ChaseRunMode {
     fn from_str(mode: &str) -> Option<Self> {
         match mode.to_lowercase().as_str() {
             "continuous" => Some(Self::Continuous),
@@ -23,10 +23,27 @@ impl ChaseMode {
     }
 }
 
+#[derive(Debug)]
+pub enum ChaseStopMode {
+    FirstFailure,
+    Continuous,
+}
+
+impl ChaseStopMode {
+    fn from_str(mode: &str) -> Option<Self> {
+        match mode.to_lowercase().as_str() {
+            "firstfailure" => Some(Self::FirstFailure),
+            "continuous" => Some(Self::Continuous),
+            _ => None,
+        }
+    }
+}
+
 #[derive(Default, Debug)]
 pub struct LuaConfig {
     pub commits: Vec<String>,
-    pub mode: Option<ChaseMode>,
+    pub run_mode: Option<ChaseRunMode>,
+    pub stop_mode: Option<ChaseStopMode>,
 }
 
 impl LuaConfig {
@@ -64,18 +81,37 @@ impl LuaConfig {
             }
 
             {
-                let mode_ref = Arc::clone(&lua_config);
-                let set_mode = scope
-                    .create_function(move |_, mode: String| {
-                        let chase_mode = ChaseMode::from_str(&mode);
-                        mode_ref.lock().unwrap().mode = chase_mode;
+                let run_mode_ref = Arc::clone(&lua_config);
+                let set_run_mode = scope
+                    .create_function(move |_, run_mode: String| {
+                        let chase_run_mode = ChaseRunMode::from_str(&run_mode);
+                        run_mode_ref.lock().unwrap().run_mode = chase_run_mode;
                         Ok(())
                     })
                     .map_err(|e| ChaseError::LuaError {
                         source: e,
-                        msg: "Could not create set_mode function: ".to_string(),
+                        msg: "Could not create set_run_mode function: ".to_string(),
                     })?;
-                cfg.set("set_mode", set_mode)
+                cfg.set("set_run_mode", set_run_mode)
+                    .map_err(|e| ChaseError::LuaError {
+                        source: e,
+                        msg: "Error setting cfg table: ".to_string(),
+                    })?;
+            }
+
+            {
+                let stop_mode_ref = Arc::clone(&lua_config);
+                let set_stop_mode = scope
+                    .create_function(move |_, mode: String| {
+                        let chase_mode = ChaseStopMode::from_str(&mode);
+                        stop_mode_ref.lock().unwrap().stop_mode = chase_mode;
+                        Ok(())
+                    })
+                    .map_err(|e| ChaseError::LuaError {
+                        source: e,
+                        msg: "Could not create set_stop_mode function: ".to_string(),
+                    })?;
+                cfg.set("set_stop_mode", set_stop_mode)
                     .map_err(|e| ChaseError::LuaError {
                         source: e,
                         msg: "Error setting cfg table: ".to_string(),
