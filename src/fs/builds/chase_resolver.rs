@@ -324,7 +324,7 @@ pub fn cleanup_builds(fs: &GitFs, repo_ino: u64, chase: &Chase) -> anyhow::Resul
             let Some(&(_, parent)) = chase.commit_paths.get(oid) else {
                 continue;
             };
-            let Ok(entries) = fs.readdir(parent.into()) else {
+            let Ok(entries) = fs.readdir(parent) else {
                 continue;
             };
             for e in entries {
