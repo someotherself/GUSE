@@ -94,7 +94,12 @@ pub fn mount_fuse(opts: MountPoint) -> anyhow::Result<()> {
     }
 
     let notif = Arc::new(OnceLock::new());
-    let fs = GitFsAdapter::new(repos_dir.clone(), opts.read_only, notif.clone())?;
+    let fs = GitFsAdapter::new(
+        repos_dir.clone(),
+        mountpoint.clone(),
+        opts.read_only,
+        notif.clone(),
+    )?;
 
     let mut session = fuser::Session::new(fs.clone(), &mountpoint, &options)?;
     let notifier = session.notifier();
@@ -153,10 +158,11 @@ pub struct GitFsAdapter {
 impl GitFsAdapter {
     fn new(
         repos_dir: PathBuf,
+        mount_point: PathBuf,
         read_only: bool,
         notifier: Arc<OnceLock<fuser::Notifier>>,
     ) -> anyhow::Result<Self> {
-        let fs = GitFs::new(repos_dir, read_only, notifier)?;
+        let fs = GitFs::new(repos_dir, mount_point, read_only, notifier)?;
         Ok(GitFsAdapter { inner: fs })
     }
 

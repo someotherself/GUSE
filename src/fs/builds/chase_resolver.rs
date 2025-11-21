@@ -96,25 +96,32 @@ pub fn resolve_path_for_refs(
 ) -> GuseFsResult<HashMap<Oid, (PathBuf, u64)>> {
     let mut out: HashMap<Oid, (PathBuf, u64)> = HashMap::new();
     for (commit, rf_kinds, c_time) in commits {
+        let Ok(repo) = fs.get_repo(repo_ino) else {
+            return Err(ChaseFsError::FsError {
+                msg: "Repo not found".to_string(),
+            });
+        };
+        let root = fs.mount_point.join(&repo.repo_dir);
+
         // TODO: Maybe find a better way search with this priority
         for rf in &rf_kinds {
             if matches!(rf, RefKind::Main(_)) {
                 let (path, ino) = find_path_in_main(fs, repo_ino, commit, c_time)?;
-                out.entry(commit).or_insert((path, ino));
+                out.entry(commit).or_insert((root.join(path), ino));
                 break;
             };
         }
         for rf in &rf_kinds {
             if matches!(rf, RefKind::Pr(_)) {
                 let (path, ino) = find_path_in_pr_merge(fs, repo_ino, rf.get())?;
-                out.entry(commit).or_insert((path, ino));
+                out.entry(commit).or_insert((root.join(path), ino));
                 break;
             };
         }
         for rf in &rf_kinds {
             if matches!(rf, RefKind::PrMerge(_)) {
                 let (path, ino) = find_path_in_pr(fs, repo_ino, rf.get(), commit)?;
-                out.entry(commit).or_insert((path, ino));
+                out.entry(commit).or_insert((root.join(path), ino));
                 break;
             };
         }
@@ -126,7 +133,7 @@ pub fn resolve_path_for_refs(
                 let path = PathBuf::from(rf.as_str())
                     .join(branches_root)
                     .join(branch_folder);
-                out.entry(commit).or_insert((path, ino));
+                out.entry(commit).or_insert((root.join(path), ino));
                 break;
             }
         }

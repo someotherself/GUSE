@@ -169,14 +169,14 @@ impl LuaConfig {
                 .exec()
                 .map_err(|e| ChaseError::LuaError {
                     source: e,
-                    msg: "Error running exec on cfg table: ".to_string(),
+                    msg: "Error running exec on cfg table.".to_string(),
                 })?;
 
             globals
                 .set("cfg", mlua::Value::Nil)
                 .map_err(|e| ChaseError::LuaError {
                     source: e,
-                    msg: "Error setting cfg table: ".to_string(),
+                    msg: "Error setting cfg table.".to_string(),
                 })?;
             Ok(())
         };

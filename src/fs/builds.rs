@@ -9,6 +9,7 @@ use tempfile::TempDir;
 
 pub mod chase;
 pub mod chase_resolver;
+pub mod chase_runner;
 pub mod inject;
 pub mod reporter;
 pub mod runtime;

@@ -36,6 +36,7 @@ fn git_fs_setup(setup: GitFsTestSetup) -> SetupResult {
 
     let fs = GitFs::new(
         tmpdir.path().to_path_buf(),
+        PathBuf::new(),
         setup.read_only,
         Arc::new(OnceLock::new()),
     )

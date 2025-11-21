@@ -140,6 +140,7 @@ pub struct GitFs {
     pub repos_dir: PathBuf,
     /// Use helpers `self.insert_repo` and `self.delete_repo`
     /// <repo_id, repo>
+    pub mount_point: PathBuf,
     repos_list: DashMap<u16, Arc<GitRepo>>,
     /// <repo_id, connections>
     conn_list: DashMap<u16, Arc<MetaDb>>,
@@ -263,6 +264,7 @@ impl FileExt for SourceTypes {
 impl GitFs {
     pub fn new(
         repos_dir: PathBuf,
+        mount_point: PathBuf,
         read_only: bool,
         notifier: Arc<OnceLock<fuser::Notifier>>,
     ) -> anyhow::Result<Arc<Self>> {
@@ -270,6 +272,7 @@ impl GitFs {
 
         let fs = Self {
             repos_dir: repos_dir.clone(),
+            mount_point: mount_point.clone(),
             repos_list: DashMap::new(),
             conn_list: DashMap::new(),
             repos_map: DashMap::new(),
