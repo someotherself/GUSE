@@ -18,20 +18,20 @@ pub enum ChaseError {
     ParsingMisc { msg: String },
     #[error("Script not found at path")]
     ScriptNotFound { path: PathBuf },
-    #[error("No commits provided")]
+    #[error("")]
     LuaError {
         #[source]
         source: mlua::Error,
         msg: String,
     },
-    #[error("Incorrect mode")]
-    ScriptMode { mode: String },
-    #[error("No commits provided: {source} / {msg}")]
-    NoCommits {
-        #[source]
-        source: mlua::Error,
-        msg: String,
-    },
+    #[error("Missing run mode")]
+    MissScriptRunMode,
+    #[error("Missing stop mode")]
+    MissScriptStopMode,
+    #[error("No commits provided")]
+    NoCommits,
+    #[error("No commands provided")]
+    NoCommands,
 }
 
 pub type GuseGitResult<T> = core::result::Result<T, ChaseGitError>;
@@ -104,12 +104,21 @@ impl<T> ErrorResolver<T> for GuseResult<T> {
                     stream.update(&prepare_not_found_error(&path))?;
                     bail!("")
                 }
-                ChaseError::ScriptMode { mode } => {
-                    stream.update(&prepare_script_mode_error(&mode))?;
+                ChaseError::MissScriptRunMode => {
+                    stream.update("")?;
                     bail!("")
                 }
-                ChaseError::NoCommits { source, msg } => {
-                    bail!("Error parsing script: {source} {msg}")
+                ChaseError::MissScriptStopMode => {
+                    stream.update("")?;
+                    bail!("")
+                }
+                ChaseError::NoCommits => {
+                    stream.update("No COMMIT hashes were found in the script.\n")?;
+                    bail!("")
+                }
+                ChaseError::NoCommands => {
+                    stream.update("No COMMANDS were found in the script.\n")?;
+                    bail!("")
                 }
             },
         }
@@ -128,13 +137,6 @@ fn prepare_not_found_error(path: &Path) -> String {
     let text1 = white_underline("Could not find the script as path:");
     let text2 = white_underline("Please double check the name.\n");
     format!("{} {}\n{}", text1, path.display(), text2)
-}
-
-/// ChaseError::ScriptMode
-fn prepare_script_mode_error(mode: &str) -> String {
-    let text1 = "Incorrect build mode:";
-    let text2 = r##"Please choose between "Continuous" and "Binary""##;
-    format!("{} {}\n{}", text1, mode, text2)
 }
 
 impl<T> ErrorResolver<T> for GuseGitResult<T> {
