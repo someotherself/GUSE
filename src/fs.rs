@@ -14,7 +14,7 @@ use std::{
 
 use anyhow::{Context, anyhow, bail};
 use dashmap::DashMap;
-use git2::{FileMode, ObjectType, Oid};
+use git2::{ObjectType, Oid};
 use tracing::{Level, field, info, instrument};
 
 use crate::fs;
@@ -452,20 +452,14 @@ impl GitFs {
 
         let live_name = OsString::from(LIVE_FOLDER);
 
-        let perms = 0o775;
-        let st_mode = libc::S_IFDIR | perms;
-
         let mut live_attr: FileAttr = dir_attr(InoFlag::LiveRoot).into();
         live_attr.ino = live_ino;
-        live_attr.git_mode = st_mode;
 
         let mut build_attr: FileAttr = dir_attr(InoFlag::BuildRoot).into();
         build_attr.ino = build_ino;
-        build_attr.git_mode = st_mode;
 
         let mut chase_attr: FileAttr = dir_attr(InoFlag::ChaseRoot).into();
         chase_attr.ino = chase_ino;
-        chase_attr.git_mode = st_mode;
 
         let repo = self.get_repo(repo_ino)?;
         repo.refresh_refs()?;
@@ -629,23 +623,17 @@ impl GitFs {
         let build_name = OsString::from(BUILD_FOLDER);
         let live_name = OsString::from(LIVE_FOLDER);
 
-        let perms = 0o775;
-        let st_mode = libc::S_IFDIR | perms;
-
         let mut live_attr: FileAttr = dir_attr(InoFlag::LiveRoot).into();
         live_attr.ino = live_ino;
-        live_attr.git_mode = st_mode;
 
         let mut build_attr: FileAttr = dir_attr(InoFlag::BuildRoot).into();
         build_attr.ino = build_ino;
-        build_attr.git_mode = st_mode;
 
         // Create build folder on disk
         std::fs::create_dir(tmp_path.join(BUILD_FOLDER))?;
 
         let mut chase_attr: FileAttr = dir_attr(InoFlag::ChaseRoot).into();
         chase_attr.ino = chase_ino;
-        chase_attr.git_mode = st_mode;
 
         // Create build folder on disk
         std::fs::create_dir(tmp_path.join(CHASE_FOLDER))?;
@@ -770,7 +758,7 @@ impl GitFs {
                 CREATE TABLE IF NOT EXISTS inode_map (
                     inode        INTEGER PRIMARY KEY,
                     oid          TEXT    NOT NULL,
-                    git_mode     INTEGER NOT NULL,
+                    kind         INTEGER NOT NULL,
                     size         INTEGER NOT NUll,
                     inode_flag   INTEGER NOT NUll,
                     uid          INTEGER NOT NULL,
@@ -813,17 +801,8 @@ impl GitFs {
         }
 
         let parent = self.get_single_parent(ino.to_u64_n())?;
-        let par_mode = self.get_mode_from_db(parent.into())?;
-        let parent_kind = match par_mode {
-            git2::FileMode::Tree | git2::FileMode::Commit => FileType::Directory,
-            _ => FileType::RegularFile,
-        };
-
-        let target_mode = self.get_mode_from_db(ino.to_norm())?;
-        let target_kind = match target_mode {
-            git2::FileMode::Tree | git2::FileMode::Commit => FileType::Directory,
-            _ => FileType::RegularFile,
-        };
+        let parent_kind = self.get_kind_from_db(parent.into())?;
+        let target_kind = self.get_kind_from_db(ino.to_norm())?;
 
         let parent: Inodes = parent.into();
 
@@ -1001,8 +980,6 @@ impl GitFs {
             ObjectType::Tree | ObjectType::Commit => FileType::Directory,
             _ => FileType::RegularFile,
         };
-        let perm = 0o775;
-
         let nlink = if kind == FileType::Directory { 2 } else { 1 };
 
         let uid = unsafe { libc::getuid() };
@@ -1022,8 +999,7 @@ impl GitFs {
             ctime: time,
             crtime: time,
             kind,
-            perm,
-            git_mode: git_attr.git_mode,
+            perm: git_attr.git_mode as u16,
             nlink,
             uid,
             gid,
@@ -1035,9 +1011,6 @@ impl GitFs {
 
     #[instrument(level = "debug", skip(self), fields(target = %target), ret(level = Level::DEBUG), err(Display))]
     pub fn getattr(&self, target: u64) -> anyhow::Result<FileAttr> {
-        let perms = 0o775;
-        let st_mode = libc::S_IFDIR | perms;
-
         let ino: Inodes = target.into();
 
         if !self.exists(ino)? {
@@ -1049,13 +1022,11 @@ impl GitFs {
             FsOperationContext::Root => {
                 let mut attr: FileAttr = dir_attr(InoFlag::Root).into();
                 attr.ino = ROOT_INO;
-                attr.git_mode = st_mode;
                 Ok(attr)
             }
             FsOperationContext::RepoDir => {
                 let mut attr: FileAttr = dir_attr(InoFlag::RepoRoot).into();
                 attr.ino = ino.into();
-                attr.git_mode = st_mode;
                 let ino: Inodes = attr.ino.into();
                 match ino {
                     Inodes::NormalIno(_) => Ok(attr),
@@ -1499,7 +1470,6 @@ impl GitFs {
         let v_ino = ino.to_virt_u64();
 
         new_attr.size = size;
-        new_attr.git_mode = 0o100444;
         new_attr.kind = FileType::RegularFile;
         new_attr.perm = 0o444;
         new_attr.nlink = 1;
@@ -1721,16 +1691,13 @@ impl GitFs {
             UNIX_EPOCH - Duration::new((-secs) as u64, nsecs)
         };
 
-        let (kind, mode) = if metadata.is_dir() {
-            (FileType::Directory, libc::S_IFDIR)
+        let kind = if metadata.is_dir() {
+            FileType::Directory
         } else if metadata.is_file() {
-            (FileType::RegularFile, libc::S_IFREG)
+            FileType::RegularFile
         } else {
-            (FileType::Symlink, libc::S_IFLNK)
+            FileType::Symlink
         };
-
-        let perms = 0o775;
-        let st_mode = mode | perms;
 
         Ok(FileAttr {
             ino: 0,
@@ -1744,7 +1711,6 @@ impl GitFs {
             crtime,
             kind,
             perm: 0o775,
-            git_mode: st_mode,
             nlink: metadata.nlink() as u32,
             uid: unsafe { libc::geteuid() },
             gid: unsafe { libc::getgid() },
@@ -2058,14 +2024,14 @@ impl GitFs {
         if ino == GitFs::repo_id_to_ino(repo_id) {
             return Ok(true);
         }
-        let mode = self.get_mode_from_db(ino.to_norm())?;
+        let mode = self.get_kind_from_db(ino.to_norm())?;
         let ino: Inodes = ino;
         match mode {
-            FileMode::Tree | FileMode::Commit => match ino {
+            FileType::Directory => match ino {
                 Inodes::NormalIno(_) => Ok(true),
                 Inodes::VirtualIno(_) => Ok(false),
             },
-            FileMode::Blob | FileMode::BlobExecutable => match ino {
+            FileType::RegularFile => match ino {
                 Inodes::NormalIno(_) => Ok(false),
                 Inodes::VirtualIno(_) => Ok(true),
             },
@@ -2079,19 +2045,8 @@ impl GitFs {
         if ino.to_norm_u64() == ROOT_INO {
             return Ok(false);
         }
-        let mode = self.get_mode_from_db(ino)?;
-        Ok(mode == FileMode::Blob || mode == FileMode::BlobExecutable)
-    }
-
-    /// Needs to be passed the actual u64 inode
-    #[allow(dead_code)]
-    fn is_link(&self, ino: NormalIno) -> anyhow::Result<bool> {
-        let ino = ino.to_norm_u64();
-        if ino == ROOT_INO {
-            return Ok(false);
-        }
-        let mode = self.get_mode_from_db(ino.into())?;
-        Ok(mode == FileMode::Link)
+        let kind = self.get_kind_from_db(ino)?;
+        Ok(kind == FileType::RegularFile)
     }
 
     pub fn is_virtual(&self, ino: u64) -> bool {
@@ -2438,14 +2393,13 @@ impl GitFs {
         Ok(mask)
     }
 
-    fn get_mode_from_db(&self, ino: NormalIno) -> anyhow::Result<git2::FileMode> {
+    fn get_kind_from_db(&self, ino: NormalIno) -> anyhow::Result<FileType> {
         if ino.to_norm_u64() == 0 {
-            return Ok(FileMode::Tree);
+            return Ok(FileType::Directory);
         }
         let repo = self.get_repo(ino.into())?;
-        if let Some(mode) = repo.attr_cache.with_get_mut(&ino.into(), |a| a.git_mode) {
-            return repo::try_into_filemode(u64::from(mode))
-                .ok_or_else(|| anyhow!("Invalid filemode"));
+        if let Some(kind) = repo.attr_cache.with_get_mut(&ino.into(), |a| a.kind) {
+            return Ok(kind);
         }
 
         let repo_id = GitFs::ino_to_repo_id(ino.into());
@@ -2454,8 +2408,7 @@ impl GitFs {
             .get(&repo_id)
             .ok_or_else(|| anyhow::anyhow!("no db"))?;
         let conn = repo_db.ro_pool.get()?;
-        let mode = MetaDb::get_mode_from_db(&conn, ino.into())?;
-        repo::try_into_filemode(mode).ok_or_else(|| anyhow!("Invalid filemode"))
+        MetaDb::get_kind_from_db(&conn, ino.into())
     }
 
     pub fn get_name_from_db(&self, ino: u64) -> anyhow::Result<OsString> {
@@ -2688,10 +2641,8 @@ impl GitFs {
         let DbReturn::Found { value: attr } = repo.attr_cache.get(&ino) else {
             bail!(std::io::Error::from_raw_os_error(libc::ENOENT))
         };
-        let mode = repo::try_into_filemode(u64::from(attr.git_mode))
-            .ok_or_else(|| anyhow!("Invalid filemode"))?;
         Ok(BuildCtxMetadata {
-            mode,
+            kind: attr.kind,
             oid: attr.oid,
             name,
             ino_flag: attr.ino_flag,

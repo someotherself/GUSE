@@ -458,14 +458,12 @@ impl fuser::Filesystem for GitFsAdapter {
             oid: Oid::zero(),
             kind: FileType::Directory,
             name: OsString::from("."),
-            git_mode: libc::S_IFDIR,
         };
         let parent_entry: DirectoryEntry = DirectoryEntry {
             ino: parent_ino,
             oid: Oid::zero(),
             kind: FileType::Directory,
             name: OsString::from(".."),
-            git_mode: libc::S_IFDIR,
         };
         let mut entries: Vec<DirectoryEntry> = vec![];
         if offset == 0 {
@@ -574,14 +572,12 @@ impl fuser::Filesystem for GitFsAdapter {
                 oid: Oid::zero(),
                 kind: FileType::Directory,
                 name: OsString::from("."),
-                git_mode: libc::S_IFDIR,
             },
             DirectoryEntry {
                 ino: ROOT_INO,
                 oid: Oid::zero(),
                 kind: FileType::Directory,
                 name: OsString::from(".."),
-                git_mode: libc::S_IFDIR,
             },
         ];
         let mut entries: Vec<DirectoryEntryPlus> = vec![];
@@ -744,7 +740,6 @@ impl fuser::Filesystem for GitFsAdapter {
             crtime: None,
             kind: None,
             perm: None,
-            git_mode: None,
             nlink: None,
             uid,
             gid,

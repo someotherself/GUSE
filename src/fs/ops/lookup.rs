@@ -14,12 +14,9 @@ pub fn lookup_root(fs: &GitFs, name: &OsStr) -> anyhow::Result<Option<FileAttr>>
     let attr = fs.repos_list.iter().find_map(|repo| {
         let (repo_name, repo_id) = (OsString::from(repo.repo_dir.clone()), repo.repo_id);
         if repo_name == name {
-            let perms = 0o775;
-            let st_mode = libc::S_IFDIR | perms;
             let repo_ino = GitFs::repo_id_to_ino(repo_id);
             let mut attr: FileAttr = dir_attr(InoFlag::RepoRoot).into();
             attr.ino = repo_ino;
-            attr.git_mode = st_mode;
             Some(attr)
         } else {
             None

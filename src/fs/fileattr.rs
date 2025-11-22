@@ -4,7 +4,7 @@ use std::{
 };
 
 use anyhow::bail;
-use git2::{ObjectType, Oid};
+use git2::Oid;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct FileAttr {
@@ -19,7 +19,6 @@ pub struct FileAttr {
     pub crtime: SystemTime,
     pub kind: FileType,
     pub perm: u16,
-    pub git_mode: u32,
     pub nlink: u32,
     pub uid: u32,
     pub gid: u32,
@@ -42,7 +41,7 @@ pub struct ObjectAttr {
     pub name: OsString,
     pub oid: Oid,
     pub kind: git2::ObjectType,
-    pub git_mode: u32,
+    pub git_mode: u32, // attr.perm
     pub size: u64,
     pub commit_time: git2::Time,
 }
@@ -55,13 +54,20 @@ pub enum FileType {
 }
 
 impl FileType {
-    #[inline]
-    pub fn from_filemode(mode: ObjectType) -> anyhow::Result<FileType> {
-        match mode {
-            ObjectType::Blob => Ok(FileType::RegularFile),
-            ObjectType::Tree => Ok(FileType::Directory),
-            ObjectType::Commit => Ok(FileType::Directory),
-            _ => Ok(FileType::RegularFile),
+    pub fn to_mode(self) -> u32 {
+        match self {
+            FileType::Directory => libc::S_IFDIR,
+            FileType::RegularFile => libc::S_IFREG,
+            FileType::Symlink => libc::S_IFLNK,
+        }
+    }
+
+    pub fn try_from_mode(mode: u64) -> anyhow::Result<FileType> {
+        match mode as u32 {
+            libc::S_IFDIR => Ok(FileType::Directory),
+            libc::S_IFREG => Ok(FileType::RegularFile),
+            libc::S_IFLNK => Ok(FileType::Symlink),
+            _ => bail!("Wrong file mode {}", mode),
         }
     }
 }
@@ -121,7 +127,6 @@ impl From<CreateFileAttr> for FileAttr {
             crtime: now,
             kind: value.kind,
             perm: value.perm,
-            git_mode: value.mode,
             nlink: 1,
             uid: unsafe { libc::getuid() },
             gid: unsafe { libc::getgid() },
@@ -164,7 +169,6 @@ pub struct SetFileAttr {
     pub crtime: Option<SystemTime>,
     pub kind: Option<FileType>,
     pub perm: Option<u16>,
-    pub git_mode: Option<u32>,
     pub nlink: Option<u32>,
     pub uid: Option<u32>,
     pub gid: Option<u32>,

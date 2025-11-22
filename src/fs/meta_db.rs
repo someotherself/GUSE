@@ -18,10 +18,9 @@ use crate::{
         ROOT_INO,
         fileattr::{
             Dentry, FileAttr, FileType, InoFlag, SetFileAttr, StorageNode, pair_to_system_time,
-            system_time_to_pair, try_into_filetype_u32,
+            system_time_to_pair,
         },
         ops::readdir::{BuildCtxMetadata, DirectoryEntry},
-        repo,
     },
     inodes::NormalIno,
 };
@@ -417,7 +416,7 @@ impl MetaDb {
         let mut upsert_inode = tx.prepare(
             r#"
         INSERT INTO inode_map
-            (inode, oid, git_mode, size, inode_flag,
+            (inode, oid, kind, size, inode_flag,
              uid, gid, nlink,
              atime_secs, atime_nsecs,
              mtime_secs, mtime_nsecs,
@@ -432,7 +431,7 @@ impl MetaDb {
              ?14, ?15)
         ON CONFLICT(inode) DO UPDATE SET
             oid         = excluded.oid,
-            git_mode    = excluded.git_mode,
+            kind        = excluded.kind,
             size        = excluded.size,
             inode_flag  = excluded.inode_flag,
             uid         = excluded.uid,
@@ -469,7 +468,7 @@ impl MetaDb {
             upsert_inode.execute(params![
                 a.ino as i64,
                 a.oid.to_string(),
-                a.git_mode as i64,
+                FileType::to_mode(a.kind) as i64,
                 a.size as i64,
                 a.ino_flag as i64,
                 a.uid as i64,
@@ -513,7 +512,7 @@ impl MetaDb {
         tx.execute(
             r#"
         INSERT INTO inode_map
-            (inode, oid, git_mode, size, inode_flag, uid, gid, atime_secs, atime_nsecs, mtime_secs, mtime_nsecs, ctime_secs, ctime_nsecs, nlink, rdev, flags)
+            (inode, oid, kind, size, inode_flag, uid, gid, atime_secs, atime_nsecs, mtime_secs, mtime_nsecs, ctime_secs, ctime_nsecs, nlink, rdev, flags)
         VALUES
             (?1, '', 0, ?2, ?3, 0, ?4, 0, 0, 0, 0, 0, 0, 1, 0, 0)
         ON CONFLICT(inode) DO NOTHING;
@@ -656,7 +655,7 @@ impl MetaDb {
             d.target_inode,
             d.name,
             m.oid,
-            m.git_mode,
+            m.kind,
             m.inode_flag
         FROM dentries AS d
         LEFT JOIN inode_map as m ON m.inode = d.target_inode
@@ -678,8 +677,8 @@ impl MetaDb {
             let oid_str: String = row.get(2)?;
             let oid = Oid::from_str(&oid_str)?;
 
-            let git_mode_i64: i64 = row.get(3)?;
-            let git_mode = u32::try_from(git_mode_i64)?;
+            let kind_i64: i64 = row.get(3)?;
+            let kind = FileType::try_from_mode(kind_i64 as u64)?;
 
             if build_dir {
                 let ino_flag_i64: i64 = row.get(4)?;
@@ -690,18 +689,11 @@ impl MetaDb {
                 }
             }
 
-            let kind = match git_mode & 0o170000 {
-                0o040000 => FileType::Directory,
-                0o120000 => FileType::Symlink,
-                _ => FileType::RegularFile,
-            };
-
             out.push(DirectoryEntry {
                 ino: target_ino,
                 oid,
                 name,
                 kind,
-                git_mode,
             });
         }
 
@@ -833,22 +825,16 @@ impl MetaDb {
         Ok(size)
     }
 
-    pub fn get_mode_from_db(conn: &rusqlite::Connection, ino: u64) -> anyhow::Result<u64> {
+    pub fn get_kind_from_db(conn: &rusqlite::Connection, ino: u64) -> anyhow::Result<FileType> {
         let mut stmt = conn.prepare(
-            "SELECT git_mode
+            "SELECT kind
            FROM inode_map
           WHERE inode = ?1",
         )?;
 
-        let git_mode_opt: Option<i64> = stmt
-            .query_row(rusqlite::params![ino as i64], |row| row.get(0))
-            .optional()?;
+        let kind_i64: i64 = stmt.query_row(rusqlite::params![ino as i64], |row| row.get(0))?;
 
-        if let Some(git_mode) = git_mode_opt {
-            Ok(git_mode as u64)
-        } else {
-            bail!(format!("Could not find mode for {ino}"))
-        }
+        FileType::try_from_mode(kind_i64 as u64)
     }
 
     pub fn get_oid_from_db(conn: &rusqlite::Connection, ino: u64) -> anyhow::Result<Oid> {
@@ -1057,12 +1043,12 @@ impl MetaDb {
             tx.execute(
                 r#"
                 INSERT INTO inode_map
-                    (inode, oid, git_mode, size, inode_flag, uid, gid, nlink, atime_secs, atime_nsecs, mtime_secs, mtime_nsecs, ctime_secs, ctime_nsecs, rdev, flags)
+                    (inode, oid, kind, size, inode_flag, uid, gid, nlink, atime_secs, atime_nsecs, mtime_secs, mtime_nsecs, ctime_secs, ctime_nsecs, rdev, flags)
                 VALUES
                     (?1, ?2, ?3, ?4, ?5, ?6, ?7, 1, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)
                 ON CONFLICT(inode) DO UPDATE SET
                     oid      = excluded.oid,
-                    git_mode = excluded.git_mode,
+                    kind    = excluded.kind,
                     size     = excluded.size,
                     inode_flag = excluded.inode_flag,
                     uid      = excluded.uid,
@@ -1080,7 +1066,7 @@ impl MetaDb {
                 params![
                     a.ino as i64,
                     a.oid.to_string(),
-                    a.git_mode as i64,
+                    FileType::to_mode(a.kind) as i64,
                     a.size as i64,
                     a.ino_flag as i64,
                     a.uid as i64,
@@ -1414,7 +1400,7 @@ impl MetaDb {
         SELECT
             inode,
             oid,
-            git_mode,
+            kind,
             size,
             inode_flag,
             uid,
@@ -1457,7 +1443,7 @@ impl MetaDb {
         let (
             ino,
             oid,
-            git_mode,
+            kind,
             size,
             inode_flag,
             uid,
@@ -1482,8 +1468,7 @@ impl MetaDb {
         let oid = Oid::from_str(&oid)?;
         let ino_flag = u64::try_from(inode_flag)?;
         let ino_flag = InoFlag::try_from(ino_flag)?;
-        let kind: FileType =
-            try_into_filetype_u32(git_mode as u32).ok_or_else(|| anyhow!("Invalid filetype"))?;
+        let kind = FileType::try_from_mode(kind as u64)?;
         let size = size as u64;
         let blocks = size.div_ceil(512);
         let atime = pair_to_system_time(atime_secs, atime_nsecs as i32);
@@ -1504,7 +1489,6 @@ impl MetaDb {
             crtime: ctime,
             kind,
             perm,
-            git_mode: git_mode as u32,
             nlink: nlink as u32,
             uid: uid as u32,
             gid: gid as u32,
@@ -1522,7 +1506,7 @@ impl MetaDb {
     ) -> anyhow::Result<BuildCtxMetadata> {
         let sql = r#"
         SELECT
-            m.git_mode, -- 0
+            m.kind, -- 0
             m.oid, -- 1
             m.inode_flag, -- 2
             (SELECT d.name
@@ -1537,20 +1521,20 @@ impl MetaDb {
         let mut stmt = conn.prepare_cached(sql)?;
         let row = stmt
             .query_row(params![ino as i64], |row| {
-                let mode_i: i64 = row.get(0)?;
+                let kind_i: i64 = row.get(0)?;
                 let oid_txt: String = row.get(1)?;
                 let flag_i: i64 = row.get(2)?;
                 let name_raw: Vec<u8> = row.get(3)?;
 
-                let mode = repo::try_into_filemode(mode_i as u64)
-                    .ok_or_else(|| rusqlite::Error::InvalidQuery)?;
+                let kind = FileType::try_from_mode(kind_i as u64)
+                    .map_err(|_| rusqlite::Error::InvalidQuery)?;
                 let oid: Oid = oid_txt.parse().map_err(|_| rusqlite::Error::InvalidQuery)?;
                 let ino_flag = (flag_i as u64)
                     .try_into()
                     .map_err(|_| rusqlite::Error::InvalidQuery)?;
 
                 Ok(BuildCtxMetadata {
-                    mode,
+                    kind,
                     oid,
                     ino_flag,
                     name: OsString::from_vec(name_raw),

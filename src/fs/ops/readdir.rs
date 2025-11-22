@@ -5,7 +5,7 @@ use std::{
 };
 
 use anyhow::bail;
-use git2::{FileMode, ObjectType, Oid};
+use git2::{ObjectType, Oid};
 
 use crate::{
     fs::{
@@ -30,17 +30,15 @@ pub struct DirectoryEntry {
     pub oid: Oid,
     pub name: OsString,
     pub kind: FileType,
-    pub git_mode: u32,
 }
 
 impl DirectoryEntry {
-    pub fn new(ino: u64, oid: Oid, name: OsString, kind: FileType, git_mode: u32) -> Self {
+    pub fn new(ino: u64, oid: Oid, name: OsString, kind: FileType) -> Self {
         Self {
             ino,
             oid,
             name,
             kind,
-            git_mode,
         }
     }
 }
@@ -65,13 +63,12 @@ impl From<ObjectAttr> for DirectoryEntry {
             oid: attr.oid,
             name: attr.name,
             kind,
-            git_mode: attr.git_mode,
         }
     }
 }
 
 pub struct BuildCtxMetadata {
-    pub mode: git2::FileMode,
+    pub kind: FileType,
     pub oid: Oid,
     pub name: OsString,
     pub ino_flag: InoFlag,
@@ -104,7 +101,6 @@ pub fn readdir_root_dir(fs: &GitFs) -> anyhow::Result<Vec<DirectoryEntry>> {
             Oid::zero(),
             OsString::from(repo_dir),
             FileType::Directory,
-            libc::S_IFDIR,
         );
         entries.push(dir_entry);
     }
@@ -135,7 +131,6 @@ pub fn readdir_repo_dir(fs: &GitFs, parent: NormalIno) -> anyhow::Result<Vec<Dir
         Oid::zero(),
         OsString::from(LIVE_FOLDER),
         FileType::Directory,
-        libc::S_IFDIR,
     );
 
     // Add the chase folder
@@ -150,7 +145,6 @@ pub fn readdir_repo_dir(fs: &GitFs, parent: NormalIno) -> anyhow::Result<Vec<Dir
         Oid::zero(),
         OsString::from(CHASE_FOLDER),
         FileType::Directory,
-        libc::S_IFDIR,
     );
 
     entries.push(live_entry);
@@ -164,13 +158,9 @@ pub fn readdir_repo_dir(fs: &GitFs, parent: NormalIno) -> anyhow::Result<Vec<Dir
     if !object_entries.is_empty() {
         for (_, month) in object_entries {
             let dir_entry = match fs.exists_by_name(parent, &month.name)? {
-                DbReturn::Found { value: i } => DirectoryEntry::new(
-                    i,
-                    Oid::zero(),
-                    month.name,
-                    FileType::Directory,
-                    month.git_mode,
-                ),
+                DbReturn::Found { value: i } => {
+                    DirectoryEntry::new(i, Oid::zero(), month.name, FileType::Directory)
+                }
                 DbReturn::Missing => {
                     let entry_ino = fs.next_inode_checked(parent)?;
                     let mut attr: FileAttr = dir_attr(InoFlag::MonthFolder).into();
@@ -180,7 +170,7 @@ pub fn readdir_repo_dir(fs: &GitFs, parent: NormalIno) -> anyhow::Result<Vec<Dir
                         name: month.name.clone(),
                         attr,
                     });
-                    DirectoryEntry::new(entry_ino, attr.oid, month.name, attr.kind, attr.git_mode)
+                    DirectoryEntry::new(entry_ino, attr.oid, month.name, attr.kind)
                 }
                 DbReturn::Negative => {
                     continue;
@@ -208,13 +198,9 @@ pub fn readdir_repo_dir(fs: &GitFs, parent: NormalIno) -> anyhow::Result<Vec<Dir
     });
     for (ref_name, flag) in folders {
         let dir_entry = match fs.exists_by_name(parent, &ref_name)? {
-            DbReturn::Found { value: i } => DirectoryEntry::new(
-                i,
-                Oid::zero(),
-                ref_name.clone(),
-                FileType::Directory,
-                libc::S_IFDIR,
-            ),
+            DbReturn::Found { value: i } => {
+                DirectoryEntry::new(i, Oid::zero(), ref_name.clone(), FileType::Directory)
+            }
             DbReturn::Missing => {
                 let entry_ino = fs.next_inode_checked(parent)?;
                 let mut attr: FileAttr = dir_attr(flag).into();
@@ -224,7 +210,7 @@ pub fn readdir_repo_dir(fs: &GitFs, parent: NormalIno) -> anyhow::Result<Vec<Dir
                     name: ref_name.clone(),
                     attr,
                 });
-                DirectoryEntry::new(entry_ino, attr.oid, ref_name, attr.kind, attr.git_mode)
+                DirectoryEntry::new(entry_ino, attr.oid, ref_name, attr.kind)
             }
             DbReturn::Negative => {
                 continue;
@@ -248,10 +234,10 @@ pub fn readdir_live_dir(fs: &GitFs, ino: NormalIno) -> anyhow::Result<Vec<Direct
     for node in path.read_dir()? {
         let node = node?;
         let node_name = node.file_name();
-        let (kind, filemode) = if node.file_type()?.is_dir() {
-            (FileType::Directory, libc::S_IFDIR)
+        let kind = if node.file_type()?.is_dir() {
+            FileType::Directory
         } else {
-            (FileType::RegularFile, libc::S_IFREG)
+            FileType::RegularFile
         };
 
         let mut attr = fs.refresh_medata_using_path(node.path(), InoFlag::InsideLive)?;
@@ -268,7 +254,7 @@ pub fn readdir_live_dir(fs: &GitFs, ino: NormalIno) -> anyhow::Result<Vec<Direct
             }
             DbReturn::Negative => continue,
         };
-        let entry = DirectoryEntry::new(attr.ino, Oid::zero(), node_name, kind, filemode);
+        let entry = DirectoryEntry::new(attr.ino, Oid::zero(), node_name, kind);
         entries.push(entry);
     }
     fs.write_inodes_to_db(nodes)?;
@@ -280,7 +266,7 @@ pub fn readdir_live_dir(fs: &GitFs, ino: NormalIno) -> anyhow::Result<Vec<Direct
 // 1 - ino is for a month folder -> show days folders
 // 2 - ino is for a commit or inside a commit -> show commit contents
 pub fn classify_inode(meta: &BuildCtxMetadata) -> anyhow::Result<DirCase> {
-    if (meta.mode == FileMode::Tree || meta.mode == FileMode::Commit) && meta.oid == Oid::zero() {
+    if meta.kind == FileType::Directory && meta.oid == Oid::zero() {
         // Branch 1
         if let Some((y, m)) = namespec::split_once_os(&meta.name, b'-')
             && let (Some(year), Some(month)) =
@@ -364,16 +350,16 @@ fn populate_entries_by_path(
     for node in path.read_dir()? {
         let node = node?;
         let node_name = node.file_name();
-        let (kind, filemode) = if node.file_type()?.is_dir() {
-            (FileType::Directory, libc::S_IFDIR)
+        let kind = if node.file_type()?.is_dir() {
+            FileType::Directory
         } else {
-            (FileType::RegularFile, libc::S_IFREG)
+            FileType::RegularFile
         };
         let entry_ino = match fs.exists_by_name(ino.into(), &node_name)? {
             DbReturn::Found { value: ino } => ino,
             _ => continue,
         };
-        let entry = DirectoryEntry::new(entry_ino, Oid::zero(), node_name, kind, filemode);
+        let entry = DirectoryEntry::new(entry_ino, Oid::zero(), node_name, kind);
         out.push(entry);
     }
     Ok(out)
@@ -428,10 +414,10 @@ fn read_inside_dot_git(fs: &GitFs, parent_ino: NormalIno) -> anyhow::Result<Vec<
         } else {
             InoFlag::InsideDotGit
         };
-        let (kind, filemode) = if node.file_type()?.is_dir() {
-            (FileType::Directory, libc::S_IFDIR)
+        let kind = if node.file_type()?.is_dir() {
+            FileType::Directory
         } else {
-            (FileType::RegularFile, libc::S_IFREG)
+            FileType::RegularFile
         };
 
         let mut attr = fs.refresh_medata_using_path(node.path(), ino_flag)?;
@@ -453,7 +439,7 @@ fn read_inside_dot_git(fs: &GitFs, parent_ino: NormalIno) -> anyhow::Result<Vec<
             DbReturn::Negative => continue,
         };
 
-        let entry = DirectoryEntry::new(attr.ino, Oid::zero(), node_name, kind, filemode);
+        let entry = DirectoryEntry::new(attr.ino, Oid::zero(), node_name, kind);
         entries.push(entry);
     }
 
@@ -466,7 +452,6 @@ fn read_inside_dot_git(fs: &GitFs, parent_ino: NormalIno) -> anyhow::Result<Vec<
             Oid::zero(),
             OsString::from("index"),
             FileType::RegularFile,
-            libc::S_IFREG,
         );
         entries.push(index_entry);
 
@@ -483,9 +468,6 @@ fn read_inside_dot_git(fs: &GitFs, parent_ino: NormalIno) -> anyhow::Result<Vec<
 }
 
 fn dot_git_root(fs: &GitFs, parent_ino: u64) -> anyhow::Result<DirectoryEntry> {
-    let perms = 0o775;
-    let st_mode = libc::S_IFDIR | perms;
-
     let name = OsStr::new(".git");
     let entry_ino = match fs.exists_by_name(parent_ino, name)? {
         DbReturn::Found { value: ino } => ino,
@@ -511,7 +493,6 @@ fn dot_git_root(fs: &GitFs, parent_ino: u64) -> anyhow::Result<DirectoryEntry> {
         oid: Oid::zero(),
         name: name.to_os_string(),
         kind: FileType::Directory,
-        git_mode: st_mode,
     };
     Ok(entry)
 }
@@ -614,8 +595,8 @@ fn objects_to_dir_entries(
                 attr.oid = entry.oid;
                 attr.ino = ino;
                 if attr.kind == FileType::RegularFile {
-                    // Needs to match the gitmode, else index will not show correctly
-                    attr.perm = 0o655;
+                    // Needs to match the gitmode for git to show a clean working tree
+                    attr.perm = entry.git_mode as u16;
                 }
                 attr.size = entry.size;
                 attr.atime = git2time_to_system(entry.commit_time);
@@ -656,7 +637,6 @@ pub fn read_virtual_dir(fs: &GitFs, ino: VirtualIno) -> anyhow::Result<Vec<Direc
             entry.oid,
             name.clone(),
             FileType::RegularFile,
-            entry.git_mode,
         ));
     }
     Ok(dir_entries)
