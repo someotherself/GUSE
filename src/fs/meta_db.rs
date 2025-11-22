@@ -468,7 +468,7 @@ impl MetaDb {
             upsert_inode.execute(params![
                 a.ino as i64,
                 a.oid.to_string(),
-                FileType::to_mode(a.kind) as i64,
+                i64::from(a.kind),
                 a.size as i64,
                 a.ino_flag as i64,
                 a.uid as i64,
@@ -678,7 +678,7 @@ impl MetaDb {
             let oid = Oid::from_str(&oid_str)?;
 
             let kind_i64: i64 = row.get(3)?;
-            let kind = FileType::try_from_mode(kind_i64 as u64)?;
+            let kind = FileType::try_from(kind_i64 as u64)?;
 
             if build_dir {
                 let ino_flag_i64: i64 = row.get(4)?;
@@ -834,7 +834,7 @@ impl MetaDb {
 
         let kind_i64: i64 = stmt.query_row(rusqlite::params![ino as i64], |row| row.get(0))?;
 
-        FileType::try_from_mode(kind_i64 as u64)
+        FileType::try_from(kind_i64 as u64)
     }
 
     pub fn get_oid_from_db(conn: &rusqlite::Connection, ino: u64) -> anyhow::Result<Oid> {
@@ -1066,7 +1066,7 @@ impl MetaDb {
                 params![
                     a.ino as i64,
                     a.oid.to_string(),
-                    FileType::to_mode(a.kind) as i64,
+                    i64::from(a.kind),
                     a.size as i64,
                     a.ino_flag as i64,
                     a.uid as i64,
@@ -1468,7 +1468,7 @@ impl MetaDb {
         let oid = Oid::from_str(&oid)?;
         let ino_flag = u64::try_from(inode_flag)?;
         let ino_flag = InoFlag::try_from(ino_flag)?;
-        let kind = FileType::try_from_mode(kind as u64)?;
+        let kind = FileType::try_from(kind as u64)?;
         let size = size as u64;
         let blocks = size.div_ceil(512);
         let atime = pair_to_system_time(atime_secs, atime_nsecs as i32);
@@ -1526,8 +1526,8 @@ impl MetaDb {
                 let flag_i: i64 = row.get(2)?;
                 let name_raw: Vec<u8> = row.get(3)?;
 
-                let kind = FileType::try_from_mode(kind_i as u64)
-                    .map_err(|_| rusqlite::Error::InvalidQuery)?;
+                let kind =
+                    FileType::try_from(kind_i as u64).map_err(|_| rusqlite::Error::InvalidQuery)?;
                 let oid: Oid = oid_txt.parse().map_err(|_| rusqlite::Error::InvalidQuery)?;
                 let ino_flag = (flag_i as u64)
                     .try_into()

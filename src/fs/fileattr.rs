@@ -53,21 +53,25 @@ pub enum FileType {
     Symlink,
 }
 
-impl FileType {
-    pub fn to_mode(self) -> u32 {
-        match self {
-            FileType::Directory => libc::S_IFDIR,
-            FileType::RegularFile => libc::S_IFREG,
-            FileType::Symlink => libc::S_IFLNK,
-        }
-    }
+impl TryFrom<u64> for FileType {
+    type Error = anyhow::Error;
 
-    pub fn try_from_mode(mode: u64) -> anyhow::Result<FileType> {
-        match mode as u32 {
+    fn try_from(value: u64) -> Result<Self, Self::Error> {
+        match value as u32 {
             libc::S_IFDIR => Ok(FileType::Directory),
             libc::S_IFREG => Ok(FileType::RegularFile),
             libc::S_IFLNK => Ok(FileType::Symlink),
-            _ => bail!("Wrong file mode {}", mode),
+            _ => bail!("Wrong file mode {}", value),
+        }
+    }
+}
+
+impl From<FileType> for i64 {
+    fn from(value: FileType) -> Self {
+        match value {
+            FileType::Directory => libc::S_IFDIR as i64,
+            FileType::RegularFile => libc::S_IFREG as i64,
+            FileType::Symlink => libc::S_IFLNK as i64,
         }
     }
 }
