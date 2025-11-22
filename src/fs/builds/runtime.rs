@@ -7,7 +7,7 @@ use mlua::Lua;
 
 use crate::fs::builds::reporter::{ChaseError, GuseResult};
 
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 pub enum ChaseRunMode {
     Continuous,
     Binary,
@@ -29,7 +29,7 @@ impl ChaseRunMode {
     }
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 pub enum ChaseStopMode {
     FirstFailure,
     Continuous,

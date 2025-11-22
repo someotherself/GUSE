@@ -19,6 +19,7 @@ use crate::fs::{
     },
 };
 
+#[derive(Clone)]
 pub struct Chase {
     // Makes sure Oids are read in the correct order, as they were input by the user
     pub commits: VecDeque<Oid>,
@@ -70,11 +71,14 @@ pub fn start_chase(
     cleanup_builds(fs, repo_ino, &chase)?;
 
     // 7 - run chase
-    let mut chase_runner = ChaseRunner::new(fs, repo_ino, stream, chase);
+    let mut chase_runner = ChaseRunner::new(fs, repo_ino, stream, chase.clone());
     let output = chase_runner.run()?;
     for (_, out) in output {
         stream.update(str::from_utf8(&out).unwrap_or("No output"))?;
     }
+
+    // 8 - Cleanup any
+    cleanup_builds(fs, repo_ino, &chase)?;
 
     Ok(())
 }
