@@ -269,8 +269,7 @@ impl TryFrom<u64> for InoFlag {
             x if x == InoFlag::BranchFolder as u64 => Ok(InoFlag::BranchFolder),
             x if x == InoFlag::IndexFile as u64 => Ok(InoFlag::IndexFile),
             _ => {
-                tracing::error!("Unknown InoFlag valueL {v:#x}");
-                bail!(std::io::Error::from_raw_os_error(libc::ENOENT))
+                bail!("Unknown InoFlag valueL {v:#x}")
             }
         }
     }

@@ -54,7 +54,13 @@ pub fn open_git(
     match metadata.ino_flag {
         InoFlag::InsideBuild => {
             let file = match fs.clone_file_from_cache(ino.into()) {
-                Ok(file) => file,
+                Ok(file) => {
+                    if truncate {
+                        file.trucate(0)?;
+                        fs.update_size_in_db(ino, 0)?;
+                    }
+                    file
+                }
                 Err(_) => {
                     let repo = fs.get_repo(ino.to_norm_u64())?;
                     let build_root = &repo.build_dir;
@@ -68,7 +74,7 @@ pub fn open_git(
                     let open_file = OpenOptions::new()
                         .read(true)
                         .write(true)
-                        .truncate(write && truncate)
+                        .truncate(truncate)
                         .open(path)?;
 
                     // Cache the file

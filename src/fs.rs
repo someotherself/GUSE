@@ -2136,9 +2136,8 @@ impl GitFs {
         MetaDb::get_size_from_db(&conn, ino.into())
     }
 
-    /// Send and forget but will log errors as `tracing::error!`
     pub fn update_size_in_db(&self, ino: NormalIno, size: u64) -> anyhow::Result<()> {
-        let size_res = self.update_size_in_cache(ino.into(), size);
+        self.update_size_in_cache(ino.into(), size)?;
         let repo_id = GitFs::ino_to_repo_id(ino.into());
         let writer_tx = {
             let guard = self
@@ -2149,21 +2148,18 @@ impl GitFs {
         };
 
         let (tx, rx) = oneshot::<()>();
-        let tx = if size_res.is_ok() { None } else { Some(tx) };
 
         let msg = DbWriteMsg::UpdateSize {
             ino,
             size,
-            resp: tx,
+            resp: Some(tx),
         };
         writer_tx
             .send(msg)
             .context("writer_tx error on update_size_in_db")?;
 
-        if size_res.is_err() {
-            rx.recv()
-                .context("writer_rx disc on update_size_in_db for target")??;
-        }
+        rx.recv()
+            .context("writer_rx disc on update_size_in_db for target")??;
 
         Ok(())
     }
@@ -2462,7 +2458,7 @@ impl GitFs {
         repo::try_into_filemode(mode).ok_or_else(|| anyhow!("Invalid filemode"))
     }
 
-    fn get_name_from_db(&self, ino: u64) -> anyhow::Result<OsString> {
+    pub fn get_name_from_db(&self, ino: u64) -> anyhow::Result<OsString> {
         let repo = self.get_repo(ino)?;
         if let Some(entries) = repo.dentry_cache.get_by_target(ino)
             && !entries.is_empty()
@@ -2506,10 +2502,7 @@ impl GitFs {
             return Ok(());
         }
         let ino = nodes[0].attr.ino;
-        let mut cache_res = false;
-        if self.write_inodes_to_cache(ino, nodes.clone()).is_ok() {
-            cache_res = true;
-        }
+        self.write_inodes_to_cache(ino, nodes.clone())?;
 
         let repo_id = GitFs::ino_to_repo_id(ino);
         let writer_tx = {
@@ -2521,16 +2514,16 @@ impl GitFs {
         };
 
         let (tx, rx) = oneshot::<()>();
-        let tx = if cache_res { None } else { Some(tx) };
-        let msg = DbWriteMsg::WriteInodes { nodes, resp: tx };
+        let msg = DbWriteMsg::WriteInodes {
+            nodes,
+            resp: Some(tx),
+        };
 
         writer_tx
             .send(msg)
             .context("writer_tx error on write_dentry")?;
 
-        if !cache_res {
-            rx.recv().context("writer_rx disc on write_inodes")??;
-        }
+        rx.recv().context("writer_rx disc on write_inodes")??;
 
         Ok(())
     }

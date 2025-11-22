@@ -35,8 +35,24 @@ pub fn unlink_build_dir(fs: &GitFs, parent: NormalIno, name: &OsStr) -> anyhow::
         session.finish_path(fs, parent)?.join(name)
     };
 
-    let _ = std::fs::remove_file(path);
-    fs.remove_db_dentry(parent, name)?;
+    match std::fs::remove_file(&path) {
+        Ok(()) => {
+            let _ = fs.remove_db_dentry(parent, name);
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            // benign unlink
+            let _ = fs.remove_db_dentry(parent, name);
+        }
+        Err(e) => {
+            tracing::error!(
+                "unlink real OS error {:?} for {} {}",
+                e,
+                parent.to_norm_u64(),
+                path.display()
+            );
+            return Err(e.into());
+        }
+    }
 
     let _ = fs.notifier.try_send(InvalMsg::Entry {
         parent: parent.to_norm_u64(),

@@ -91,7 +91,7 @@ impl<U: Debug> From<DbReturn<U>> for anyhow::Result<U> {
         match value {
             DbReturn::Found { value } => Ok(value),
             DbReturn::Missing | DbReturn::Negative => {
-                bail!(std::io::Error::from_raw_os_error(libc::ENOENT))
+                bail!("Item not found in DB")
             }
         }
     }
@@ -727,8 +727,7 @@ impl MetaDb {
 
         match first {
             None => {
-                tracing::error!("DB: no parent found for ino={ino}");
-                bail!(std::io::Error::from_raw_os_error(libc::ENOENT))
+                bail!("DB: no parent found for ino={ino}")
             }
             Some(p1) => Ok(u64::try_from(p1)?),
         }
@@ -912,8 +911,7 @@ impl MetaDb {
 
         match first {
             None => {
-                tracing::error!("DB: No name found for ino={ino}");
-                bail!(std::io::Error::from_raw_os_error(libc::ENOENT))
+                bail!("DB: No name found for ino={ino}")
             }
 
             Some(p1) => Ok(OsString::from_vec(p1)),
@@ -941,8 +939,7 @@ impl MetaDb {
         match name_opt {
             Some(n) => Ok(OsString::from_vec(n)),
             None => {
-                tracing::error!("DB: name not found for ino={ino} in parent={parent_ino}");
-                bail!(std::io::Error::from_raw_os_error(libc::ENOENT))
+                bail!("DB: name not found for ino={ino} in parent={parent_ino}")
             }
         }
     }

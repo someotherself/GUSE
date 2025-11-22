@@ -118,8 +118,7 @@ pub fn readdir_repo_dir(fs: &GitFs, parent: NormalIno) -> anyhow::Result<Vec<Dir
     let repo_id = GitFs::ino_to_repo_id(parent);
 
     if !fs.repos_list.contains_key(&repo_id) {
-        tracing::error!("Repo not found. Try restarting the session.");
-        bail!(std::io::Error::from_raw_os_error(libc::ENOENT))
+        bail!("Repo not found. Try restarting the session.")
     }
 
     let mut entries: Vec<DirectoryEntry> = vec![];

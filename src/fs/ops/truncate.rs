@@ -1,6 +1,6 @@
 use anyhow::bail;
 
-use crate::{fs::GitFs, inodes::NormalIno, mount::InvalMsg};
+use crate::{fs::GitFs, inodes::NormalIno};
 
 pub fn truncate_live(fs: &GitFs, ino: NormalIno, size: u64, fh: Option<u64>) -> anyhow::Result<()> {
     let fh = match fh {
@@ -19,11 +19,6 @@ pub fn truncate_live(fs: &GitFs, ino: NormalIno, size: u64, fh: Option<u64>) -> 
     }
     ctx.source.trucate(size)?;
     fs.update_size_in_db(ino, size)?;
-    let _ = fs.notifier.try_send(InvalMsg::Inode {
-        ino: ino.to_norm_u64(),
-        off: 0,
-        len: 0,
-    });
 
     Ok(())
 }
@@ -45,11 +40,6 @@ pub fn truncate_git(fs: &GitFs, ino: NormalIno, size: u64, fh: Option<u64>) -> a
     }
     ctx.source.trucate(size)?;
     fs.update_size_in_db(ino, size)?;
-    let _ = fs.notifier.try_send(InvalMsg::Inode {
-        ino: ino.to_norm_u64(),
-        off: 0,
-        len: 0,
-    });
 
     Ok(())
 }

@@ -54,6 +54,5 @@ pub fn read_git(
     if ctx.ino != *ino {
         bail!(std::io::Error::from_raw_os_error(libc::EBADF))
     }
-    // handle blobs and files separately
     Ok(ctx.source.read_at(buf, offset)?)
 }

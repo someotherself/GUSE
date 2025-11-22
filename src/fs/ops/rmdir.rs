@@ -9,8 +9,6 @@ use crate::{
 };
 
 pub fn rmdir_live(fs: &GitFs, parent: NormalIno, name: &OsStr) -> anyhow::Result<()> {
-    // 1 - Set inactive in cache
-    // 2 - Remove from storage
     let target_ino = match fs.get_ino_from_db(parent.into(), name) {
         Ok(DbReturn::Found { value: ino }) => ino,
         _ => {
@@ -48,7 +46,20 @@ pub fn rmdir_git(fs: &GitFs, parent: NormalIno, name: &OsStr) -> anyhow::Result<
         session.finish_path(fs, parent)?.join(name)
     };
 
-    let _ = std::fs::remove_dir(path);
+    match std::fs::remove_dir(&path) {
+        Ok(()) => {
+            fs.remove_db_dentry(parent, name)?;
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            // already gone from disk
+            fs.remove_db_dentry(parent, name).ok();
+        }
+        Err(e) => {
+            tracing::error!("rmdir {}: {:?}", path.display(), e);
+            return Err(e.into());
+        }
+    };
+
     fs.remove_db_dentry(parent, name)?;
     {
         let _ = fs.notifier.try_send(InvalMsg::Entry {

@@ -264,9 +264,7 @@ impl fuser::Filesystem for GitFsAdapter {
     fn getattr(&mut self, _req: &fuser::Request<'_>, ino: u64, _fh: Option<u64>, reply: ReplyAttr) {
         let fs = self.getfs();
         match fs.getattr(ino) {
-            Err(err) => {
-                reply.error(ENOENT);
-            }
+            Err(err) => reply.error(ENOENT),
             Ok(attr) => reply.attr(&TTL, &attr.into()),
         }
     }
@@ -305,7 +303,7 @@ impl fuser::Filesystem for GitFsAdapter {
         match fs.mkdir(parent, name) {
             Ok(attr) => reply.entry(&TTL, &attr.into(), 0),
             Err(e) => {
-                error!(?e);
+                tracing::error!("mkdir error {parent} {}", name.display());
                 reply.error(errno_from_anyhow(&e));
             }
         }
@@ -326,7 +324,7 @@ impl fuser::Filesystem for GitFsAdapter {
             Err(e) => {
                 if let Some(ioe) = e.downcast_ref::<std::io::Error>() {
                     if ioe.kind() == std::io::ErrorKind::NotFound {
-                        reply.error(ENOENT)
+                        reply.ok()
                     } else {
                         error!(e = %e, "UNLINK");
                         reply.error(errno_from_anyhow(&e));
@@ -351,7 +349,7 @@ impl fuser::Filesystem for GitFsAdapter {
             Err(e) => {
                 if let Some(ioe) = e.downcast_ref::<std::io::Error>() {
                     if ioe.kind() == std::io::ErrorKind::NotFound {
-                        reply.error(ENOENT)
+                        reply.ok()
                     } else {
                         error!(e = %e, "RMDIR");
                         reply.error(errno_from_anyhow(&e));
@@ -377,7 +375,7 @@ impl fuser::Filesystem for GitFsAdapter {
         match res {
             Ok(()) => reply.ok(),
             Err(e) => {
-                error!(e = %e);
+                tracing::error!("RENAME {parent} {}", name.display());
                 reply.error(ENOENT)
             }
         }
@@ -665,14 +663,9 @@ impl fuser::Filesystem for GitFsAdapter {
         let fs = self.getfs();
 
         let mut buf = vec![0u8; size as usize];
-        let res = fs.read(ino, offset as u64, &mut buf, fh);
-        drop(fs);
-        match res {
+        match fs.read(ino, offset as u64, &mut buf, fh) {
             Ok(n) => reply.data(&buf[..n]),
-            Err(e) => {
-                error!(e = %e);
-                reply.error(errno_from_anyhow(&e));
-            }
+            Err(e) => reply.error(errno_from_anyhow(&e)),
         }
     }
 
@@ -690,8 +683,7 @@ impl fuser::Filesystem for GitFsAdapter {
     ) {
         let fs = self.getfs();
 
-        let res = fs.write(ino, offset as u64, data, fh);
-        match res {
+        match fs.write(ino, offset as u64, data, fh) {
             Ok(size) => reply.written(size as u32),
             Err(e) => reply.error(errno_from_anyhow(&e)),
         }
@@ -789,7 +781,7 @@ impl fuser::Filesystem for GitFsAdapter {
     fn releasedir(
         &mut self,
         _req: &fuser::Request<'_>,
-        _ino: u64,
+        ino: u64,
         fh: u64,
         _flags: i32,
         reply: fuser::ReplyEmpty,
@@ -880,9 +872,7 @@ impl fuser::Filesystem for GitFsAdapter {
 
         let (attr, fh) = match fs.create(parent, name, read, write) {
             Ok((a, h)) => (a, h),
-            Err(e) => {
-                return reply.error(errno_from_anyhow(&e));
-            }
+            Err(e) => return reply.error(errno_from_anyhow(&e)),
         };
 
         reply.created(&TTL, &attr.into(), 0, fh, flags as u32);
