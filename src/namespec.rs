@@ -11,15 +11,13 @@ use std::{
 ///
 /// cd name@ will go through the commit history of the file and create
 /// a virtial directory with all the blobs found.
-///
-/// cd name@10 will run git blame -L 10 name
 pub struct NameSpec<'a> {
     pub name: &'a OsStr,
     /// None if @ is not present
     ///
     /// Ok(None) if no line number present
     ///
-    /// Ok(usize) if line or range present
+    /// Ok(usize) if line number present
     pub line: Option<Option<usize>>,
 }
 
@@ -92,8 +90,8 @@ pub fn parse_i32_os(s: &OsStr) -> Option<i32> {
     if digits.is_empty() || !digits.iter().all(u8::is_ascii_digit) {
         return None;
     }
-    let s = std::str::from_utf8(digits).ok()?; // no alloc
-    let n: i32 = s.parse().ok()?; // parse from &str
+    let s = std::str::from_utf8(digits).ok()?;
+    let n: i32 = s.parse().ok()?;
     Some(if neg { -n } else { n })
 }
 
@@ -106,7 +104,7 @@ pub fn parse_u32_os(s: &OsStr) -> Option<u32> {
     if b.is_empty() || !b.iter().all(u8::is_ascii_digit) {
         return None;
     }
-    let s = std::str::from_utf8(b).ok()?; // no alloc
+    let s = std::str::from_utf8(b).ok()?;
     s.parse().ok()
 }
 
