@@ -538,7 +538,13 @@ impl GitFs {
             .rand_bytes(4)
             .tempdir_in(&self.repos_dir)?;
         let repo_id = self.new_repo_connection(repo_name, tmpdir.path())?;
-        self.fetch_repo(repo_id, repo_name, tmpdir.path(), url)
+        match self.fetch_repo(repo_id, repo_name, tmpdir.path(), url) {
+            Ok(repo) => Ok(repo),
+            Err(_) => {
+                let _ = self.delete_repo(repo_name);
+                bail!("Repo creation failed")
+            }
+        }
     }
 
     fn new_repo_connection(&self, repo_name: &str, tmpdir: &Path) -> anyhow::Result<u16> {
