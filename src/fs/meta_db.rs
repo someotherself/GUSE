@@ -101,16 +101,28 @@ pub struct MetaDb {
     pub writer_tx: Sender<DbWriteMsg>,
 }
 
-pub fn set_wal_once(conn: &rusqlite::Connection) -> rusqlite::Result<()> {
-    let mode: String = conn.query_row("PRAGMA journal_mode=WAL;", [], |r| r.get(0))?;
-    if mode.to_lowercase() != "wal" {
-        return Err(rusqlite::Error::ExecuteReturnedResults);
-    }
+// https://github.com/the-lean-crate/criner/issues/1#issue-577429787
+pub fn set_conn_ro_pragmas(conn: &rusqlite::Connection) -> rusqlite::Result<()> {
+    conn.execute_batch(
+        r#"
+        PRAGMA synchronous=NORMAL;
+        PRAGMA foreign_keys=ON;
+        PRAGMA temp_store=MEMORY;
+        PRAGMA journal_size_limit = 67108864; -- 64 megabytes
+        PRAGMA mmap_size = 134217728; -- 128 megabytes
+        PRAGMA cache_size=-20000;
+        PRAGMA wal_autocheckpoint=1000;
+        PRAGMA read_uncommitted=OFF;
+        PRAGMA busy_timeout = 5000
+    "#,
+    )?;
+
     Ok(())
 }
 
-// https://github.com/the-lean-crate/criner/issues/1#issue-577429787
-pub fn set_conn_pragmas(conn: &rusqlite::Connection) -> rusqlite::Result<()> {
+pub fn set_conn_rw_pragmas(conn: &rusqlite::Connection) -> rusqlite::Result<()> {
+    conn.pragma_update(None, "journal_mode", "WAL")?;
+
     conn.execute_batch(
         r#"
         PRAGMA synchronous=NORMAL;
@@ -131,7 +143,7 @@ pub fn set_conn_pragmas(conn: &rusqlite::Connection) -> rusqlite::Result<()> {
 pub fn new_repo_db<P: AsRef<Path>>(db_path: P) -> anyhow::Result<std::sync::Arc<MetaDb>> {
     let ro_mgr = SqliteConnectionManager::file(&db_path)
         .with_flags(OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_URI)
-        .with_init(|c| set_conn_pragmas(c));
+        .with_init(|c| set_conn_ro_pragmas(c));
 
     let ro_pool = Pool::builder()
         .max_size(num_cpus::get() as u32 * 2)
@@ -139,7 +151,7 @@ pub fn new_repo_db<P: AsRef<Path>>(db_path: P) -> anyhow::Result<std::sync::Arc<
         .build(ro_mgr)?;
 
     let writer = rusqlite::Connection::open(&db_path)?;
-    set_conn_pragmas(&writer)?;
+    set_conn_rw_pragmas(&writer)?;
 
     let (writer_tx, _) = spawn_repo_writer(db_path.as_ref().to_path_buf())?;
 
@@ -206,7 +218,6 @@ fn spawn_repo_writer(
     db_path: PathBuf,
 ) -> anyhow::Result<(Sender<DbWriteMsg>, std::thread::JoinHandle<()>)> {
     let (tx, rx): (Sender<DbWriteMsg>, Receiver<DbWriteMsg>) = crossbeam_channel::unbounded();
-
     let handle = std::thread::Builder::new()
         .name(format!("db-writer-{}", db_path.display()))
         .spawn(move || {
@@ -217,7 +228,7 @@ fn spawn_repo_writer(
                     return;
                 }
             };
-            if let Err(e) = set_conn_pragmas(&conn) {
+            if let Err(e) = set_conn_rw_pragmas(&conn) {
                 tracing::error!("Writer PRAGMA failed: {e}");
                 return;
             }
@@ -230,7 +241,7 @@ fn spawn_repo_writer(
 
                     apply_msg(&tx_sql, first, &mut acks)?;
 
-                    for _ in 0..24 {
+                    for _ in 0..80 {
                         match rx.try_recv() {
                             Ok(m) => apply_msg(&tx_sql, m, &mut acks)?,
                             Err(crossbeam_channel::TryRecvError::Empty) => break,

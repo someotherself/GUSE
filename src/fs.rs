@@ -23,7 +23,7 @@ use crate::fs::fileattr::{
     dir_attr, file_attr,
 };
 use crate::fs::handles::FileHandles;
-use crate::fs::meta_db::{DbReturn, DbWriteMsg, MetaDb, oneshot, set_conn_pragmas, set_wal_once};
+use crate::fs::meta_db::{DbReturn, DbWriteMsg, MetaDb, oneshot, set_conn_rw_pragmas};
 use crate::fs::ops::readdir::{
     BuildCtxMetadata, DirectoryEntry, DirectoryEntryPlus, DirectoryStreamCookie,
 };
@@ -700,12 +700,6 @@ impl GitFs {
         Ok(repo)
     }
 
-    /// Must take in the name of the folder of the REPO --
-    /// data_dir/repo_name1
-    ///
-    ///------------------├── fs_meta.db
-    ///
-    ///------------------└── .git/
     pub fn init_meta_db<P: AsRef<Path>>(&self, db_path: P) -> anyhow::Result<()> {
         let dbp = db_path.as_ref();
 
@@ -727,32 +721,8 @@ impl GitFs {
 
         let conn = rusqlite::Connection::open(dbp)?;
 
-        set_wal_once(&conn)?;
-        set_conn_pragmas(&conn)?;
+        set_conn_rw_pragmas(&conn)?;
 
-        // DB layout
-        // INODE storage
-        //   inode        INTEGER   PRIMARY KEY,    -> the u64 inode
-        //   git_mode     INTEGER   NOT NULL        -> the raw Git filemode
-        //   oid          TEXT      NOT NULL        -> the Git OID
-        //   size         INTEGER   NOT NULL        -> real size of the file/git object
-        //   inode_flag   INTEGER   NOT NULL        -> InoFlag
-        //   uid          INTEGER   NOT NULL
-        //   gid          INTEGER   NOT NULL
-        //   atime_secs   INTEGER   NOT NULL
-        //   atime_nsecs  INTEGER   NOT NULL
-        //   mtime_secs   INTEGER   NOT NULL
-        //   mtime_nsecs  INTEGER   NOT NULL
-        //   ctime_secs   INTEGER   NOT NULL
-        //   ctime_nsecs  INTEGER   NOT NULL
-        //   nlink        INTEGER   NOT NULL        -> calculated by sql. Not given to the kernel
-        //   rdev         INTEGER   NOT NULL
-        //   flags        INTEGER   NOT NULL
-        //
-        // Directory Entries Storage
-        //  target_inode INTEGER   NOT NULL       -> inode from inode_map
-        //  parent_inode INTEGER   NOT NULL       -> the parent directory’s inode
-        //  name         BLOB      NOT NULL       -> the filename or directory name
         conn.execute_batch(
             r#"
                 CREATE TABLE IF NOT EXISTS inode_map (
@@ -1655,20 +1625,17 @@ impl GitFs {
         };
 
         let (tx, rx) = oneshot::<()>();
-        let tx = if cache_res.is_ok() { None } else { Some(tx) };
 
         let msg = DbWriteMsg::UpdateMetadata {
             attr: stored_attr,
-            resp: tx,
+            resp: Some(tx),
         };
         writer_tx
             .send(msg)
             .context("writer_tx error on update_db_metadata")?;
 
-        if cache_res.is_err() {
-            rx.recv()
-                .context("writer_rx disc on update_db_metadata")??;
-        }
+        rx.recv()
+            .context("writer_rx disc on update_db_metadata")??;
 
         // Fetch the new metadata
         match cache_res {
