@@ -561,7 +561,12 @@ impl GitRepo {
     pub fn build_index_for_snap(&self, commit_oid: Oid) -> anyhow::Result<Vec<u8>> {
         let repo = self.inner.lock();
         let commit = repo.find_commit(commit_oid)?;
-        let tree = commit.tree()?;
+        let p_commit = commit.parent(0)?;
+        let tree = if commit.parent(1).is_ok() {
+            commit.tree()?
+        } else {
+            p_commit.tree()?
+        };
 
         let mut entries: Vec<Entry> = vec![];
 
