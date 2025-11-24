@@ -51,7 +51,6 @@ pub fn rmdir_git(fs: &GitFs, parent: NormalIno, name: &OsStr) -> anyhow::Result<
             fs.remove_db_dentry(parent, name)?;
         }
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-            // already gone from disk
             fs.remove_db_dentry(parent, name).ok();
         }
         Err(e) => {
@@ -60,7 +59,6 @@ pub fn rmdir_git(fs: &GitFs, parent: NormalIno, name: &OsStr) -> anyhow::Result<
         }
     };
 
-    fs.remove_db_dentry(parent, name)?;
     {
         let _ = fs.notifier.try_send(InvalMsg::Entry {
             parent: parent.to_norm_u64(),

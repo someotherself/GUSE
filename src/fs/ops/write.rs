@@ -1,4 +1,4 @@
-use std::os::unix::{ffi::OsStrExt, fs::FileExt};
+use std::os::unix::fs::FileExt;
 
 use anyhow::bail;
 
@@ -55,16 +55,6 @@ pub fn write_git(
         let new_size = std::cmp::max(old_size, offset + bytes_written as u64);
         if new_size != old_size {
             fs.update_size_in_db(ino, new_size)?;
-        }
-    }
-
-    let name = fs.get_name_from_db(ino.into())?;
-    if name.as_bytes() == b"consts.rs" {
-        let mut buffer = Vec::with_capacity(bytes_written);
-        let _ = ctx.source.read_at(&mut buffer, offset)?;
-        let pos = memchr::memchr(b'0', &buffer);
-        if let Some(pos) = pos {
-            tracing::warn!("WRITE: FOUND NULL AT pos in {pos} in {}", name.display())
         }
     }
 

@@ -224,7 +224,7 @@ impl fuser::Filesystem for GitFsAdapter {
                 }
             }
             Err(e) => {
-                error!(e = %e, "Lookup parent inode");
+                error!(e = %e, "Lookup parent inode {parent} for {}", name.display());
                 reply.error(ENOENT);
                 return;
             }

@@ -128,7 +128,7 @@ fn move_chase_target(
     let src = repo.get_or_init_build_session(old.commit, build_folder)?;
     let src_dir = src.folder.path();
     let dst = repo.get_or_init_build_session(new.commit, build_folder)?;
-    let dst_dir = dst.folder.path();
+    let dst_dir = dst.folder.path().parent().unwrap_or(dst.folder.path());
 
     let entries = fs.readdir(old.snap_ino)?;
     for e in entries {
