@@ -212,6 +212,11 @@ pub enum DbWriteMsg {
         entries: Vec<(u64, u64, OsString)>,
         resp: Option<Resp<()>>,
     },
+    UpdateOid {
+        targets: Vec<u64>,
+        oid: Oid,
+        resp: Option<Resp<()>>,
+    },
 }
 
 fn spawn_repo_writer(
@@ -411,6 +416,21 @@ where
                 None => {
                     if let Err(e) = &res {
                         tracing::warn!("db clean negative failed: {e}");
+                    }
+                    Ok(())
+                }
+            }
+        }
+        DbWriteMsg::UpdateOid { targets, oid, resp } => {
+            let res = MetaDb::update_oids(conn, &targets, oid);
+            match resp {
+                Some(tx) => {
+                    results.push(tx);
+                    Ok(())
+                }
+                None => {
+                    if let Err(e) = &res {
+                        tracing::warn!("db update_oids failed: {e}");
                     }
                     Ok(())
                 }
@@ -1034,6 +1054,24 @@ impl MetaDb {
             target_name,
             is_active: true,
         })
+    }
+
+    pub fn update_oids<C>(tx: &C, targets: &[u64], oid: Oid) -> anyhow::Result<()>
+    where
+        C: std::ops::Deref<Target = rusqlite::Connection>,
+    {
+        let mut stmt = tx.prepare(
+            r#"UPDATE inode_map
+         SET oid = 1?
+         WHERE inode = 2?
+         "#,
+        )?;
+
+        for &inode in targets {
+            stmt.execute(params![oid.as_bytes(), inode as i64])?;
+        }
+
+        Ok(())
     }
 
     // Used by rename (mv)

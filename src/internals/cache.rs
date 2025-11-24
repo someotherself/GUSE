@@ -217,11 +217,24 @@ where
         guard.peek(id).into()
     }
 
+    pub fn with_many_mut(&self, keys: &[K], f: impl Fn(&mut V)) {
+        let mut guard = self.list.write();
+
+        for key in keys {
+            let Some(&id) = guard.map.get(key) else {
+                continue;
+            };
+
+            if let Some(entry) = &mut guard.nodes[id] {
+                f(&mut entry.value);
+                guard.unlink(id);
+                guard.push_front(id);
+            }
+        }
+    }
+
     pub fn with_get_mut<R>(&self, key: &K, f: impl FnOnce(&mut V) -> R) -> Option<R> {
         let mut guard = self.list.write();
-        if !guard.map.contains_key(key) {
-            return None;
-        }
         let &id = guard.map.get(key)?;
         if let Some(entry) = &mut guard.nodes[id] {
             let res = f(&mut entry.value);

@@ -3,13 +3,14 @@ use std::{
     time::SystemTime,
 };
 
-use anyhow::bail;
+use anyhow::{Context, anyhow, bail};
+use git2::Oid;
 
 use crate::{
     fs::{
         GitFs,
-        fileattr::{InoFlag, StorageNode},
-        meta_db::DbReturn,
+        fileattr::{FileType, InoFlag, StorageNode},
+        meta_db::{DbReturn, DbWriteMsg, oneshot},
     },
     inodes::NormalIno,
     mount::InvalMsg,
@@ -148,6 +149,11 @@ pub fn rename_git_build(
     };
     fs.update_db_record(old_parent, old_name, node)?;
 
+    if src_commit_oid != dst_commit_oid {
+        // Change the attr.oid of all the entries moved
+        update_all_oids(fs, src_attr.ino, dst_commit_oid)?;
+    };
+
     {
         let _ = fs.notifier.try_send(InvalMsg::Entry {
             parent: old_parent.to_norm_u64(),
@@ -173,5 +179,59 @@ pub fn rename_git_build(
         }
     }
 
+    Ok(())
+}
+
+fn update_all_oids(fs: &GitFs, target_ino: u64, oid: Oid) -> anyhow::Result<()> {
+    let mut targets = Vec::with_capacity(256);
+    read_oid_targets(fs, &mut targets, target_ino)?;
+
+    let repo = fs.get_repo(target_ino)?;
+    repo.attr_cache.with_many_mut(&targets, |a| a.oid = oid);
+
+    let repo_id = GitFs::ino_to_repo_id(target_ino);
+    let writer_tx = {
+        let guard = fs
+            .conn_list
+            .get(&repo_id)
+            .ok_or_else(|| anyhow!("No db for repo id {repo_id}"))?;
+        guard.writer_tx.clone()
+    };
+
+    let (tx, rx) = oneshot::<()>();
+    let msg = DbWriteMsg::UpdateOid {
+        targets,
+        oid,
+        resp: Some(tx),
+    };
+
+    writer_tx
+        .send(msg)
+        .context("writer_tx error on write_dentry")?;
+
+    rx.recv().context("writer_rx disc on write_inodes")??;
+
+    Ok(())
+}
+
+fn read_oid_targets(fs: &GitFs, targets: &mut Vec<u64>, target_ino: u64) -> anyhow::Result<()> {
+    targets.clear();
+    let mut stack: Vec<u64> = Vec::with_capacity(16);
+    if fs.is_file(target_ino.into())? {
+        targets.push(target_ino);
+        return Ok(());
+    }
+    targets.push(target_ino);
+    stack.push(target_ino);
+
+    while let Some(cur_ino) = stack.pop() {
+        let entries = fs.readdir(cur_ino)?;
+        for e in entries {
+            if e.kind == FileType::Directory {
+                stack.push(e.ino);
+            };
+            targets.push(e.ino);
+        }
+    }
     Ok(())
 }
