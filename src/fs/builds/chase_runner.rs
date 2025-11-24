@@ -1,3 +1,4 @@
+use std::path::PathBuf;
 use std::process::Command;
 use std::{os::unix::net::UnixStream, path::Path};
 
@@ -14,15 +15,16 @@ enum CommandResult {
 }
 
 struct ChaseTarget {
-    commit: Oid,
     snap_ino: u64,
+    // The path INSIDE guse
+    path: PathBuf,
 }
 
 impl ChaseTarget {
-    pub fn new(commit: Oid, ino: u64) -> Self {
+    pub fn new(ino: u64, path: &Path) -> Self {
         Self {
-            commit,
             snap_ino: ino,
+            path: path.to_path_buf(),
         }
     }
 }
@@ -78,14 +80,14 @@ impl<'a> ChaseRunner<'a> {
                     continue;
                 };
                 if output.is_empty() {
-                    // cmd_output.extend(b"GUSE detected no output\n");
+                    cmd_output.extend(b"GUSE detected no output\n");
                 } else {
                     cmd_output.extend(output);
                 }
             }
-            let cur_target: ChaseTarget = ChaseTarget::new(oid, *cur_ino);
+            let cur_target: ChaseTarget = ChaseTarget::new(*cur_ino, cur_path);
             if let Some(ref prev_target) = prev_target {
-                let _ = move_chase_target(self.fs, self.repo_ino, prev_target, &cur_target);
+                let _ = move_chase_target(self.fs, prev_target, &cur_target);
             }
             out.push((oid, cmd_output));
             prev_target = Some(cur_target);
@@ -117,31 +119,18 @@ fn run_command_on_snap(path: &Path, command: &str) -> Option<Vec<u8>> {
     }
 }
 
-fn move_chase_target(
-    fs: &GitFs,
-    repo_ino: u64,
-    old: &ChaseTarget,
-    new: &ChaseTarget,
-) -> anyhow::Result<()> {
-    let repo = fs.get_repo(repo_ino)?;
-    let build_folder = &repo.build_dir;
-    let src = repo.get_or_init_build_session(old.commit, build_folder)?;
-    let src_dir = src.folder.path();
-    let dst = repo.get_or_init_build_session(new.commit, build_folder)?;
-    let dst_dir = dst.folder.path().parent().unwrap_or(dst.folder.path());
+fn move_chase_target(fs: &GitFs, old: &ChaseTarget, new: &ChaseTarget) -> anyhow::Result<()> {
+    let old_dir = &old.path;
+    let new_dir = &new.path;
 
     let entries = fs.readdir(old.snap_ino)?;
     for e in entries {
         if !fs.is_in_build(e.ino.into())? {
             continue;
         };
-        let src_path = src_dir.join(&e.name);
-        let dst_path = dst_dir.join(e.name);
-        run_target_move(&src_path, &dst_path);
+        let src_path = old_dir.join(&e.name);
+        let dst_dir = &new_dir.join(&e.name);
+        std::fs::rename(&src_path, dst_dir)?;
     }
     Ok(())
-}
-
-fn run_target_move(src: &Path, dst: &Path) {
-    let _ = Command::new("mv").arg(src).arg(dst).output();
 }
