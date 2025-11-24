@@ -4,6 +4,7 @@ use std::{os::unix::net::UnixStream, path::Path};
 
 use git2::Oid;
 
+use crate::fs;
 use crate::fs::{GitFs, builds::chase::Chase};
 
 enum CommandResult {
@@ -70,6 +71,13 @@ impl<'a> ChaseRunner<'a> {
             let Some((cur_path, cur_ino)) = self.chase.commit_paths.get(&oid) else {
                 continue;
             };
+
+            // MOVE build contents from previous commit
+            let cur_target: ChaseTarget = ChaseTarget::new(*cur_ino, cur_path);
+            if let Some(ref prev_target) = prev_target {
+                let _ = move_chase_target(self.fs, prev_target, &cur_target);
+            }
+
             let mut commands = self.chase.commands.clone();
 
             // RUN COMMANDS
@@ -84,10 +92,6 @@ impl<'a> ChaseRunner<'a> {
                 } else {
                     cmd_output.extend(output);
                 }
-            }
-            let cur_target: ChaseTarget = ChaseTarget::new(*cur_ino, cur_path);
-            if let Some(ref prev_target) = prev_target {
-                let _ = move_chase_target(self.fs, prev_target, &cur_target);
             }
             out.push((oid, cmd_output));
             prev_target = Some(cur_target);
@@ -112,25 +116,22 @@ fn run_command_on_snap(path: &Path, command: &str) -> Option<Vec<u8>> {
         }
     };
 
-    if output.status.success() {
-        Some(output.stdout)
-    } else {
-        Some(output.stderr)
-    }
+    Some(output.stderr)
 }
 
 fn move_chase_target(fs: &GitFs, old: &ChaseTarget, new: &ChaseTarget) -> anyhow::Result<()> {
-    let old_dir = &old.path;
-    let new_dir = &new.path;
-
     let entries = fs.readdir(old.snap_ino)?;
     for e in entries {
         if !fs.is_in_build(e.ino.into())? {
             continue;
         };
-        let src_path = old_dir.join(&e.name);
-        let dst_dir = &new_dir.join(&e.name);
-        std::fs::rename(&src_path, dst_dir)?;
+        fs::ops::rename::rename_git_build(
+            fs,
+            old.snap_ino.into(),
+            &e.name,
+            new.snap_ino.into(),
+            &e.name,
+        )?;
     }
     Ok(())
 }
