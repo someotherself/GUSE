@@ -406,19 +406,8 @@ impl fuser::Filesystem for GitFsAdapter {
 
         let truncate = flags as u32 & libc::O_TRUNC as u32 != 0;
 
-        let open_flag = match fs.get_ino_flag_from_db(ino.into()) {
-            Ok(InoFlag::InsideSnap) => consts::FOPEN_KEEP_CACHE,
-            _ => {
-                if !write && !truncate {
-                    consts::FOPEN_KEEP_CACHE
-                } else {
-                    0
-                }
-            }
-        };
-
         match fs.open(ino, read, write, truncate) {
-            Ok(fh) => reply.opened(fh, open_flag),
+            Ok(fh) => reply.opened(fh, 0),
             Err(e) => reply.error(libc::ENOENT),
         }
     }
@@ -761,13 +750,6 @@ impl fuser::Filesystem for GitFsAdapter {
         }
         if let Some(mtime) = mtime_opt {
             attr.mtime = mtime;
-        }
-
-        if let Some(size) = size
-            && let Err(e) = fs.truncate(ino, size, fh)
-        {
-            reply.error(errno_from_anyhow(&e));
-            return;
         }
 
         reply.attr(&TTL, &attr.into());
