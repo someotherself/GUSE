@@ -1,10 +1,10 @@
 use std::path::PathBuf;
-use std::process::Command;
 use std::{os::unix::net::UnixStream, path::Path};
 
 use git2::Oid;
 
 use crate::fs;
+use crate::fs::builds::logger::run_command_on_snap;
 use crate::fs::{GitFs, builds::chase::Chase};
 
 enum CommandResult {
@@ -98,25 +98,6 @@ impl<'a> ChaseRunner<'a> {
         }
         Ok(out)
     }
-}
-
-fn run_command_on_snap(path: &Path, command: &str) -> Option<Vec<u8>> {
-    let mut split = command.split_whitespace();
-    let prog = split.next()?;
-    let args: Vec<&str> = split.collect();
-    let output = Command::new(prog).current_dir(path).args(args).output();
-
-    let output = match output {
-        Ok(out) => out,
-        Err(e) => {
-            if e.kind() == std::io::ErrorKind::NotFound {
-                return Some(format!("Command not found: {}\n", prog).into_bytes());
-            }
-            return Some(format!("Failed to run {}: {}\n", prog, e).into_bytes());
-        }
-    };
-
-    Some(output.stderr)
 }
 
 fn move_chase_target(fs: &GitFs, old: &ChaseTarget, new: &ChaseTarget) -> anyhow::Result<()> {
