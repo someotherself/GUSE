@@ -9,10 +9,9 @@ use crate::fs::builds::reporter::{ChaseError, GuseResult};
 
 #[derive(Debug, Default, Clone)]
 pub enum ChaseRunMode {
+    #[default]
     Continuous,
     Binary,
-    #[default]
-    NotSet,
 }
 
 impl ChaseRunMode {
@@ -23,18 +22,13 @@ impl ChaseRunMode {
             _ => None,
         }
     }
-
-    fn not_set(&self) -> bool {
-        matches!(self, Self::NotSet)
-    }
 }
 
 #[derive(Debug, Default, Clone)]
 pub enum ChaseStopMode {
-    FirstFailure,
-    Continuous,
     #[default]
-    NotSet,
+    Continuous,
+    FirstFailure,
 }
 
 impl ChaseStopMode {
@@ -44,10 +38,6 @@ impl ChaseStopMode {
             "continuous" => Some(Self::Continuous),
             _ => None,
         }
-    }
-
-    fn not_set(&self) -> bool {
-        matches!(self, Self::NotSet)
     }
 }
 
@@ -116,11 +106,7 @@ impl LuaConfig {
                 let set_run_mode = scope
                     .create_function(move |_, run_mode: String| {
                         let chase_run_mode = ChaseRunMode::from_str(&run_mode);
-                        let Some(run_opt) = chase_run_mode else {
-                            return Err(mlua::Error::RuntimeError(prepare_wrong_run_mode(
-                                &run_mode,
-                            )));
-                        };
+                        let run_opt = chase_run_mode.unwrap_or_default();
                         run_mode_ref.lock().unwrap().run_mode = run_opt;
                         Ok(())
                     })
@@ -140,11 +126,7 @@ impl LuaConfig {
                 let set_stop_mode = scope
                     .create_function(move |_, stop_mode: String| {
                         let chase_mode = ChaseStopMode::from_str(&stop_mode);
-                        let Some(stop_opt) = chase_mode else {
-                            return Err(mlua::Error::RuntimeError(prepare_wrong_stop_mode(
-                                &stop_mode,
-                            )));
-                        };
+                        let stop_opt = chase_mode.unwrap_or_default();
                         stop_mode_ref.lock().unwrap().stop_mode = stop_opt;
                         Ok(())
                     })
@@ -203,12 +185,6 @@ impl LuaConfig {
         }
         if self.commands.is_empty() {
             return Err(ChaseError::NoCommands);
-        }
-        if self.run_mode.not_set() {
-            return Err(ChaseError::MissScriptRunMode);
-        }
-        if self.stop_mode.not_set() {
-            return Err(ChaseError::MissScriptStopMode);
         }
         Ok(())
     }

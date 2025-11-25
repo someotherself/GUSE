@@ -24,10 +24,6 @@ pub enum ChaseError {
         source: mlua::Error,
         msg: String,
     },
-    #[error("Missing run mode")]
-    MissScriptRunMode,
-    #[error("Missing stop mode")]
-    MissScriptStopMode,
     #[error("No commits provided")]
     NoCommits,
     #[error("No commands provided")]
@@ -102,14 +98,6 @@ impl<T> ErrorResolver<T> for GuseResult<T> {
                 }
                 ChaseError::ScriptNotFound { path } => {
                     stream.update(&prepare_not_found_error(&path))?;
-                    bail!("")
-                }
-                ChaseError::MissScriptRunMode => {
-                    stream.update("")?;
-                    bail!("")
-                }
-                ChaseError::MissScriptStopMode => {
-                    stream.update("")?;
                     bail!("")
                 }
                 ChaseError::NoCommits => {
