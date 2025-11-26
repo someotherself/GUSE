@@ -1,10 +1,11 @@
+use std::path::Path;
 use std::path::PathBuf;
-use std::{os::unix::net::UnixStream, path::Path};
 
 use git2::Oid;
 
 use crate::fs;
 use crate::fs::builds::logger::run_command_on_snap;
+use crate::fs::builds::reporter::Reporter;
 use crate::fs::{GitFs, builds::chase::Chase};
 
 enum CommandResult {
@@ -30,24 +31,25 @@ impl ChaseTarget {
     }
 }
 
-pub struct ChaseRunner<'a> {
+pub struct ChaseRunner<'a, R: Reporter> {
     fs: &'a GitFs,
     repo_ino: u64,
-    stream: &'a mut UnixStream,
+    reporter: &'a mut R,
     chase: Chase,
 }
 
-impl<'a> ChaseRunner<'a> {
-    pub fn new(fs: &'a GitFs, repo_ino: u64, stream: &'a mut UnixStream, chase: Chase) -> Self {
+impl<'a, R: Reporter> ChaseRunner<'a, R> {
+    pub fn new(fs: &'a GitFs, repo_ino: u64, reporter: &'a mut R, chase: Chase) -> Self {
         Self {
             fs,
             repo_ino,
-            stream,
+            reporter,
             chase,
         }
     }
 
     pub fn run(&mut self) -> anyhow::Result<Vec<(Oid, Vec<u8>)>> {
+        self.reporter.update("Start of run\n")?;
         let mut curr_run = 0;
         let mut prev_target: Option<ChaseTarget> = None;
         let total = self.chase.commits.len();
@@ -58,6 +60,7 @@ impl<'a> ChaseRunner<'a> {
 
         // RUN THROUGH EACH COMMIT
         while let Some(oid) = commit_list.pop_front() {
+            self.reporter.update(&format!("Start commit {}\n", oid))?;
             curr_run += 1;
             let mut cmd_output: Vec<u8> = vec![];
 
@@ -82,8 +85,10 @@ impl<'a> ChaseRunner<'a> {
 
             // RUN COMMANDS
             while let Some(command) = commands.pop_front() {
-                cmd_output.extend(format!("Command: {}\n", command).as_bytes());
-                let Some(output) = run_command_on_snap(cur_path, &command) else {
+                self.reporter
+                    .update(&format!("Running command {} for {}\n", command, oid))?;
+                cmd_output.extend(format!("Command: {}", command).as_bytes());
+                let Some(output) = run_command_on_snap(cur_path, &command, self.reporter) else {
                     cmd_output.extend(b"GUSE detected no output\n");
                     continue;
                 };
@@ -91,6 +96,7 @@ impl<'a> ChaseRunner<'a> {
                     cmd_output.extend(b"GUSE detected no output\n");
                 } else {
                     cmd_output.extend(output);
+                    cmd_output.extend(b"\n");
                 }
             }
             out.push((oid, cmd_output));

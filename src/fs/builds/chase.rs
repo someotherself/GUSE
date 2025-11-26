@@ -72,10 +72,7 @@ pub fn start_chase(
 
     // 7 - run chase
     let mut chase_runner = ChaseRunner::new(fs, repo_ino, stream, chase.clone());
-    let output = chase_runner.run()?;
-    for (_, out) in output {
-        stream.update(str::from_utf8(&out).unwrap_or("No output"))?;
-    }
+    let _ = chase_runner.run();
 
     // 8 - Cleanup any
     cleanup_builds(fs, repo_ino, &chase)?;

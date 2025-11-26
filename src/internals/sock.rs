@@ -1,5 +1,5 @@
 use std::{
-    io::{Read, Write},
+    io::{BufRead, BufReader, Read, Write},
     os::unix::{
         fs::{FileTypeExt, PermissionsExt},
         net::{UnixListener, UnixStream},
@@ -163,29 +163,38 @@ pub fn send_req(sock: &Path, req: &ControlReq) -> anyhow::Result<ControlRes> {
     let data = serde_json::to_vec(req)?;
     s.write_all(&data)?;
     s.shutdown(std::net::Shutdown::Write)?;
-    let mut resp_buf = vec![];
-    s.read_to_end(&mut resp_buf)?;
-    let iter = Deserializer::from_slice(&resp_buf).into_iter::<ControlRes>();
+    let mut reader = BufReader::new(s);
     let mut final_res: Option<ControlRes> = None;
 
-    for item in iter {
-        let msg = item.map_err(|e| {
-            anyhow::anyhow!(
-                "invalid response from daemon: {e}. raw={:?}",
-                String::from_utf8_lossy(&resp_buf)
-            )
-        })?;
+    loop {
+        let mut buf = Vec::new();
+        let n = reader.read_until(b'\n', &mut buf)?;
+        if n == 0 {
+            break;
+        }
+        let iter = Deserializer::from_slice(&buf).into_iter::<ControlRes>();
 
-        match msg {
-            ControlRes::Update { message } => {
-                print!("{}", String::from_utf8_lossy(&message));
-            }
-            other => {
-                final_res = Some(other);
-                println!("Ending GUSE command.")
+        for item in iter {
+            let msg = item.map_err(|e| {
+                anyhow::anyhow!(
+                    "invalid response from daemon: {e}. raw={:?}",
+                    String::from_utf8_lossy(&buf)
+                )
+            })?;
+            match msg {
+                ControlRes::Update { message } => {
+                    print!("{}", String::from_utf8_lossy(&message));
+                }
+                other => {
+                    final_res = Some(other);
+                    println!("Ending GUSE command.")
+                }
             }
         }
-    }
 
+        if final_res.is_some() {
+            break;
+        }
+    }
     final_res.ok_or_else(|| anyhow::anyhow!("daemon sent no final response"))
 }

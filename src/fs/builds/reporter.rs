@@ -8,7 +8,7 @@ use std::{
 use anyhow::bail;
 use thiserror::Error;
 
-use crate::internals::sock::ControlRes;
+use crate::{fs::builds::logger::LogLine, internals::sock::ControlRes};
 
 pub type GuseResult<T> = core::result::Result<T, ChaseError>;
 
@@ -64,8 +64,10 @@ pub enum ChaseFsError {
     FsError { msg: String },
 }
 
-pub trait Reporter {
+pub trait Reporter: Send {
+    /// Sends a line of text, to be immediately displayed to the cli
     fn update(&mut self, msg: &str) -> anyhow::Result<()>;
+    fn refresh_cli(&mut self, log: LogLine) -> anyhow::Result<()>;
 }
 
 impl Reporter for UnixStream {
@@ -75,6 +77,19 @@ impl Reporter for UnixStream {
         };
         let out = serde_json::to_vec(&res)?;
         self.write_all(&out)?;
+        self.write_all(b"\n")?;
+        self.flush()?;
+        Ok(())
+    }
+
+    fn refresh_cli(&mut self, log: LogLine) -> anyhow::Result<()> {
+        let res = ControlRes::Update {
+            message: log.line.clone(),
+        };
+        let out = serde_json::to_vec(&res)?;
+        self.write_all(&out)?;
+        self.write_all(b"\n")?;
+        self.flush()?;
         Ok(())
     }
 }
@@ -92,9 +107,9 @@ impl<T> ErrorResolver<T> for GuseResult<T> {
                     stream.update(&prepare_lua_error(&source, &msg))?;
                     bail!("")
                 }
-                ChaseError::ParsingMisc { msg } => {
+                ChaseError::ParsingMisc { msg: _ } => {
                     // TODO. What was this for anyway?
-                    bail!("Error parsing script: {msg}")
+                    bail!("")
                 }
                 ChaseError::ScriptNotFound { path } => {
                     stream.update(&prepare_not_found_error(&path))?;

@@ -1,18 +1,24 @@
-use std::{io::{BufRead, BufReader}, path::Path, process::{Command, Stdio}, time::{SystemTime, UNIX_EPOCH}};
+use std::{
+    io::{BufRead, BufReader},
+    path::Path,
+    process::{Command, Stdio},
+    time::{SystemTime, UNIX_EPOCH},
+};
 
-use parking_lot::Mutex;
+use crate::fs::builds::reporter::Reporter;
 
-struct LogLine {
+#[derive(Clone)]
+pub struct LogLine {
     pub t_stmp: u128,
-    line: Vec<u8>,
+    pub line: Vec<u8>,
 }
 
 impl LogLine {
     pub fn new(line: &[u8]) -> Self {
         let stamp = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap()
-        .as_micros();
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_micros();
 
         Self {
             t_stmp: stamp,
@@ -21,7 +27,11 @@ impl LogLine {
     }
 }
 
-pub fn run_command_on_snap(path: &Path, command: &str) -> Option<Vec<u8>> {
+pub fn run_command_on_snap<R: Reporter>(
+    path: &Path,
+    command: &str,
+    reporter: &mut R,
+) -> Option<Vec<u8>> {
     let mut split = command.split_whitespace();
     let prog = split.next()?;
     let args: Vec<&str> = split.collect();
@@ -42,39 +52,48 @@ pub fn run_command_on_snap(path: &Path, command: &str) -> Option<Vec<u8>> {
         }
     };
 
-    let combined = Mutex::new(Vec::new());
+    let mut out_lines = Vec::new();
 
     let out = output.stdout.take()?;
     let err = output.stderr.take()?;
 
+    let (tx, rx) = crossbeam_channel::unbounded::<LogLine>();
+
     std::thread::scope(|s| {
-        let combined = &combined;
         {
-            s.spawn(|| {
+            let tx = tx.clone();
+            s.spawn(move || {
                 let mut reader = BufReader::new(out);
                 let mut buf = Vec::new();
-                while reader.read_until(b'\n', &mut buf).unwrap() != 0 {
-                    combined.lock().push(LogLine::new(&buf));
+                while reader.read_until(b'\n', &mut buf).unwrap_or(0) != 0 {
+                    let line = LogLine::new(&buf);
+                    let _ = tx.send(line);
                     buf.clear();
                 }
             });
         }
-        let combined = &combined;
         {
-            s.spawn(|| {
+            let tx = tx.clone();
+            s.spawn(move || {
                 let mut reader = BufReader::new(err);
                 let mut buf = Vec::new();
-                while reader.read_until(b'\n', &mut buf).unwrap() != 0 {
-                    combined.lock().push(LogLine::new(&buf));
+                while reader.read_until(b'\n', &mut buf).unwrap_or(0) != 0 {
+                    let line = LogLine::new(&buf);
+                    let _ = tx.send(line);
                     buf.clear();
                 }
             });
+        }
+        drop(tx);
+
+        while let Ok(line) = rx.recv() {
+            out_lines.push(line.clone());
+            let _ = reporter.refresh_cli(line);
         }
     });
 
-    let mut out = combined.into_inner();
-    out.sort_by_key(|a| a.t_stmp);
-    let out = out.into_iter().flat_map(|a| a.line).collect();
+    out_lines.sort_by_key(|a| a.t_stmp);
+    let out = out_lines.into_iter().flat_map(|a| a.line).collect();
 
     Some(out)
 }
