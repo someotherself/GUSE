@@ -67,7 +67,7 @@ pub enum ChaseFsError {
 pub trait Reporter: Send {
     /// Sends a line of text, to be immediately displayed to the cli
     fn update(&mut self, msg: &str) -> anyhow::Result<()>;
-    fn refresh_cli(&mut self, log: LogLine) -> anyhow::Result<()>;
+    fn refresh_cli(&mut self, log: Vec<LogLine>) -> anyhow::Result<()>;
 }
 
 impl Reporter for UnixStream {
@@ -82,12 +82,12 @@ impl Reporter for UnixStream {
         Ok(())
     }
 
-    fn refresh_cli(&mut self, log: LogLine) -> anyhow::Result<()> {
-        let res = ControlRes::Update {
-            message: log.line.clone(),
-        };
-        let out = serde_json::to_vec(&res)?;
-        self.write_all(&out)?;
+    fn refresh_cli(&mut self, mut log: Vec<LogLine>) -> anyhow::Result<()> {
+        log.sort_by_key(|l| l.t_stmp);
+        let log = log.into_iter().map(|l| l.line).collect();
+        let res = ControlRes::Draw { message: log };
+        let _out = serde_json::to_vec(&res)?;
+        // self.write_all(&out)?;
         self.write_all(b"\n")?;
         self.flush()?;
         Ok(())
@@ -235,18 +235,18 @@ impl<T> ErrorResolver<T> for GuseFsResult<T> {
 }
 
 // https://gist.github.com/JBlond/2fea43a3049b38287e5e9cefc87b2124
-fn color_red(s: &str) -> String {
+pub fn color_red(s: &str) -> String {
     format!("\x1b[31m{s}\x1b[0m")
 }
 
-fn color_green(s: &str) -> String {
+pub fn color_green(s: &str) -> String {
     format!("\x1b[32m{s}\x1b[0m")
 }
 
-fn color_yellow(s: &str) -> String {
+pub fn color_yellow(s: &str) -> String {
     format!("\x1b[33m{s}\x1b[0m")
 }
 
-fn white_underline(s: &str) -> String {
+pub fn white_underline(s: &str) -> String {
     format!("\x1b[4;37m{s}\x1b[0m")
 }

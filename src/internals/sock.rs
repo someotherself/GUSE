@@ -1,5 +1,5 @@
 use std::{
-    io::{BufRead, BufReader, Read, Write},
+    io::{BufRead, BufReader, Read, Write, stdout},
     os::unix::{
         fs::{FileTypeExt, PermissionsExt},
         net::{UnixListener, UnixStream},
@@ -38,6 +38,8 @@ pub enum ControlRes {
     Error { error: String },
     // Used to print progress to the user cli
     Update { message: Vec<u8> },
+    // Used to print progress during a build/compilatin - re-drawing the last 5 lines
+    Draw { message: Vec<Vec<u8>> },
     RepoList { repos: Vec<String> },
     Status { running: bool, mount_point: String },
 }
@@ -184,6 +186,27 @@ pub fn send_req(sock: &Path, req: &ControlReq) -> anyhow::Result<ControlRes> {
             match msg {
                 ControlRes::Update { message } => {
                     print!("{}", String::from_utf8_lossy(&message));
+                }
+                ControlRes::Draw { message } => {
+                    // TODO: Fix
+                    let mut out = stdout();
+                    let len = message.len();
+                    for _ in 0..len {
+                        write!(out, "\x1b[1A")?;
+                    }
+                    for (i, line) in message.iter().enumerate() {
+                        write!(out, "\x1b[2K\x1b[G")?; // Clear line, return to 0
+                        let mut text = String::from_utf8_lossy(line).to_string();
+                        while text.ends_with(['\n', '\r']) {
+                            text.pop();
+                        }
+                        if i + 1 < len {
+                            writeln!(out, "{}", text)?;
+                        } else {
+                            write!(out, "{}", text)?;
+                        }
+                    }
+                    out.flush()?;
                 }
                 other => {
                     final_res = Some(other);

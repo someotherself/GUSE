@@ -1,13 +1,15 @@
 use std::{
+    collections::VecDeque,
     io::{BufRead, BufReader},
+    ops::Deref,
     path::Path,
     process::{Command, Stdio},
-    time::{SystemTime, UNIX_EPOCH},
+    time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
 use crate::fs::builds::reporter::Reporter;
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct LogLine {
     pub t_stmp: u128,
     pub line: Vec<u8>,
@@ -53,6 +55,7 @@ pub fn run_command_on_snap<R: Reporter>(
     };
 
     let mut out_lines = Vec::new();
+    let mut log_buf: RingBuffer<LogLine> = RingBuffer::new(5);
 
     let out = output.stdout.take()?;
     let err = output.stderr.take()?;
@@ -86,14 +89,52 @@ pub fn run_command_on_snap<R: Reporter>(
         }
         drop(tx);
 
-        while let Ok(line) = rx.recv() {
+        while let Ok(line) = rx.recv_timeout(Duration::from_secs(5)) {
             out_lines.push(line.clone());
-            let _ = reporter.refresh_cli(line);
+            log_buf.push(line.clone());
+            let _ = reporter.refresh_cli(log_buf.iter().cloned().map(|l| l).collect());
         }
     });
+
+    let _ = output.wait();
 
     out_lines.sort_by_key(|a| a.t_stmp);
     let out = out_lines.into_iter().flat_map(|a| a.line).collect();
 
     Some(out)
+}
+
+// https://users.rust-lang.org/t/the-best-ring-buffer-library/58489/5
+#[derive(Debug, Clone)]
+pub struct RingBuffer<T> {
+    inner: VecDeque<T>,
+}
+
+impl<T> RingBuffer<T> {
+    pub fn new(capacity: usize) -> Self {
+        Self {
+            inner: VecDeque::with_capacity(capacity),
+        }
+    }
+
+    pub fn push(&mut self, item: T) {
+        if self.inner.len() == self.inner.capacity() {
+            self.inner.pop_front();
+            self.inner.push_back(item);
+            debug_assert!(self.inner.len() == self.inner.capacity());
+        } else {
+            self.inner.push_back(item);
+        }
+    }
+
+    pub fn pop(&mut self) -> Option<T> {
+        self.inner.pop_front()
+    }
+}
+
+impl<T> Deref for RingBuffer<T> {
+    type Target = VecDeque<T>;
+    fn deref(&self) -> &Self::Target {
+        &self.inner
+    }
 }

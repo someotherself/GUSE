@@ -6,6 +6,7 @@ use git2::Oid;
 use crate::fs;
 use crate::fs::builds::logger::run_command_on_snap;
 use crate::fs::builds::reporter::Reporter;
+use crate::fs::builds::reporter::color_green;
 use crate::fs::{GitFs, builds::chase::Chase};
 
 enum CommandResult {
@@ -49,7 +50,6 @@ impl<'a, R: Reporter> ChaseRunner<'a, R> {
     }
 
     pub fn run(&mut self) -> anyhow::Result<Vec<(Oid, Vec<u8>)>> {
-        self.reporter.update("Start of run\n")?;
         let mut curr_run = 0;
         let mut prev_target: Option<ChaseTarget> = None;
         let total = self.chase.commits.len();
@@ -60,7 +60,6 @@ impl<'a, R: Reporter> ChaseRunner<'a, R> {
 
         // RUN THROUGH EACH COMMIT
         while let Some(oid) = commit_list.pop_front() {
-            self.reporter.update(&format!("Start commit {}\n", oid))?;
             curr_run += 1;
             let mut cmd_output: Vec<u8> = vec![];
 
@@ -85,8 +84,13 @@ impl<'a, R: Reporter> ChaseRunner<'a, R> {
 
             // RUN COMMANDS
             while let Some(command) = commands.pop_front() {
-                self.reporter
-                    .update(&format!("Running command {} for {}\n", command, oid))?;
+                self.reporter.update(&format!(
+                    "Running command {} for {} ({}/{})\n",
+                    color_green(&command),
+                    oid,
+                    curr_run,
+                    total
+                ))?;
                 cmd_output.extend(format!("Command: {}", command).as_bytes());
                 let Some(output) = run_command_on_snap(cur_path, &command, self.reporter) else {
                     cmd_output.extend(b"GUSE detected no output\n");
@@ -98,6 +102,10 @@ impl<'a, R: Reporter> ChaseRunner<'a, R> {
                     cmd_output.extend(output);
                     cmd_output.extend(b"\n");
                 }
+                self.reporter.update(&color_green(&format!(
+                    "--> FINISHED command {} for {}\n",
+                    command, oid
+                )))?;
             }
             out.push((oid, cmd_output));
             prev_target = Some(cur_target);
