@@ -1,5 +1,6 @@
 use std::{
     ffi::{OsStr, OsString},
+    os::unix::fs::MetadataExt,
     path::{Path, PathBuf},
     sync::Arc,
 };
@@ -355,10 +356,29 @@ fn populate_entries_by_path(
         } else {
             FileType::RegularFile
         };
+        let mut nodes = vec![];
         let entry_ino = match fs.exists_by_name(ino.into(), &node_name)? {
             DbReturn::Found { value: ino } => ino,
+            DbReturn::Missing => {
+                let new_ino = fs.next_inode_checked(ino.into())?;
+                let mut attr: FileAttr = if kind == FileType::Directory {
+                    dir_attr(InoFlag::InsideChase).into()
+                } else {
+                    file_attr(InoFlag::InsideChase).into()
+                };
+                attr.ino = new_ino;
+                let metadata = node.metadata()?;
+                attr.size = metadata.size();
+                nodes.push(StorageNode {
+                    parent_ino: ino.into(),
+                    name: node_name.clone(),
+                    attr,
+                });
+                new_ino
+            }
             _ => continue,
         };
+        fs.write_inodes_to_cache(ino.into(), nodes)?;
         let entry = DirectoryEntry::new(entry_ino, Oid::zero(), node_name, kind);
         out.push(entry);
     }
@@ -559,7 +579,6 @@ pub fn readdir_git_dir(fs: &GitFs, parent: NormalIno) -> anyhow::Result<Vec<Dire
             read_build_dir(fs, parent, false)?
         }
         InoFlag::InsideChase | InoFlag::ChaseRoot => {
-            // read_chase_dir(fs, parent)?
             let path = build_chase_path(fs, parent)?;
             populate_entries_by_path(fs, parent, &path)?
         }
