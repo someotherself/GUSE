@@ -40,7 +40,8 @@ fn main() -> anyhow::Result<()> {
             let build = m
                 .get_one::<String>("build")
                 .ok_or_else(|| anyhow!("Cannot parse argument"))?;
-            let req = ControlReq::Chase { repo, build };
+            let log = m.get_flag("read-only");
+            let req = ControlReq::Chase { repo, build, log };
             send_req(&sock, &req)?;
         }
         Some(("script", m)) => match m.subcommand() {
@@ -52,7 +53,6 @@ fn main() -> anyhow::Result<()> {
                 let build = s
                     .get_one::<String>("build")
                     .ok_or_else(|| anyhow!("Cannot parse argument"))?;
-                println!("script new {} {}", repo, build);
                 let req = ControlReq::NewScript { repo, build };
                 send_req(&sock, &req)?;
             }
@@ -187,7 +187,14 @@ fn handle_cli_args() -> ArgMatches {
                     .value_name("BUILD")
                     .help("The name of the automated build")
                     .required(true)
-            )
+                )
+                .arg(
+                    Arg::new("log")
+                        .long("log")
+                        .short('l')
+                        .action(ArgAction::SetTrue)
+                        .help("Enable logging chase results to disk (in chase folder).")
+                )
         )
         .subcommand(
             Command::new("script")

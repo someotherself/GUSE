@@ -39,6 +39,7 @@ pub enum ControlReq<'a> {
     Chase {
         repo: &'a str,
         build: &'a str,
+        log: bool,
     },
     NewScript {
         repo: &'a str,
@@ -127,10 +128,10 @@ fn handle_client(
                 stream.update("Not implemented!\n")?;
                 Ok(ControlRes::Ok)
             }
-            ControlReq::Chase { repo, build } => {
+            ControlReq::Chase { repo, build, log } => {
                 let repo = repo.strip_suffix("/").unwrap_or(repo);
                 let fs = inner.getfs();
-                start_chase(&fs, repo, build, &mut stream)?;
+                start_chase(&fs, repo, build, &mut stream, log)?;
                 Ok(ControlRes::Ok)
             }
             ControlReq::NewScript { repo, build } => {

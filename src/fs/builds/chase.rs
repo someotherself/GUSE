@@ -35,6 +35,7 @@ pub fn start_chase(
     repo_name: &str,
     script: &str,
     stream: &mut UnixStream,
+    _log: bool,
 ) -> anyhow::Result<()> {
     let repo_ino = get_repo_ino(fs, repo_name, stream)?;
     let repo = fs.get_repo(repo_ino)?;
