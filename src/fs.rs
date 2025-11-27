@@ -677,7 +677,7 @@ impl GitFs {
         self.write_inodes_to_db(nodes)?;
 
         if let Some(url) = url {
-            repo.fetch_anon(url)?;
+            repo.fetch(url)?;
             repo.refresh_refs()?;
         };
 

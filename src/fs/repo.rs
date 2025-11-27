@@ -472,9 +472,9 @@ impl GitRepo {
         Ok(out)
     }
 
-    pub fn fetch_anon(&self, url: &str) -> anyhow::Result<()> {
+    pub fn fetch(&self, url: &str) -> anyhow::Result<()> {
         let repo = self.inner.lock();
-        let mut remote = repo.remote_anonymous(url)?;
+        let mut remote = repo.remote("upstream", url)?;
         let mut cbs = git2::RemoteCallbacks::new();
         cbs.sideband_progress(|d| {
             print!("remote: {}", std::str::from_utf8(d).unwrap_or(""));
