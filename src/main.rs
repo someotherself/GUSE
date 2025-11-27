@@ -57,17 +57,18 @@ fn main() -> anyhow::Result<()> {
                 send_req(&sock, &req)?;
             }
             Some(("remove", s)) => {
-                // let sock = socket_path()?;
+                let sock = socket_path()?;
                 let repo = s
                     .get_one::<String>("repo")
                     .ok_or_else(|| anyhow!("Cannot parse argument"))?;
                 let build = s
                     .get_one::<String>("build")
                     .ok_or_else(|| anyhow!("Cannot parse argument"))?;
-                println!("script remove {} {}", repo, build);
+                let req = ControlReq::RemoveScript { repo, build };
+                send_req(&sock, &req)?;
             }
             Some(("rename", s)) => {
-                // let sock = socket_path()?;
+                let sock = socket_path()?;
                 let repo = s
                     .get_one::<String>("repo")
                     .ok_or_else(|| anyhow!("Cannot parse argument"))?;
@@ -77,7 +78,12 @@ fn main() -> anyhow::Result<()> {
                 let new_build = s
                     .get_one::<String>("new_build")
                     .ok_or_else(|| anyhow!("Cannot parse argument"))?;
-                println!("script rename {} {} {}", repo, old_build, new_build);
+                let req = ControlReq::RenameScript {
+                    repo,
+                    old_build,
+                    new_build,
+                };
+                send_req(&sock, &req)?;
             }
             _ => {
                 dbg!("Wrong command!");
@@ -231,15 +237,9 @@ fn handle_cli_args() -> ArgMatches {
                     .required(true)
             )
             .arg(
-                Arg::new("old_build")
-                    .value_name("OLD_BUILD")
-                    .help("The old name of the script")
-                    .required(true)
-            )
-            .arg(
                 Arg::new("new_build")
                     .value_name("NEW_BUILD")
-                    .help("The new name of the script")
+                    .help("The old name of the script")
                     .required(true)
             ))
         )

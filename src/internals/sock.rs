@@ -8,12 +8,15 @@ use std::{
     thread,
 };
 
-use anyhow::{Context, anyhow};
+use anyhow::anyhow;
 use serde::{Deserialize, Serialize};
 use serde_json::Deserializer;
 
 use crate::{
-    fs::{GitFs, builds::chase::start_chase},
+    fs::{
+        GitFs,
+        builds::{chase::start_chase, reporter::Reporter},
+    },
     mount::GitFsAdapter,
 };
 
@@ -109,20 +112,19 @@ fn handle_client(
                 let name = name.strip_suffix("/").unwrap_or(name);
                 let fs = inner.getfs();
                 let Ok(()) = fs.delete_repo(name) else {
+                    stream.update(&format!("Repo {name} does not exist!\n"))?;
                     return Ok(ControlRes::Ok);
                 };
                 let repo_path = fs.repos_dir.join(name);
                 if repo_path.exists() {
-                    println!("Deleting repo at {}", repo_path.display());
-                    std::fs::remove_dir_all(&repo_path)
-                        .with_context(|| format!("remove_dir_all({})", repo_path.display()))?;
+                    std::fs::remove_dir_all(&repo_path)?;
                 }
                 fs.delete_repo(name)?;
+                stream.update(&format!("Removed repo at {}\n", repo_path.display()))?;
                 Ok(ControlRes::Ok)
             }
             ControlReq::RepoList => {
-                dbg!("Not implemented!");
-                tracing::info!("Not implemented!");
+                stream.update("Not implemented!\n")?;
                 Ok(ControlRes::Ok)
             }
             ControlReq::Chase { repo, build } => {
@@ -135,7 +137,7 @@ fn handle_client(
                 let repo_name = repo.strip_suffix("/").unwrap_or(repo);
                 let fs = inner.getfs();
                 let Some(repo_entry) = fs.repos_map.get(repo_name) else {
-                    eprintln!("Repo {repo} does not exist!");
+                    stream.update(&format!("Repo {repo} does not exist!\n"))?;
                     return Ok(ControlRes::Ok);
                 };
                 let repo = fs.get_repo(GitFs::repo_id_to_ino(*repo_entry.value()))?;
@@ -143,11 +145,11 @@ fn handle_client(
                 match std::fs::create_dir(script_dir) {
                     Ok(_) => {}
                     Err(e) if e.kind() == ErrorKind::AlreadyExists => {
-                        eprintln!("Script {build} already exists!");
+                        stream.update(&format!("Script {build} already exists!\n"))?;
                         return Ok(ControlRes::Ok);
                     }
                     Err(e) => {
-                        eprintln!("Error creating build script: {e}");
+                        stream.update(&format!("Error creating build script: {e}\n"))?;
                         return Ok(ControlRes::Ok);
                     }
                 }
@@ -155,7 +157,7 @@ fn handle_client(
                 let script_file = match std::fs::File::create_new(script_path) {
                     Ok(f) => f,
                     Err(e) => {
-                        eprintln!("Error creating build script: {e}");
+                        stream.update(&format!("Error creating build script: {e}\n"))?;
                         return Ok(ControlRes::Ok);
                     }
                 };
@@ -166,17 +168,17 @@ fn handle_client(
                 let repo_name = repo.strip_suffix("/").unwrap_or(repo);
                 let fs = inner.getfs();
                 let Some(repo_entry) = fs.repos_map.get(repo_name) else {
-                    eprintln!("Repo {repo} does not exist!");
+                    stream.update(&format!("Repo {repo} does not exist!\n"))?;
                     return Ok(ControlRes::Ok);
                 };
                 let repo = fs.get_repo(GitFs::repo_id_to_ino(*repo_entry.value()))?;
                 let script_dir = &repo.chase_dir.join(build);
                 match std::fs::remove_dir_all(script_dir) {
-                    Ok(_) => println!("Script {build} succesfully removed"),
+                    Ok(_) => stream.update(&format!("Script {build} succesfully removed\n"))?,
                     Err(e) if e.kind() == ErrorKind::NotFound => {
-                        eprintln!("Script {build} does not exist!")
+                        stream.update(&format!("Script {build} does not exist!\n"))?
                     }
-                    Err(e) => eprintln!("Error removing {build}: {e}"),
+                    Err(e) => stream.update(&format!("Error removing {build}: {e}\n"))?,
                 }
                 Ok(ControlRes::Ok)
             }
@@ -188,28 +190,28 @@ fn handle_client(
                 let repo_name = repo.strip_suffix("/").unwrap_or(repo);
                 let fs = inner.getfs();
                 let Some(repo_entry) = fs.repos_map.get(repo_name) else {
-                    eprintln!("Repo {repo} does not exist!");
+                    stream.update(&format!("Repo {repo} does not exist!\n"))?;
                     return Ok(ControlRes::Ok);
                 };
                 let repo = fs.get_repo(GitFs::repo_id_to_ino(*repo_entry.value()))?;
                 let old_script_dir = &repo.chase_dir.join(old_build);
                 let new_script_dir = &repo.chase_dir.join(new_build);
                 if !old_script_dir.exists() {
-                    eprintln!("Script {old_build} does not exist!");
+                    stream.update(&format!("Script {old_build} does not exist!\n"))?;
                     return Ok(ControlRes::Ok);
                 }
                 if new_script_dir.exists() {
-                    eprintln!("Script {new_build} already exists!");
+                    stream.update(&format!("Script {new_build} already exists!\n"))?;
                     return Ok(ControlRes::Ok);
                 }
                 match std::fs::rename(old_script_dir, new_script_dir) {
                     Ok(_) => {}
-                    Err(e) => eprintln!("Error renaming scripts: {e}"),
+                    Err(e) => stream.update(&format!("Error renaming scripts: {e}\n"))?,
                 }
                 Ok(ControlRes::Ok)
             }
             ControlReq::Status => {
-                println!("Not implemented!");
+                stream.update("Not implemented!\n")?;
                 Ok(ControlRes::Ok)
             }
         }
