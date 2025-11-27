@@ -1524,6 +1524,7 @@ impl GitFs {
     pub fn delete_repo(&self, repo_name: &str) -> anyhow::Result<()> {
         if let Some(repo_id) = self.repos_map.get(repo_name) {
             self.repos_list.remove(&repo_id);
+            self.conn_list.remove(&repo_id);
         } else {
             bail!(std::io::Error::from_raw_os_error(libc::EINVAL))
         }
