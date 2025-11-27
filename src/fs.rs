@@ -416,7 +416,7 @@ impl GitFs {
 
     /// Create folders and write entries in DB. Also clears the build folder
     ///
-    /// It write ROOT_INO, Repo Root, Live and Build folder in db
+    /// It will write ROOT_INO, Repo Root, Live and Build folders in db
     fn populate_repo_database(&self, repo_id: u16, repo_name: &str) -> anyhow::Result<()> {
         let repo_ino = GitFs::repo_id_to_ino(repo_id);
         let repo_path = self.repos_dir.join(repo_name);
@@ -897,21 +897,6 @@ impl GitFs {
             tracing::debug!(len = *bytes_written, "Write ok");
         }
         ret
-    }
-
-    pub fn truncate(&self, ino: u64, size: u64, fh: Option<u64>) -> anyhow::Result<()> {
-        let ino = ino.into();
-        let ctx = FsOperationContext::get_operation(self, ino)?;
-        match ctx {
-            FsOperationContext::Root => bail!(std::io::Error::from_raw_os_error(libc::EPERM)),
-            FsOperationContext::RepoDir => bail!(std::io::Error::from_raw_os_error(libc::EPERM)),
-            FsOperationContext::InsideLiveDir => {
-                ops::truncate::truncate_live(self, ino.to_norm(), size, fh)
-            }
-            FsOperationContext::InsideGitDir => {
-                ops::truncate::truncate_git(self, ino.to_norm(), size, fh)
-            }
-        }
     }
 
     #[instrument(level = "debug", skip(self), ret(level = Level::DEBUG), err(Display))]
