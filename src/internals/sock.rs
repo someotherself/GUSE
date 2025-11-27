@@ -1,7 +1,7 @@
 use std::{
-    io::{BufRead, BufReader, Read, Write, stdout},
+    io::{BufRead, BufReader, ErrorKind, Read, Write, stdout},
     os::unix::{
-        fs::{FileTypeExt, PermissionsExt},
+        fs::{FileExt, FileTypeExt, PermissionsExt},
         net::{UnixListener, UnixStream},
     },
     path::{Path, PathBuf},
@@ -12,7 +12,12 @@ use anyhow::{Context, anyhow};
 use serde::{Deserialize, Serialize};
 use serde_json::Deserializer;
 
-use crate::{fs::builds::chase::start_chase, mount::GitFsAdapter};
+use crate::{
+    fs::{GitFs, builds::chase::start_chase},
+    mount::GitFsAdapter,
+};
+
+const LUA_TEMPLATE: &str = include_str!("../.././src/fs/builds/chase.lua");
 
 pub fn socket_path() -> anyhow::Result<PathBuf> {
     let home = std::env::var_os("HOME").map_or(PathBuf::from("/tmp"), PathBuf::from);
@@ -25,8 +30,26 @@ pub fn socket_path() -> anyhow::Result<PathBuf> {
 #[serde(tag = "cmd", rename_all = "snake_case")]
 pub enum ControlReq<'a> {
     RepoList,
-    RepoDelete { name: &'a str },
-    Chase { repo: &'a str, build: &'a str },
+    RepoDelete {
+        name: &'a str,
+    },
+    Chase {
+        repo: &'a str,
+        build: &'a str,
+    },
+    NewScript {
+        repo: &'a str,
+        build: &'a str,
+    },
+    RemoveScript {
+        repo: &'a str,
+        build: &'a str,
+    },
+    RenameScript {
+        repo: &'a str,
+        old_build: &'a str,
+        new_build: &'a str,
+    },
     Status,
 }
 
@@ -108,9 +131,85 @@ fn handle_client(
                 start_chase(&fs, repo, build, &mut stream)?;
                 Ok(ControlRes::Ok)
             }
+            ControlReq::NewScript { repo, build } => {
+                let repo_name = repo.strip_suffix("/").unwrap_or(repo);
+                let fs = inner.getfs();
+                let Some(repo_entry) = fs.repos_map.get(repo_name) else {
+                    eprintln!("Repo {repo} does not exist!");
+                    return Ok(ControlRes::Ok);
+                };
+                let repo = fs.get_repo(GitFs::repo_id_to_ino(*repo_entry.value()))?;
+                let script_dir = &repo.chase_dir.join(build);
+                match std::fs::create_dir(script_dir) {
+                    Ok(_) => {}
+                    Err(e) if e.kind() == ErrorKind::AlreadyExists => {
+                        eprintln!("Script {build} already exists!");
+                        return Ok(ControlRes::Ok);
+                    }
+                    Err(e) => {
+                        eprintln!("Error creating build script: {e}");
+                        return Ok(ControlRes::Ok);
+                    }
+                }
+                let script_path = script_dir.join("chase.lua");
+                let script_file = match std::fs::File::create_new(script_path) {
+                    Ok(f) => f,
+                    Err(e) => {
+                        eprintln!("Error creating build script: {e}");
+                        return Ok(ControlRes::Ok);
+                    }
+                };
+                script_file.write_at(LUA_TEMPLATE.as_bytes(), 0)?;
+                Ok(ControlRes::Ok)
+            }
+            ControlReq::RemoveScript { repo, build } => {
+                let repo_name = repo.strip_suffix("/").unwrap_or(repo);
+                let fs = inner.getfs();
+                let Some(repo_entry) = fs.repos_map.get(repo_name) else {
+                    eprintln!("Repo {repo} does not exist!");
+                    return Ok(ControlRes::Ok);
+                };
+                let repo = fs.get_repo(GitFs::repo_id_to_ino(*repo_entry.value()))?;
+                let script_dir = &repo.chase_dir.join(build);
+                match std::fs::remove_dir_all(script_dir) {
+                    Ok(_) => println!("Script {build} succesfully removed"),
+                    Err(e) if e.kind() == ErrorKind::NotFound => {
+                        eprintln!("Script {build} does not exist!")
+                    }
+                    Err(e) => eprintln!("Error removing {build}: {e}"),
+                }
+                Ok(ControlRes::Ok)
+            }
+            ControlReq::RenameScript {
+                repo,
+                old_build,
+                new_build,
+            } => {
+                let repo_name = repo.strip_suffix("/").unwrap_or(repo);
+                let fs = inner.getfs();
+                let Some(repo_entry) = fs.repos_map.get(repo_name) else {
+                    eprintln!("Repo {repo} does not exist!");
+                    return Ok(ControlRes::Ok);
+                };
+                let repo = fs.get_repo(GitFs::repo_id_to_ino(*repo_entry.value()))?;
+                let old_script_dir = &repo.chase_dir.join(old_build);
+                let new_script_dir = &repo.chase_dir.join(new_build);
+                if !old_script_dir.exists() {
+                    eprintln!("Script {old_build} does not exist!");
+                    return Ok(ControlRes::Ok);
+                }
+                if new_script_dir.exists() {
+                    eprintln!("Script {new_build} already exists!");
+                    return Ok(ControlRes::Ok);
+                }
+                match std::fs::rename(old_script_dir, new_script_dir) {
+                    Ok(_) => {}
+                    Err(e) => eprintln!("Error renaming scripts: {e}"),
+                }
+                Ok(ControlRes::Ok)
+            }
             ControlReq::Status => {
-                dbg!("Not implemented!");
-                tracing::info!("Not implemented!");
+                println!("Not implemented!");
                 Ok(ControlRes::Ok)
             }
         }
@@ -187,8 +286,10 @@ pub fn send_req(sock: &Path, req: &ControlReq) -> anyhow::Result<ControlRes> {
                 ControlRes::Update { message } => {
                     print!("{}", String::from_utf8_lossy(&message));
                 }
+                // Redirected to ControlRes::Update.
+                // TODO: Fix.
+                // Not printing reliably.
                 ControlRes::Draw { message } => {
-                    // TODO: Fix
                     let mut out = stdout();
                     let len = message.len();
                     for _ in 0..len {

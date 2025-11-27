@@ -146,7 +146,7 @@ pub struct GitFs {
     conn_list: DashMap<u16, Arc<MetaDb>>,
     /// Use helpers `self.insert_repo` and `self.delete_repo`
     /// <repo_name, repo_id>
-    repos_map: DashMap<String, u16>,
+    pub repos_map: DashMap<String, u16>,
     /// Each Repo has a set of inodes
     next_inode: DashMap<u16, AtomicU64>,
     pub handles: FileHandles,
@@ -1679,7 +1679,7 @@ impl GitFs {
         })
     }
 
-    fn get_repo(&self, ino: u64) -> anyhow::Result<Arc<GitRepo>> {
+    pub fn get_repo(&self, ino: u64) -> anyhow::Result<Arc<GitRepo>> {
         let repo_id = (ino >> REPO_SHIFT) as u16;
         let repo = self
             .repos_list
@@ -1841,12 +1841,12 @@ impl GitFs {
     }
 
     #[inline]
-    fn repo_id_to_ino(repo_id: u16) -> u64 {
+    pub fn repo_id_to_ino(repo_id: u16) -> u64 {
         (u64::from(repo_id)) << REPO_SHIFT
     }
 
     #[inline]
-    fn ino_to_repo_id(ino: u64) -> u16 {
+    pub fn ino_to_repo_id(ino: u64) -> u16 {
         (ino >> REPO_SHIFT) as u16
     }
 

@@ -43,6 +43,47 @@ fn main() -> anyhow::Result<()> {
             let req = ControlReq::Chase { repo, build };
             send_req(&sock, &req)?;
         }
+        Some(("script", m)) => match m.subcommand() {
+            Some(("new", s)) => {
+                let sock = socket_path()?;
+                let repo = s
+                    .get_one::<String>("repo")
+                    .ok_or_else(|| anyhow!("Cannot parse argument"))?;
+                let build = s
+                    .get_one::<String>("build")
+                    .ok_or_else(|| anyhow!("Cannot parse argument"))?;
+                println!("script new {} {}", repo, build);
+                let req = ControlReq::NewScript { repo, build };
+                send_req(&sock, &req)?;
+            }
+            Some(("remove", s)) => {
+                // let sock = socket_path()?;
+                let repo = s
+                    .get_one::<String>("repo")
+                    .ok_or_else(|| anyhow!("Cannot parse argument"))?;
+                let build = s
+                    .get_one::<String>("build")
+                    .ok_or_else(|| anyhow!("Cannot parse argument"))?;
+                println!("script remove {} {}", repo, build);
+            }
+            Some(("rename", s)) => {
+                // let sock = socket_path()?;
+                let repo = s
+                    .get_one::<String>("repo")
+                    .ok_or_else(|| anyhow!("Cannot parse argument"))?;
+                let old_build = s
+                    .get_one::<String>("old_build")
+                    .ok_or_else(|| anyhow!("Cannot parse argument"))?;
+                let new_build = s
+                    .get_one::<String>("new_build")
+                    .ok_or_else(|| anyhow!("Cannot parse argument"))?;
+                println!("script rename {} {} {}", repo, old_build, new_build);
+            }
+            _ => {
+                dbg!("Wrong command!");
+                tracing::error!("Wrong command!")
+            }
+        },
         _ => {
             dbg!("Wrong command!");
             tracing::error!("Wrong command!")
@@ -140,8 +181,67 @@ fn handle_cli_args() -> ArgMatches {
                     .value_name("BUILD")
                     .help("The name of the automated build")
                     .required(true)
-                    .requires("repo")
             )
+        )
+        .subcommand(
+            Command::new("script")
+            .about("Manage GUSE chase scripts")
+            .subcommand(
+            Command::new("new")
+            .about("Add a new GUSE chase script")
+            .arg_required_else_help(true)
+            .arg(
+                Arg::new("repo")
+                    .value_name("REPO")
+                    .required(true)
+                    .help("The repo that the script will be created for")
+            )
+            .arg(
+                Arg::new("build")
+                    .value_name("BUILD")
+                    .help("The name of the script")
+                    .required(true)
+            ))
+            .subcommand(
+                Command::new("remove")
+            .arg(
+                Arg::new("repo")
+                    .value_name("REPO")
+                    .required(true)
+                    .help("The repo that the script will be created for")
+            )
+            .arg(
+                Arg::new("build")
+                    .value_name("BUILD")
+                    .help("The name of the script")
+                    .required(true)
+            ))
+            .subcommand(
+                Command::new("rename")
+            .arg(
+                Arg::new("repo")
+                    .value_name("REPO")
+                    .required(true)
+                    .help("The repo that the script will be created for")
+            )
+            .arg(
+                Arg::new("old_build")
+                    .value_name("OLD_BUILD")
+                    .help("The name of the script")
+                    .required(true)
+            )
+            .arg(
+                Arg::new("old_build")
+                    .value_name("OLD_BUILD")
+                    .help("The old name of the script")
+                    .required(true)
+            )
+            .arg(
+                Arg::new("new_build")
+                    .value_name("NEW_BUILD")
+                    .help("The new name of the script")
+                    .required(true)
+            ))
         )
         .get_matches()
 }
