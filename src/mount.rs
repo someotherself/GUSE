@@ -618,7 +618,6 @@ impl fuser::Filesystem for GitFsAdapter {
         datasync: bool,
         reply: fuser::ReplyEmpty,
     ) {
-        // TODO
         reply.ok();
     }
 
@@ -630,8 +629,79 @@ impl fuser::Filesystem for GitFsAdapter {
         datasync: bool,
         reply: fuser::ReplyEmpty,
     ) {
-        // TODO
         reply.ok();
+    }
+
+    fn copy_file_range(
+        &mut self,
+        _req: &fuser::Request<'_>,
+        ino_in: u64,
+        fh_in: u64,
+        offset_in: i64,
+        ino_out: u64,
+        fh_out: u64,
+        offset_out: i64,
+        len: u64,
+        flags: u32,
+        reply: ReplyWrite,
+    ) {
+        let fs = self.getfs();
+
+        match fs.copy_file_range(
+            ino_in,
+            fh_in,
+            offset_in as u64,
+            ino_out,
+            fh_out,
+            offset_out as u64,
+            len,
+        ) {
+            Ok(written) => reply.written(written as u32),
+            Err(e) => reply.error(errno_from_anyhow(&e)),
+        }
+    }
+
+    fn lseek(
+        &mut self,
+        _req: &fuser::Request<'_>,
+        ino: u64,
+        fh: u64,
+        offset: i64,
+        whence: i32,
+        reply: fuser::ReplyLseek,
+    ) {
+        reply.error(libc::ENOSYS);
+    }
+
+    fn getxattr(
+        &mut self,
+        _req: &fuser::Request<'_>,
+        ino: u64,
+        name: &OsStr,
+        size: u32,
+        reply: fuser::ReplyXattr,
+    ) {
+        reply.error(libc::EOPNOTSUPP);
+    }
+
+    fn listxattr(
+        &mut self,
+        _req: &fuser::Request<'_>,
+        ino: u64,
+        size: u32,
+        reply: fuser::ReplyXattr,
+    ) {
+        reply.error(libc::EOPNOTSUPP);
+    }
+
+    fn removexattr(
+        &mut self,
+        _req: &fuser::Request<'_>,
+        ino: u64,
+        name: &OsStr,
+        reply: fuser::ReplyEmpty,
+    ) {
+        reply.error(libc::EOPNOTSUPP);
     }
 
     fn read(

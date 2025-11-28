@@ -1410,6 +1410,54 @@ impl GitFs {
         }
     }
 
+    // in = input (src)
+    // out = output (dst)
+   #[allow(clippy::too_many_arguments)] 
+   pub fn copy_file_range(
+        &self,
+        ino_in: u64,
+        fh_in: u64,
+        off_in: u64,
+        ino_out: u64,
+        fh_out: u64,
+        off_out: u64,
+        len: u64,
+    ) -> anyhow::Result<usize> {
+        let Some(ctx_in) = self.handles.get_context(fh_in) else {
+            tracing::error!("Handle {} for ino {} does not exist", fh_in, ino_in);
+            bail!(std::io::Error::from_raw_os_error(libc::EBADF))
+        };
+        if !ctx_in.source.is_file() {
+            tracing::error!("Handle {} for ino {} is not a file", fh_in, ino_in);
+            bail!(std::io::Error::from_raw_os_error(libc::EBADF))
+        }
+        if ctx_in.ino != ino_in {
+            bail!(std::io::Error::from_raw_os_error(libc::EBADF))
+        }
+
+        let Some(ctx_out) = self.handles.get_context(fh_out) else {
+            tracing::error!("Handle {} for ino {} does not exist", fh_out, ino_out);
+            bail!(std::io::Error::from_raw_os_error(libc::EBADF))
+        };
+        if !ctx_out.source.is_file() {
+            tracing::error!("Handle {} for ino {} is not a file", fh_out, ino_out);
+            bail!(std::io::Error::from_raw_os_error(libc::EBADF))
+        }
+        if ctx_out.ino != ino_out {
+            bail!(std::io::Error::from_raw_os_error(libc::EBADF))
+        }
+
+        let mut buf = vec![0u8; len as usize];
+
+        match ctx_in.source.read_at(&mut buf, off_in) {
+            Ok(read) => match ctx_out.source.write_at(&buf[..read], off_out) {
+                Ok(written) => Ok(written),
+                Err(e) => bail!(e),
+            },
+            Err(e) => bail!(e),
+        }
+    }
+
     pub fn prepare_virtual_file(&self, ino: VirtualIno) -> anyhow::Result<FileAttr> {
         if let Some(size) = {
             let guard = self
