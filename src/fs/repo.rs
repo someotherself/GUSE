@@ -139,17 +139,15 @@ impl RefKind {
             return Some(RefKind::Tag(short.into()));
         }
 
-        if full.starts_with("refs/merge-requests/") {
-            let parts: Vec<_> = full.split('/').collect();
-            if parts.len() == 4 {
-                let id = parts[2];
-                match parts[3] {
-                    "head" => Some(RefKind::Pr(id.into())),
-                    "merge" => Some(RefKind::PrMerge(id.into())),
-                    _ => None,
-                };
-            }
-        }
+        if let Some(rest) = full.strip_prefix("refs/merge-requests/") {
+            let mut parts = rest.split('/');
+            let id = parts.next()?;
+            return match parts.next()? {
+                "head" => Some(RefKind::Pr(id.into())),
+                "merge" => Some(RefKind::PrMerge(id.into())),
+                _ => None,
+            };
+        };
 
         if full.starts_with("refs/remotes/") {
             if full.contains("/pr/") {
@@ -188,7 +186,9 @@ impl GitRepo {
 
     /// Updates these fields in State: snaps_to_ref, refs_to_snaps and unique_namespaces. They are not updated anywhere else (which means the folder structure is only updated on fetch, or on a new session)
     ///
-    /// Handles Branches, Tags, Pr and Pr-Merges
+    /// Handles Branches, Tags, Pr (Mr) and Pr-Merges (Mr Merge)
+    ///
+    /// Gitlab Mr and Mr Merges are saved under Pr and Pr-Merge names
     ///
     /// - Branches: It does a merge_base against main (or master) and does a revwalk if it finds something. If that fails, it will merge_base against the other branches. If that also fails, it walk the entire history.
     ///
