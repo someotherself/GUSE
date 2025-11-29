@@ -15,7 +15,7 @@ use std::{
 use anyhow::{Context, anyhow, bail};
 use dashmap::DashMap;
 use git2::{ObjectType, Oid};
-use tracing::{Level, field, info, instrument};
+use tracing::{Level, field, instrument};
 
 use crate::fs;
 use crate::fs::fileattr::{
@@ -530,6 +530,7 @@ impl GitFs {
         let repo_id = self.load_repo_connection(repo_name)?;
 
         self.populate_repo_database(repo_id, repo_name)?;
+        tracing::info!("Repo {repo_name} added");
         Ok(())
     }
 
@@ -539,7 +540,10 @@ impl GitFs {
             .tempdir_in(&self.repos_dir)?;
         let repo_id = self.new_repo_connection(repo_name, tmpdir.path())?;
         match self.fetch_repo(repo_id, repo_name, tmpdir.path(), url) {
-            Ok(repo) => Ok(repo),
+            Ok(repo) => {
+                tracing::info!("Repo {repo_name} added");
+                Ok(repo)
+            }
             Err(_) => {
                 let _ = self.delete_repo(repo_name);
                 bail!("Repo creation failed")
@@ -1412,8 +1416,8 @@ impl GitFs {
 
     // in = input (src)
     // out = output (dst)
-   #[allow(clippy::too_many_arguments)] 
-   pub fn copy_file_range(
+    #[allow(clippy::too_many_arguments)]
+    pub fn copy_file_range(
         &self,
         ino_in: u64,
         fh_in: u64,
@@ -1562,7 +1566,6 @@ impl GitFs {
         if let dashmap::Entry::Vacant(entry) = self.repos_list.entry(repo_id) {
             entry.insert(repo.clone());
             self.repos_map.insert(repo_name.to_string(), repo_id);
-            info!("Repo {repo_name} added");
         } else {
             tracing::error!("Repo {repo_name} already exists");
         }
