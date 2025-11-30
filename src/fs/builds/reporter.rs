@@ -8,7 +8,10 @@ use std::{
 use anyhow::bail;
 use thiserror::Error;
 
-use crate::{fs::builds::logger::LogLine, internals::sock::ControlRes};
+use crate::{
+    fs::builds::{chase_runner::ChaseRunner, logger::LogLine},
+    internals::sock::ControlRes,
+};
 
 pub type GuseResult<T> = core::result::Result<T, ChaseError>;
 
@@ -64,13 +67,34 @@ pub enum ChaseFsError {
     FsError { msg: String },
 }
 
-pub trait Reporter: Send {
+pub trait Reporter {
+    /// Implemented on ChaseRunner
+    ///
+    /// Sends updates to cli and optionally to disk
+    ///
+    /// For strictly sending cli updates, use the Updater trait
+    fn report(&mut self, log: &str) -> anyhow::Result<()>;
+}
+
+impl<'a, R: Updater> Reporter for ChaseRunner<'a, R> {
+    fn report(&mut self, log: &str) -> anyhow::Result<()> {
+        if let Some(file_ref) = &self.curr_log_file
+            && let Ok(mut file) = file_ref.try_clone()
+        {
+            let _ = file.write_all(log.as_bytes());
+        }
+        self.reporter.update(log)?;
+        Ok(())
+    }
+}
+
+pub trait Updater {
     /// Sends a line of text, to be immediately displayed to the cli
     fn update(&mut self, msg: &str) -> anyhow::Result<()>;
     fn refresh_cli(&mut self, log: Vec<LogLine>) -> anyhow::Result<()>;
 }
 
-impl Reporter for UnixStream {
+impl Updater for UnixStream {
     fn update(&mut self, msg: &str) -> anyhow::Result<()> {
         let res = ControlRes::Update {
             message: msg.as_bytes().to_vec(),

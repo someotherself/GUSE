@@ -40,7 +40,7 @@ fn main() -> anyhow::Result<()> {
             let build = m
                 .get_one::<String>("build")
                 .ok_or_else(|| anyhow!("Cannot parse argument"))?;
-            let log = m.get_flag("read-only");
+            let log = m.get_flag("log");
             let req = ControlReq::Chase { repo, build, log };
             send_req(&sock, &req)?;
         }

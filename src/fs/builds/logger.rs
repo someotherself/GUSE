@@ -7,7 +7,7 @@ use std::{
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
-use crate::fs::builds::reporter::Reporter;
+use crate::fs::builds::reporter::Updater;
 
 #[derive(Debug, Clone)]
 pub struct LogLine {
@@ -29,7 +29,7 @@ impl LogLine {
     }
 }
 
-pub fn run_command_on_snap<R: Reporter>(
+pub fn run_command_on_snap<R: Updater>(
     path: &Path,
     command: &str,
     reporter: &mut R,
@@ -91,8 +91,8 @@ pub fn run_command_on_snap<R: Reporter>(
 
         while let Ok(line) = rx.recv_timeout(Duration::from_secs(5)) {
             out_lines.push(line.clone());
-            log_buf.push(line.clone());
-            let _ = reporter.refresh_cli(log_buf.iter().cloned().map(|l| l).collect());
+            log_buf.push(line);
+            let _ = reporter.refresh_cli(log_buf.iter().cloned().collect());
         }
     });
 
@@ -118,13 +118,10 @@ impl<T> RingBuffer<T> {
     }
 
     pub fn push(&mut self, item: T) {
-        if self.inner.len() == self.inner.capacity() {
+        while self.inner.len() >= self.inner.capacity() {
             self.inner.pop_front();
-            self.inner.push_back(item);
-            debug_assert!(self.inner.len() == self.inner.capacity());
-        } else {
-            self.inner.push_back(item);
         }
+        self.inner.push_back(item);
     }
 
     pub fn pop(&mut self) -> Option<T> {

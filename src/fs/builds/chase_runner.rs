@@ -3,10 +3,9 @@ use std::path::PathBuf;
 
 use git2::Oid;
 
-use crate::fs;
-use crate::fs::builds::logger::run_command_on_snap;
 use crate::fs::builds::reporter::Reporter;
-use crate::fs::builds::reporter::color_green;
+use crate::fs::builds::reporter::{Updater, color_red};
+use crate::fs::{self, builds::logger::run_command_on_snap};
 use crate::fs::{GitFs, builds::chase::Chase};
 
 enum CommandResult {
@@ -32,30 +31,45 @@ impl ChaseTarget {
     }
 }
 
-pub struct ChaseRunner<'a, R: Reporter> {
+pub struct ChaseRunner<'a, R: Updater> {
+    dir_path: PathBuf,
     fs: &'a GitFs,
     repo_ino: u64,
-    reporter: &'a mut R,
+    pub reporter: &'a mut R,
     chase: Chase,
+    pub curr_log_file: Option<std::fs::File>,
 }
 
-impl<'a, R: Reporter> ChaseRunner<'a, R> {
-    pub fn new(fs: &'a GitFs, repo_ino: u64, reporter: &'a mut R, chase: Chase) -> Self {
+impl<'a, R: Updater> ChaseRunner<'a, R> {
+    pub fn new(
+        dir: &Path,
+        fs: &'a GitFs,
+        repo_ino: u64,
+        reporter: &'a mut R,
+        mut chase: Chase,
+    ) -> Self {
+        // Folder where the logs will be saved
+        if chase.log && std::fs::create_dir(dir).is_err() {
+            // If the folder can't be created, don't try to log
+            let _ = reporter.update(&color_red("COULD NOT CREATE LOGGING DIRECTORY."));
+            chase.log = false;
+        }
         Self {
+            dir_path: dir.to_path_buf(),
             fs,
             repo_ino,
             reporter,
             chase,
+            curr_log_file: None,
         }
     }
 
     pub fn run(&mut self) -> anyhow::Result<Vec<(Oid, Vec<u8>)>> {
-        let mut curr_run = 0;
         let mut prev_target: Option<ChaseTarget> = None;
+        let mut curr_run = 0;
         let total = self.chase.commits.len();
 
         let mut out: Vec<(Oid, Vec<u8>)> = vec![];
-
         let mut commit_list = self.chase.commits.clone();
 
         // RUN THROUGH EACH COMMIT
@@ -63,20 +77,32 @@ impl<'a, R: Reporter> ChaseRunner<'a, R> {
             curr_run += 1;
             let mut cmd_output: Vec<u8> = vec![];
 
-            cmd_output.extend(
-                format!(
-                    "==> Starting chase for commit {} ({}/{})\n",
-                    oid, curr_run, total
-                )
-                .as_bytes(),
-            );
-            let Some((cur_path, cur_ino)) = self.chase.commit_paths.get(&oid) else {
+            // Log file
+            if self.chase.log {
+                let name = format!("{:02}_{oid:.7}", curr_run);
+                if let Ok(file) = std::fs::OpenOptions::new()
+                    .write(true)
+                    .truncate(true)
+                    .create(true)
+                    .open(self.dir_path.join(name))
+                {
+                    self.curr_log_file = Some(file)
+                };
+            }
+
+            self.report(&format!(
+                "==> Starting chase for commit {} ({}/{})\n",
+                oid, curr_run, total
+            ))?;
+
+            let Some((cur_path, cur_ino)) = self.chase.commit_paths.get(&oid).cloned() else {
                 continue;
             };
 
             // MOVE build contents from previous commit
-            let cur_target: ChaseTarget = ChaseTarget::new(*cur_ino, cur_path);
+            let cur_target: ChaseTarget = ChaseTarget::new(cur_ino, &cur_path);
             if let Some(ref prev_target) = prev_target {
+                // TODO: Log an error
                 let _ = move_chase_target(self.fs, prev_target, &cur_target);
             }
 
@@ -84,31 +110,25 @@ impl<'a, R: Reporter> ChaseRunner<'a, R> {
 
             // RUN COMMANDS
             while let Some(command) = commands.pop_front() {
-                self.reporter.update(&format!(
-                    "Running command {} for {} ({}/{})\n",
-                    color_green(&command),
-                    oid,
-                    curr_run,
-                    total
+                self.report(&format!(
+                    "==> Running command {:?} for {} ({}/{})\n",
+                    command, oid, curr_run, total
                 ))?;
                 cmd_output.extend(format!("Command: {}", command).as_bytes());
-                let Some(output) = run_command_on_snap(cur_path, &command, self.reporter) else {
-                    cmd_output.extend(b"GUSE detected no output\n");
+                let Some(output) = run_command_on_snap(&cur_path, &command, self.reporter) else {
+                    self.report("GUSE detected no output\n")?;
                     continue;
                 };
                 if output.is_empty() {
-                    cmd_output.extend(b"GUSE detected no output\n");
+                    self.report("GUSE detected no output\n")?;
                 } else {
-                    cmd_output.extend(output);
-                    cmd_output.extend(b"\n");
+                    self.report(str::from_utf8(&output)?)?;
                 }
-                self.reporter.update(&color_green(&format!(
-                    "--> FINISHED command {} for {}\n",
-                    command, oid
-                )))?;
+                self.report(&format!("--> FINISHED command {} for {}\n", command, oid))?;
             }
             out.push((oid, cmd_output));
             prev_target = Some(cur_target);
+            self.curr_log_file = None;
         }
         Ok(out)
     }

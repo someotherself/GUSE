@@ -15,7 +15,7 @@ use serde_json::Deserializer;
 use crate::{
     fs::{
         GitFs,
-        builds::{chase::start_chase, reporter::Reporter},
+        builds::{chase::start_chase, reporter::Updater},
     },
     mount::GitFsAdapter,
 };
