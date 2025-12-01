@@ -3,6 +3,7 @@ use std::{collections::BTreeMap, ffi::OsString, sync::Arc};
 use anyhow::bail;
 use git2::Oid;
 use parking_lot::Mutex;
+use tracing::instrument;
 
 use crate::{
     fs::{
@@ -100,7 +101,8 @@ pub fn opendir_vdir_file_commits(fs: &GitFs, ino: VirtualIno) -> anyhow::Result<
     };
 
     let oid = fs.get_oid_from_db(ino.to_norm_u64())?;
-    let log_entries = log_entries(fs, ino.to_norm_u64(), oid)?;
+    let snap_commit = fs.get_parent_commit(ino.to_norm_u64())?;
+    let log_entries = log_entries(fs, snap_commit, ino.to_norm_u64(), oid)?;
 
     let node = VirtualNode {
         real: ino.to_norm_u64(),
@@ -129,13 +131,15 @@ pub fn opendir_vdir_file_commits(fs: &GitFs, ino: VirtualIno) -> anyhow::Result<
     fs.handles.open(handle)
 }
 
+#[instrument(level = "debug", skip(fs), fields(ino = %parent), err(Display))]
 fn log_entries(
     fs: &GitFs,
+    snap_commit: Oid,
     parent: u64,
     origin_oid: Oid,
 ) -> anyhow::Result<BTreeMap<OsString, (u64, ObjectAttr)>> {
     let repo = fs.get_repo(parent)?;
-    let entries = repo.blob_history_objects(origin_oid)?;
+    let entries = repo.blob_history_objects(snap_commit, origin_oid)?;
     let path = fs.build_full_path(parent.into())?;
     let file_ext = match path.extension().unwrap_or_default().to_str() {
         Some(e) => format!(".{e}"),
