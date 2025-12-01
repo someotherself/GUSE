@@ -288,12 +288,3 @@ impl From<InoFlag> for u64 {
         v as u64
     }
 }
-
-#[inline]
-pub const fn try_into_filetype_u32(m: u32) -> Option<FileType> {
-    match m & 0o170000 {
-        0o040000 => Some(FileType::Directory),
-        0o100000 | 0o120000 | 0o160000 => Some(FileType::RegularFile),
-        _ => None,
-    }
-}

@@ -189,17 +189,3 @@ impl LuaConfig {
         Ok(())
     }
 }
-
-/// ChaseError::ScriptRunMode
-fn prepare_wrong_run_mode(mode: &str) -> String {
-    let text1 = "Incorrect build run mode:";
-    let text2 = r##"Please choose between "Continuous" and "Binary""##;
-    format!("{} {}\n{}", text1, mode, text2)
-}
-
-/// ChaseError::ScriptStopMode
-fn prepare_wrong_stop_mode(mode: &str) -> String {
-    let text1 = "Incorrect build stop mode:";
-    let text2 = r##"Please choose between "FirstFailure" and "Continuous""##;
-    format!("{} {}\n{}", text1, mode, text2)
-}

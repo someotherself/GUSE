@@ -857,14 +857,9 @@ impl GitFs {
         let ino: Inodes = ino.into();
         let ctx = FsOperationContext::get_operation(self, ino);
         match ctx? {
-            FsOperationContext::Root => bail!(std::io::Error::from_raw_os_error(libc::EPERM)),
-            FsOperationContext::RepoDir => {
-                bail!(std::io::Error::from_raw_os_error(libc::EPERM))
-            }
-            FsOperationContext::InsideLiveDir => {
-                bail!(std::io::Error::from_raw_os_error(libc::EPERM))
-            }
             FsOperationContext::InsideGitDir => ops::readlink::readlink_git(self, ino.to_norm()),
+            // Nothing else should ever get called by fuse
+            _ => bail!(std::io::Error::from_raw_os_error(libc::EPERM)),
         }
     }
 
@@ -1512,7 +1507,6 @@ impl GitFs {
         new_attr.perm = 0o555;
         new_attr.size = 0;
         new_attr.kind = FileType::Directory;
-        new_attr.nlink = 2;
         Ok(new_attr)
     }
 }

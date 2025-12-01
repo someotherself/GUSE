@@ -1,4 +1,4 @@
-use anyhow::{Context, anyhow, bail};
+use anyhow::{anyhow, bail};
 use chrono::{DateTime, Datelike};
 use dashmap::DashMap;
 use git2::{
@@ -369,7 +369,7 @@ impl GitRepo {
             else {
                 return;
             };
-            for (secs_utc, commit_oid) in objects.1.into_iter().rev() {
+            for (secs_utc, commit_oid) in objects.1.iter().rev() {
                 let Some(dt) = DateTime::from_timestamp(*secs_utc, 0) else {
                     continue;
                 };
@@ -660,12 +660,13 @@ impl GitRepo {
         Ok(entries)
     }
 
-    pub fn blob_history_objects(&self, target_blob: Oid) -> anyhow::Result<Vec<ObjectAttr>> {
-        let oid = self
-            .find_newest_commit_containing_blob_fp(target_blob, 50_000)
-            .context("Blob not found (first-parent scan)")?;
+    pub fn blob_history_objects(
+        &self,
+        start_commit: Oid,
+        target_blob: Oid,
+    ) -> anyhow::Result<Vec<ObjectAttr>> {
         let repo = self.inner.lock();
-        let mut commit = repo.find_commit(oid)?;
+        let mut commit = repo.find_commit(start_commit)?;
 
         let mut current_path = self
             .find_path_of_blob_in_tree(&commit.tree()?, target_blob)
@@ -742,6 +743,7 @@ impl GitRepo {
             }
         }
 
+        tracing::warn!("Returning file history with len: {}", out.len());
         Ok(out)
     }
 
@@ -819,52 +821,6 @@ impl GitRepo {
         }
 
         Ok(None)
-    }
-
-    fn find_newest_commit_containing_blob_fp(
-        &self,
-        blob_oid: Oid,
-        max_steps: usize,
-    ) -> anyhow::Result<Oid> {
-        let repo = &self.inner.lock();
-        let mut commit = repo.head()?.peel_to_commit()?;
-        let mut steps = 0usize;
-
-        let mut tree_hit: HashMap<Oid, bool> = HashMap::new();
-
-        loop {
-            steps += 1;
-            if steps > max_steps {
-                bail!("find_newest_commit_containing_blob_fp: exceeded {max_steps} steps");
-            }
-
-            let tid = commit.tree_id();
-            let contains = *tree_hit.entry(tid).or_insert_with(|| {
-                let tree = repo.find_tree(tid).expect("missing tree");
-                self.tree_contains_blob(&tree, blob_oid)
-            });
-
-            if contains {
-                return Ok(commit.id());
-            }
-
-            if commit.parent_count() == 0 {
-                bail!("Blob not found on first-parent chain from HEAD");
-            }
-            commit = commit.parent(0)?;
-        }
-    }
-
-    fn tree_contains_blob(&self, tree: &Tree, blob_oid: Oid) -> bool {
-        let mut found = false;
-        let _ = tree.walk(git2::TreeWalkMode::PreOrder, |_, entry| {
-            if entry.kind() == Some(ObjectType::Blob) && entry.id() == blob_oid {
-                found = true;
-                return git2::TreeWalkResult::Abort;
-            }
-            git2::TreeWalkResult::Ok
-        });
-        found
     }
 
     fn find_path_of_blob_in_tree(&self, tree: &Tree, blob_oid: Oid) -> Option<String> {
@@ -951,30 +907,6 @@ impl GitRepo {
                 Ok(session)
             }
         })
-    }
-
-    /// Changes the target commit for an existing build session.
-    ///
-    /// If a build session already exists for the new commit, it will return the old session for it.
-    pub fn move_build_session(
-        &self,
-        commit_oid: Oid,
-        new_commit_oid: Oid,
-        build_folder: &Path,
-    ) -> anyhow::Result<(Arc<BuildSession>, Option<Arc<BuildSession>>)> {
-        let ctx = self.with_state_mut(
-            |s| -> anyhow::Result<(Arc<BuildSession>, Option<Arc<BuildSession>>)> {
-                let Some(entry) = s.build_sessions.remove(&commit_oid) else {
-                    bail!(
-                        "Build session does not exist for {commit_oid:?} and {}",
-                        build_folder.display()
-                    )
-                };
-                let old = s.build_sessions.insert(new_commit_oid, entry.clone());
-                Ok((entry, old))
-            },
-        )?;
-        Ok(ctx)
     }
 
     pub fn print_commit_summary(fs: &GitFs, repo_id: u16, oid: Oid) -> anyhow::Result<Vec<u8>> {
