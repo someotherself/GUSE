@@ -615,7 +615,7 @@ fn objects_to_dir_entries(
                 attr.ino = ino;
                 if attr.kind == FileType::RegularFile {
                     // Needs to match the gitmode for git to show a clean working tree
-                    attr.perm = entry.git_mode as u16;
+                    attr.perm = git_mode_to_perm(entry.git_mode);
                 }
                 attr.size = entry.size;
                 attr.atime = git2time_to_system(entry.commit_time);
@@ -659,4 +659,15 @@ pub fn read_virtual_dir(fs: &GitFs, ino: VirtualIno) -> anyhow::Result<Vec<Direc
         ));
     }
     Ok(dir_entries)
+}
+
+fn git_mode_to_perm(git_mode: u32) -> u16 {
+    match git_mode {
+        0o040000 => 0o755,
+        0o100644 => 0o644,
+        0o100755 => 0o755,
+        0o120000 => 0o777,
+        0o160000 => 0o755,
+        _ => 0o644,
+    }
 }
