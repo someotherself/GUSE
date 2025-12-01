@@ -2214,7 +2214,6 @@ impl GitFs {
         Ok(())
     }
 
-    /// Send and forget but will log errors as `tracing::error!`
     fn update_db_record(
         &self,
         old_parent: NormalIno,
@@ -2235,15 +2234,19 @@ impl GitFs {
             guard.writer_tx.clone()
         };
 
+        let (tx, rx) = oneshot::<()>();
         let msg = DbWriteMsg::UpdateRecord {
             old_parent,
             old_name: old_name.to_os_string(),
             node,
-            resp: None,
+            resp: Some(tx),
         };
         writer_tx
             .send(msg)
             .context("writer_tx error on update_db_record")?;
+
+        rx.recv()
+            .context("writer_rx disc on update_db_metadata")??;
 
         Ok(DbReturn::Found { value: () })
     }

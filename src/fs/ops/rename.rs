@@ -59,8 +59,11 @@ pub fn rename_live(
         bail!(std::io::Error::from_raw_os_error(libc::EPERM))
     };
 
-    let mut new_attr = GitFs::attr_from_path(ino_flag, &dest.clone())?;
-    new_attr.ino = src_attr.ino;
+    // let mut new_attr = GitFs::attr_from_path(ino_flag, &dest.clone())?;
+    // new_attr.ino = src_attr.ino;
+    let mut new_attr = src_attr;
+    new_attr.atime = SystemTime::now();
+    new_attr.ino_flag = ino_flag;
 
     let node = StorageNode {
         parent_ino: new_parent.to_norm_u64(),
