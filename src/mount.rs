@@ -14,6 +14,7 @@ use tracing::{debug, error, trace, warn};
 use std::ffi::{OsStr, OsString};
 use std::io::{BufRead, BufReader, Read, Write};
 use std::os::linux::fs;
+use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::PermissionsExt;
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::Path;
@@ -956,8 +957,7 @@ impl From<FileType> for fuser::FileType {
     fn from(kind: FileType) -> Self {
         match kind {
             FileType::Directory => fuser::FileType::Directory,
-            FileType::RegularFile => fuser::FileType::RegularFile,
-            FileType::Symlink => fuser::FileType::Symlink,
+            _ => fuser::FileType::RegularFile,
         }
     }
 }
