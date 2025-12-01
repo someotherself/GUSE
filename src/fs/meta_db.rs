@@ -847,7 +847,7 @@ impl MetaDb {
         let mut stmt = tx.prepare(
             "SELECT size
             FROM inode_map
-            WHERE inode = ?1 AND",
+            WHERE inode = ?1",
         )?;
 
         let size_opt: i64 = stmt.query_row(params![ino as i64], |row| row.get(0))?;
