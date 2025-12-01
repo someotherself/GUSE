@@ -369,7 +369,7 @@ impl GitRepo {
             else {
                 return;
             };
-            for (secs_utc, commit_oid) in objects.1 {
+            for (secs_utc, commit_oid) in objects.1.into_iter().rev() {
                 let Some(dt) = DateTime::from_timestamp(*secs_utc, 0) else {
                     continue;
                 };
