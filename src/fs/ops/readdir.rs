@@ -613,10 +613,13 @@ fn objects_to_dir_entries(
                 };
                 attr.oid = entry.oid;
                 attr.ino = ino;
-                if attr.kind == FileType::RegularFile {
-                    // Needs to match the gitmode for git to show a clean working tree
-                    attr.perm = git_mode_to_perm(entry.git_mode);
-                }
+                attr.kind = match entry.kind {
+                    ObjectType::Blob if entry.git_mode == 0o120000 => FileType::Symlink,
+                    ObjectType::Tree | ObjectType::Commit => FileType::Directory,
+                    _ => FileType::RegularFile,
+                };
+                // Needs to match the gitmode for git to show a clean working tree
+                attr.perm = git_mode_to_perm(entry.git_mode);
                 attr.size = entry.size;
                 attr.atime = git2time_to_system(entry.commit_time);
                 attr.mtime = git2time_to_system(entry.commit_time);

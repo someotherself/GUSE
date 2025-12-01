@@ -31,7 +31,7 @@ use crate::fs::ops::readdir::{DirectoryEntry, DirectoryEntryPlus};
 use crate::fs::{GitFs, REPO_SHIFT, ROOT_INO, SourceTypes, repo};
 use crate::internals::sock::{socket_path, start_control_server};
 
-const TTL: Duration = Duration::from_secs(15);
+const TTL: Duration = Duration::from_secs(0);
 
 #[derive(Debug, Clone)]
 pub struct MountPoint {
@@ -899,6 +899,15 @@ impl fuser::Filesystem for GitFsAdapter {
         }
     }
 
+    fn readlink(&mut self, _req: &fuser::Request<'_>, ino: u64, reply: ReplyData) {
+        let fs = self.getfs();
+
+        match fs.readlink(ino) {
+            Ok(path) => reply.data(&path),
+            Err(e) => reply.error(errno_from_anyhow(&e)),
+        }
+    }
+
     fn create(
         &mut self,
         req: &fuser::Request<'_>,
@@ -937,11 +946,7 @@ impl From<FileAttr> for fuser::FileAttr {
             mtime: from.mtime,
             ctime: from.ctime,
             crtime: from.crtime,
-            kind: if from.kind == FileType::Directory {
-                fuser::FileType::Directory
-            } else {
-                fuser::FileType::RegularFile
-            },
+            kind: from.kind.into(),
             perm: from.perm,
             nlink: from.nlink,
             uid: from.uid,
@@ -957,7 +962,8 @@ impl From<FileType> for fuser::FileType {
     fn from(kind: FileType) -> Self {
         match kind {
             FileType::Directory => fuser::FileType::Directory,
-            _ => fuser::FileType::RegularFile,
+            FileType::RegularFile => fuser::FileType::RegularFile,
+            FileType::Symlink => fuser::FileType::Symlink,
         }
     }
 }

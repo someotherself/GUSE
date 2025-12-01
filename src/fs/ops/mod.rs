@@ -7,6 +7,7 @@ pub mod open;
 pub mod opendir;
 pub mod read;
 pub mod readdir;
+pub mod readlink;
 pub mod rename;
 pub mod rmdir;
 pub mod unlink;

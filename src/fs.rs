@@ -544,9 +544,9 @@ impl GitFs {
                 tracing::info!("Repo {repo_name} added");
                 Ok(repo)
             }
-            Err(_) => {
+            Err(e) => {
                 let _ = self.delete_repo(repo_name);
-                bail!("Repo creation failed")
+                bail!("Repo creation failed {e}")
             }
         }
     }
@@ -809,12 +809,11 @@ impl GitFs {
                     // If parent is a dir
                     FileType::Directory => match target_kind {
                         // and target is a file, open the blob as normal
-                        FileType::RegularFile => {
+                        FileType::RegularFile | FileType::Symlink => {
                             ops::open::open_git(self, ino.to_norm(), read, write, truncate)
                         }
                         // and target is a directory, open as vfile (to create commit summary etc)
                         FileType::Directory => ops::open::open_vfile(self, ino, read, write),
-                        _ => bail!(std::io::Error::from_raw_os_error(libc::EINVAL)),
                     },
                     // If parent is a file, open target as vdir
                     FileType::RegularFile => ops::open::open_vdir(
@@ -851,6 +850,21 @@ impl GitFs {
                     ops::opendir::opendir_vdir_file_commits(self, ino.to_virt())
                 }
             },
+        }
+    }
+
+    pub fn readlink(&self, ino: u64) -> anyhow::Result<Vec<u8>> {
+        let ino: Inodes = ino.into();
+        let ctx = FsOperationContext::get_operation(self, ino);
+        match ctx? {
+            FsOperationContext::Root => bail!(std::io::Error::from_raw_os_error(libc::EPERM)),
+            FsOperationContext::RepoDir => {
+                bail!(std::io::Error::from_raw_os_error(libc::EPERM))
+            }
+            FsOperationContext::InsideLiveDir => {
+                bail!(std::io::Error::from_raw_os_error(libc::EPERM))
+            }
+            FsOperationContext::InsideGitDir => ops::readlink::readlink_git(self, ino.to_norm()),
         }
     }
 
@@ -945,8 +959,7 @@ impl GitFs {
             ObjectType::Tree | ObjectType::Commit => FileType::Directory,
             _ => FileType::RegularFile,
         };
-        let nlink = if kind == FileType::Directory { 2 } else { 1 };
-
+        let nlink = 1;
         let uid = unsafe { libc::getuid() };
         let gid = unsafe { libc::getgid() };
         let rdev = 0;
