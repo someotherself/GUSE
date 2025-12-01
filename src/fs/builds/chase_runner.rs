@@ -8,26 +8,12 @@ use crate::fs::builds::reporter::{Updater, color_red};
 use crate::fs::{self, builds::logger::run_command_on_snap};
 use crate::fs::{GitFs, builds::chase::Chase};
 
-enum CommandResult {
-    StdSuccess(Vec<u8>),
-    // Command was found and succefully ran, but returned an error
-    StdError(Vec<u8>),
-    // Error was caused by something else (Ex:command not found)
-    Error(Vec<u8>),
-}
-
-struct ChaseTarget {
-    snap_ino: u64,
-    // The path INSIDE guse
-    path: PathBuf,
-}
+// Holds the inode of the target Snap folder
+struct ChaseTarget(u64);
 
 impl ChaseTarget {
-    pub fn new(ino: u64, path: &Path) -> Self {
-        Self {
-            snap_ino: ino,
-            path: path.to_path_buf(),
-        }
+    pub fn new(ino: u64) -> Self {
+        Self(ino)
     }
 }
 
@@ -100,7 +86,7 @@ impl<'a, R: Updater> ChaseRunner<'a, R> {
             };
 
             // MOVE build contents from previous commit
-            let cur_target: ChaseTarget = ChaseTarget::new(cur_ino, &cur_path);
+            let cur_target: ChaseTarget = ChaseTarget::new(cur_ino);
             if let Some(ref prev_target) = prev_target {
                 // TODO: Log an error
                 let _ = move_chase_target(self.fs, prev_target, &cur_target);
@@ -135,18 +121,12 @@ impl<'a, R: Updater> ChaseRunner<'a, R> {
 }
 
 fn move_chase_target(fs: &GitFs, old: &ChaseTarget, new: &ChaseTarget) -> anyhow::Result<()> {
-    let entries = fs.readdir(old.snap_ino)?;
+    let entries = fs.readdir(old.0)?;
     for e in entries {
         if !fs.is_in_build(e.ino.into())? {
             continue;
         };
-        fs::ops::rename::rename_git_build(
-            fs,
-            old.snap_ino.into(),
-            &e.name,
-            new.snap_ino.into(),
-            &e.name,
-        )?;
+        fs::ops::rename::rename_git_build(fs, old.0.into(), &e.name, new.0.into(), &e.name)?;
     }
     Ok(())
 }
