@@ -19,10 +19,6 @@ An empty repository will still have an empty, initialized repo and a regular fet
 A git pull should not be done.
 ```
 
-```text
-
-```
-
 ## Snap folders
 ```text
 GUSE is built to allow builds and compilations to be ran inside each Snap folder. This means that each Snap folders has write permissions, with some restrictions.

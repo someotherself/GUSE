@@ -59,13 +59,15 @@ Inside the new repository there will only be a folder called "live". The live fo
 Inside the "live" folder is where all the user files and folders can be created normally. The user only has write permissions inside the live folder.
 ```
 
-### 2. Fetched repositories
+### 2. Fetching
 A Github or Gitlab repository can be fetched into a new repo.
 The url must be properly formatted. Example:
 
 ```
 URL: https://github.com/tokio-rs/tokio.git
 bash: mkdir github.tokio-rs.tokio.git
+URL: https://gitlab.com/commento/commento.git
+bash: mkdir gitlab.commento.commento.git
 ```
 
 This fetches the following:
@@ -81,12 +83,12 @@ This fetches the following:
 +------------------------+---------------------------------+
 ```
 
-Inside the new repo, the commits will be grouped by MONTH. The MONTH folders, by default, will contains commits from main/master.
+Inside the new repo, the commits will be grouped by MONTH. The MONTH folders, by default, will contains commits from main/master. They do not change if a different branch is checked out in /live.
 Inside the MONTH folders, each commit will be found in a directory. The folder name followed the format:
 ```
 Snap001_6fd06aa
-001 -> Consecutive numbers, in order of commit time
-6fd06aa -> Commit HASH (Oid) as 
+001 -> Consecutive numbers, in order of commit time (old to new)
+6fd06aa -> Commit HASH (Oid)
 ```
 Optionally, there can be the following folders: Branches, Pr, PrMerge, Tags. These are only created if they exist in the remote.
 ```
@@ -161,12 +163,12 @@ cat 2024-06@
 2024-06-06T08:08:46Z    8e15c23 Snap007_8e15c23 Russell Cohen   metrics: add `MetricAtomicUsize` for usized-metrics (#6598)
 2024-06-07T07:17:25Z    126ce89 Snap008_126ce89 Aaron Schweiger task: implement `Clone` for `AbortHandle` (#6621)
 2024-06-07T11:48:56Z    833ee02 Snap009_833ee02 Hai-Hsin        macros: allow `unhandled_panic` behavior for `#[tokio::main]` and `#[tokio::test]` (#6593)
-2024-06-08T20:17:06Z    53b586c Snap010_53b586c Rob Ede task: stabilize `consume_budget` (#6622)
+2024-06-08T20:17:06Z    53b586c Snap010_53b586c Rob Ede         task: stabilize `consume_budget` (#6622)
 2024-06-09T10:25:54Z    341b5da Snap011_341b5da Conrad Ludgate  metrics: add `spawned_tasks_count`, rename `active_tasks_count` (#6114)
 2024-06-10T08:44:45Z    17555d7 Snap012_17555d7 Marek Kuskowski sync: implement `Default` for `watch::Sender` (#6626)
-2024-06-12T16:09:59Z    479f736 Snap013_479f736 Niki C  io: improve panic message of `ReadBuf::put_slice()` (#6629)
+2024-06-12T16:09:59Z    479f736 Snap013_479f736 Niki C         io: improve panic message of `ReadBuf::put_slice()` (#6629)
 2024-06-13T06:50:28Z    a865ca1 Snap014_a865ca1 Weijia Jiang    rt: relaxed trait bounds for `LinkedList::into_guarded` (#6630)
-2024-06-13T08:58:45Z    53ea44b Snap015_53ea44b Timo    sync: add `CancellationToken::run_until_cancelled` (#6618)
+2024-06-13T08:58:45Z    53ea44b Snap015_53ea44b Timo            sync: add `CancellationToken::run_until_cancelled` (#6618)
 2024-06-14T09:03:47Z    8480a18 Snap016_8480a18 Weijia Jiang    time: avoid traversing entries in the time wheel twice (#6584)
 2024-06-15T19:10:47Z    39cf6bb Snap017_39cf6bb FabijanC        macros: typo fix in join.rs and try_join.rs (#6641)
 2024-06-15T19:11:35Z    3bf4f93 Snap018_3bf4f93 Uwe Klotz       sync: add `watch::Sender::same_channel` (#6637)

@@ -12,12 +12,17 @@ This project required fuse3 and uses [libgit2](https://libgit2.org/) (via the `g
 This project has support for linux/macOS. On windows, consider using WSL2.
 
 ## How to install and use
-- [Usage](readme/usage.md)
+- [Basic usage](readme/usage.md)
+- [Managing git in each repo and commit files](readme/git_and_commit_files.md)
+- [GUSE chase and scripts](readme/chase.md)
 
 ## INFO
-GUSE is a learning project. It is built to allow user to interact with git directly from the filesystem, using commands such as cd, ls, mkdir, touch, cat etc
+GUSE is a learning project. It is built to allow user to interact with git directly from the filesystem, using normal filesystem cli commands.
 
 GUSE allows mounting of multiple repositories and manage them independently
+
+Git authentication is currently not supported
+
 
 ### The disk structure, as observed by the user is:
 ``` text
