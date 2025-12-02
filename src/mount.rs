@@ -31,7 +31,7 @@ use crate::fs::ops::readdir::{DirectoryEntry, DirectoryEntryPlus};
 use crate::fs::{GitFs, REPO_SHIFT, ROOT_INO, SourceTypes, repo};
 use crate::internals::sock::{socket_path, start_control_server};
 
-const TTL: Duration = Duration::from_secs(0);
+const TTL: Duration = Duration::from_secs(15);
 
 #[derive(Debug, Clone)]
 pub struct MountPoint {
