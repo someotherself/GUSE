@@ -4,7 +4,7 @@ local commits = {
 local commands = {
 }
 
--- Sets the build mode. Can be "Binary" or "Continuous"
+-- Sets the run mode. Can be "Binary" or "Continuous"
 local run_mode = "Continuous"
 -- Sets the build mode. Can be "FirstFailure" or "Continuous"
 local stop_mode = "FirstFailure"
