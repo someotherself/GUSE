@@ -1,6 +1,8 @@
 use std::path::Path;
 use std::path::PathBuf;
 
+use git2::Oid;
+
 use crate::fs::{
     self,
     builds::reporter::{Reporter, Updater, color_red},
@@ -45,7 +47,7 @@ impl<'a, R: Updater> ChaseRunner<'a, R> {
 
     pub fn run(&mut self) -> anyhow::Result<()> {
         let mut prev_target: Option<ChaseTarget> = None;
-        let mut curr_run = 0;
+        let mut curr_run: usize = 0;
         let total = self.chase.commits.len();
 
         let mut commit_list = self.chase.commits.clone();
@@ -56,17 +58,7 @@ impl<'a, R: Updater> ChaseRunner<'a, R> {
         {
             curr_run += 1;
 
-            if self.chase.log {
-                let name = format!("{:02}_{oid:.7}", curr_run);
-                if let Ok(file) = std::fs::OpenOptions::new()
-                    .write(true)
-                    .truncate(true)
-                    .create(true)
-                    .open(self.dir_path.join(name))
-                {
-                    self.curr_log_file = Some(file)
-                };
-            }
+            self.update_curr_log_file(curr_run, oid);
 
             self.report(&format!(
                 "==> Starting chase for commit {} ({}/{})\n",
@@ -102,6 +94,20 @@ impl<'a, R: Updater> ChaseRunner<'a, R> {
             self.curr_log_file = None;
         }
         Ok(())
+    }
+
+    fn update_curr_log_file(&mut self, curr_run: usize, oid: Oid) {
+        if self.chase.log {
+            let name = format!("{:02}_{oid:.7}", curr_run);
+            if let Ok(file) = std::fs::OpenOptions::new()
+                .write(true)
+                .truncate(true)
+                .create(true)
+                .open(self.dir_path.join(name))
+            {
+                self.curr_log_file = Some(file)
+            };
+        }
     }
 }
 
