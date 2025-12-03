@@ -81,7 +81,8 @@ impl<'a, R: Updater> Reporter for ChaseRunner<'a, R> {
         if let Some(file_ref) = &self.curr_log_file
             && let Ok(mut file) = file_ref.try_clone()
         {
-            let _ = file.write_all(log.as_bytes());
+            let stripped = strip_ansi_escapes::strip_str(log);
+            let _ = file.write_all(stripped.as_bytes());
         }
         self.reporter.update(log)?;
         Ok(())
