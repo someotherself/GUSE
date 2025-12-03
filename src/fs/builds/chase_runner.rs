@@ -1,9 +1,10 @@
 use std::path::Path;
 use std::path::PathBuf;
 
-use crate::fs::builds::reporter::Reporter;
-use crate::fs::builds::reporter::{Updater, color_red};
-use crate::fs::{self, builds::logger::run_command_on_snap};
+use crate::fs::{
+    self,
+    builds::reporter::{Reporter, Updater, color_red},
+};
 use crate::fs::{GitFs, builds::chase::Chase};
 
 // Holds the inode of the target Snap folder
@@ -54,7 +55,6 @@ impl<'a, R: Updater> ChaseRunner<'a, R> {
             && self.run
         {
             curr_run += 1;
-            let mut cmd_output: Vec<u8> = vec![];
 
             if self.chase.log {
                 let name = format!("{:02}_{oid:.7}", curr_run);
@@ -95,8 +95,7 @@ impl<'a, R: Updater> ChaseRunner<'a, R> {
                     "==> Running command {:?} for {} ({}/{})\n",
                     command, oid, curr_run, total
                 ))?;
-                cmd_output.extend(format!("Command: {}", command).as_bytes());
-                let _ = run_command_on_snap(&cur_path, &command, self.reporter).egress(self);
+                let _ = self.run_command_on_snap(&cur_path, &command).egress(self);
                 self.report(&format!("--> FINISHED command {} for {}\n", command, oid))?;
             }
             prev_target = Some(cur_target);

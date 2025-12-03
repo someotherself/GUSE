@@ -7,7 +7,7 @@ local commands = {
 -- Sets the run mode. Can be "Binary" or "Continuous"
 local run_mode = "Continuous"
 -- Sets the build mode. Can be "FirstFailure" or "Continuous"
-local stop_mode = "FirstFailure"
+local stop_mode = "Continuous"
 
 -- Load functions
 for _, oid in ipairs(commits) do

@@ -110,8 +110,8 @@ impl Updater for UnixStream {
         log.sort_by_key(|l| l.t_stmp);
         let log = log.into_iter().map(|l| l.line).collect();
         let res = ControlRes::Draw { message: log };
-        let _out = serde_json::to_vec(&res)?;
-        // self.write_all(&out)?;
+        let out = serde_json::to_vec(&res)?;
+        self.write_all(&out)?;
         self.write_all(b"\n")?;
         self.flush()?;
         Ok(())

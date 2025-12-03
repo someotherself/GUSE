@@ -7,7 +7,11 @@ use std::{
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
-use crate::fs::builds::{chase_runner::ChaseRunner, reporter::Updater, runtime::ChaseStopMode};
+use crate::fs::builds::{
+    chase_runner::ChaseRunner,
+    reporter::{Reporter, Updater},
+    runtime::ChaseStopMode,
+};
 
 #[derive(Debug, Clone)]
 pub struct LogLine {
@@ -31,7 +35,7 @@ impl LogLine {
 
 #[derive(Debug)]
 pub enum CmdResult {
-    Ok(Vec<u8>),
+    Ok(()),
     Err(String),
     ExitFail(ExitStatus),
 }
@@ -42,9 +46,9 @@ impl CmdResult {
             // Stop the guse chase on this loop
             runner.run = false
         };
-        // Log whatever happened
         match self {
-            Self::Ok(val) => runner.reporter.update(str::from_utf8(val).unwrap_or(""))?,
+            // Self::Ok(val) => runner.reporter.update(str::from_utf8(val).unwrap_or(""))?,
+            Self::Ok(_) => {}
             Self::Err(e) => {
                 runner
                     .reporter
@@ -59,7 +63,7 @@ impl CmdResult {
                     runner.reporter.update(&format!("Exit code: {code}\n"))?;
                 } else {
                     runner.reporter.update("Terminated by signal.\n")?;
-                    // !!! Also terminal the run on this loop
+                    // !!! Also terminate the run on this loop
                     runner.run = false;
                 }
             }
@@ -72,83 +76,86 @@ impl CmdResult {
     }
 }
 
-pub fn run_command_on_snap<R: Updater>(path: &Path, command: &str, reporter: &mut R) -> CmdResult {
-    let mut split = command.split_whitespace();
-    let Some(prog) = split.next() else {
-        return CmdResult::Err("Error parsing command.\n".to_string());
-    };
-    let args: Vec<&str> = split.collect();
-    let output = Command::new(prog)
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .current_dir(path)
-        .args(args)
-        .spawn();
+impl<'a, R: Updater> ChaseRunner<'a, R> {
+    pub fn run_command_on_snap(&mut self, path: &Path, command: &str) -> CmdResult {
+        let mut split = command.split_whitespace();
+        let Some(prog) = split.next() else {
+            return CmdResult::Err("Error parsing command.\n".to_string());
+        };
+        let args: Vec<&str> = split.collect();
+        let output = Command::new(prog)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .current_dir(path)
+            .args(args)
+            .spawn();
 
-    let mut output = match output {
-        Ok(o) => o,
-        Err(e) => {
-            if e.kind() == std::io::ErrorKind::NotFound {
-                return CmdResult::Err(format!("Command not found: {}\n", prog));
+        let mut output = match output {
+            Ok(o) => o,
+            Err(e) => {
+                if e.kind() == std::io::ErrorKind::NotFound {
+                    return CmdResult::Err(format!("Command not found: {}\n", prog));
+                }
+                return CmdResult::Err(format!("Failed to run {}: {}\n", prog, e));
             }
-            return CmdResult::Err(format!("Failed to run {}: {}\n", prog, e));
+        };
+
+        let mut out_lines = Vec::new();
+        let mut _log_buf: RingBuffer<LogLine> = RingBuffer::new(5);
+
+        let Some(out) = output.stdout.take() else {
+            return CmdResult::Err("Could not read stdout.\n".to_string());
+        };
+        let Some(err) = output.stderr.take() else {
+            return CmdResult::Err("Could not read stderr.\n".to_string());
+        };
+
+        let (tx, rx) = crossbeam_channel::unbounded::<LogLine>();
+
+        std::thread::scope(|s| {
+            {
+                let tx = tx.clone();
+                s.spawn(move || {
+                    let mut reader = BufReader::new(out);
+                    let mut buf = Vec::new();
+                    while reader.read_until(b'\n', &mut buf).unwrap_or(0) != 0 {
+                        let line = LogLine::new(&buf);
+                        let _ = tx.send(line);
+                        buf.clear();
+                    }
+                });
+            }
+            {
+                let tx = tx.clone();
+                s.spawn(move || {
+                    let mut reader = BufReader::new(err);
+                    let mut buf = Vec::new();
+                    while reader.read_until(b'\n', &mut buf).unwrap_or(0) != 0 {
+                        let line = LogLine::new(&buf);
+                        let _ = tx.send(line);
+                        buf.clear();
+                    }
+                });
+            }
+            drop(tx);
+
+            while let Ok(line) = rx.recv_timeout(Duration::from_secs(5)) {
+                out_lines.push(line.clone());
+                let _ = self.report(str::from_utf8(&line.line).unwrap());
+                // log_buf.push(line);
+                // let _ = reporter.refresh_cli(log_buf.iter().cloned().collect());
+            }
+        });
+
+        match output.wait() {
+            Ok(a) if a.success() => {
+                // out_lines.sort_by_key(|a| a.t_stmp);
+                // let out = out_lines.into_iter().flat_map(|a| a.line).collect();
+                CmdResult::Ok(())
+            }
+            Ok(a) => CmdResult::ExitFail(a),
+            Err(e) => CmdResult::Err(e.to_string()),
         }
-    };
-
-    let mut out_lines = Vec::new();
-    let mut log_buf: RingBuffer<LogLine> = RingBuffer::new(5);
-
-    let Some(out) = output.stdout.take() else {
-        return CmdResult::Err("Could not read stdout.\n".to_string());
-    };
-    let Some(err) = output.stderr.take() else {
-        return CmdResult::Err("Could not read stderr.\n".to_string());
-    };
-
-    let (tx, rx) = crossbeam_channel::unbounded::<LogLine>();
-
-    std::thread::scope(|s| {
-        {
-            let tx = tx.clone();
-            s.spawn(move || {
-                let mut reader = BufReader::new(out);
-                let mut buf = Vec::new();
-                while reader.read_until(b'\n', &mut buf).unwrap_or(0) != 0 {
-                    let line = LogLine::new(&buf);
-                    let _ = tx.send(line);
-                    buf.clear();
-                }
-            });
-        }
-        {
-            let tx = tx.clone();
-            s.spawn(move || {
-                let mut reader = BufReader::new(err);
-                let mut buf = Vec::new();
-                while reader.read_until(b'\n', &mut buf).unwrap_or(0) != 0 {
-                    let line = LogLine::new(&buf);
-                    let _ = tx.send(line);
-                    buf.clear();
-                }
-            });
-        }
-        drop(tx);
-
-        while let Ok(line) = rx.recv_timeout(Duration::from_secs(5)) {
-            out_lines.push(line.clone());
-            log_buf.push(line);
-            let _ = reporter.refresh_cli(log_buf.iter().cloned().collect());
-        }
-    });
-
-    match output.wait() {
-        Ok(a) if a.success() => {
-            out_lines.sort_by_key(|a| a.t_stmp);
-            let out = out_lines.into_iter().flat_map(|a| a.line).collect();
-            CmdResult::Ok(out)
-        }
-        Ok(a) => CmdResult::ExitFail(a),
-        Err(e) => CmdResult::Err(e.to_string()),
     }
 }
 
