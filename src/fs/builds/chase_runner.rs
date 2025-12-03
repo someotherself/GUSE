@@ -136,6 +136,13 @@ impl<'a, R: Updater> ChaseRunner<'a, R> {
         }
     }
 
+    fn prepare_commit_list(&self) -> VecDeque<String> {
+        match self.chase.run_mode {
+            ChaseRunMode::Continuous => self.chase.commands.clone(),
+            ChaseRunMode::Binary => todo!(),
+        }
+    }
+
     fn print_chase_results(&mut self) {
         let _ = self
             .reporter
@@ -143,7 +150,7 @@ impl<'a, R: Updater> ChaseRunner<'a, R> {
         for res in &self.results {
             let _ = self
                 .reporter
-                .update(&format!("pos.{}-{}-{:?}\n", res.pos, res.oid, res.result));
+                .update(&format!("pos.{}-{}-{}\n", res.pos, res.oid, res.result));
         }
     }
 }

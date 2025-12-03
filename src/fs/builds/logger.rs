@@ -1,5 +1,6 @@
 use std::{
     collections::VecDeque,
+    fmt::Display,
     io::{BufRead, BufReader},
     ops::Deref,
     path::Path,
@@ -40,6 +41,16 @@ pub enum CmdResult {
     ExitFail(ExitStatus),
 }
 
+impl Display for CmdResult {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Ok(_) => write!(f, "SUCCESS"),
+            Self::Err(_) => write!(f, "FAIL with I/O err"),
+            Self::ExitFail(e) => write!(f, "FAIL {e}"),
+        }
+    }
+}
+
 impl CmdResult {
     pub fn egress<'a, U: Updater>(self, runner: &mut ChaseRunner<'a, U>) -> anyhow::Result<Self> {
         if self.is_err() && runner.chase.stop_mode == ChaseStopMode::FirstFailure {
@@ -50,7 +61,7 @@ impl CmdResult {
             Self::Ok(_) => {}
             Self::Err(e) => {
                 let _ = runner.reporter.update("Run failed due to an I/O error.\n");
-                runner.reporter.update(&e)?;
+                runner.reporter.update(e)?;
             }
             Self::ExitFail(e) => {
                 let _ = runner
