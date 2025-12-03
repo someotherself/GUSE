@@ -1,8 +1,11 @@
+use std::collections::VecDeque;
 use std::path::Path;
 use std::path::PathBuf;
 
 use git2::Oid;
 
+use crate::fs::builds::logger::CmdResult;
+use crate::fs::builds::runtime::ChaseRunMode;
 use crate::fs::{
     self,
     builds::reporter::{Reporter, Updater, color_red},
@@ -18,6 +21,23 @@ impl ChaseTarget {
     }
 }
 
+#[derive(Debug, Clone)]
+pub struct ChaseResult {
+    pos: usize,
+    oid: Oid,
+    result: CmdResult,
+}
+
+impl ChaseResult {
+    fn new(pos: usize, oid: Oid, cmd_res: CmdResult) -> Self {
+        Self {
+            pos,
+            oid,
+            result: cmd_res,
+        }
+    }
+}
+
 pub struct ChaseRunner<'a, R: Updater> {
     dir_path: PathBuf,
     fs: &'a GitFs,
@@ -25,6 +45,7 @@ pub struct ChaseRunner<'a, R: Updater> {
     pub chase: Chase,
     pub curr_log_file: Option<std::fs::File>,
     pub run: bool,
+    results: Vec<ChaseResult>,
 }
 
 impl<'a, R: Updater> ChaseRunner<'a, R> {
@@ -42,6 +63,7 @@ impl<'a, R: Updater> ChaseRunner<'a, R> {
             chase,
             curr_log_file: None,
             run: true,
+            results: Vec::new(),
         }
     }
 
@@ -87,12 +109,16 @@ impl<'a, R: Updater> ChaseRunner<'a, R> {
                     "==> Running command {:?} for {} ({}/{})\n",
                     command, oid, curr_run, total
                 ))?;
-                let _ = self.run_command_on_snap(&cur_path, &command).egress(self);
+                if let Ok(cmd_res) = self.run_command_on_snap(&cur_path, &command).egress(self) {
+                    self.results.push(ChaseResult::new(curr_run, oid, cmd_res));
+                }
                 self.report(&format!("--> FINISHED command {} for {}\n", command, oid))?;
             }
             prev_target = Some(cur_target);
             self.curr_log_file = None;
         }
+
+        self.print_chase_results();
         Ok(())
     }
 
@@ -107,6 +133,17 @@ impl<'a, R: Updater> ChaseRunner<'a, R> {
             {
                 self.curr_log_file = Some(file)
             };
+        }
+    }
+
+    fn print_chase_results(&mut self) {
+        let _ = self
+            .reporter
+            .update("GUSE chase completed. Results for each commit:\n");
+        for res in &self.results {
+            let _ = self
+                .reporter
+                .update(&format!("pos.{}-{}-{:?}\n", res.pos, res.oid, res.result));
         }
     }
 }

@@ -33,7 +33,7 @@ impl LogLine {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum CmdResult {
     Ok(()),
     Err(String),
@@ -41,34 +41,31 @@ pub enum CmdResult {
 }
 
 impl CmdResult {
-    pub fn egress<'a, U: Updater>(&self, runner: &mut ChaseRunner<'a, U>) -> anyhow::Result<()> {
+    pub fn egress<'a, U: Updater>(self, runner: &mut ChaseRunner<'a, U>) -> anyhow::Result<Self> {
         if self.is_err() && runner.chase.stop_mode == ChaseStopMode::FirstFailure {
             // Stop the guse chase on this loop
             runner.run = false
         };
-        match self {
-            // Self::Ok(val) => runner.reporter.update(str::from_utf8(val).unwrap_or(""))?,
+        match &self {
             Self::Ok(_) => {}
             Self::Err(e) => {
-                runner
-                    .reporter
-                    .update("Run failed due to an I/O error.\n")?;
-                runner.reporter.update(e)?;
+                let _ = runner.reporter.update("Run failed due to an I/O error.\n");
+                runner.reporter.update(&e)?;
             }
             Self::ExitFail(e) => {
-                runner
+                let _ = runner
                     .reporter
-                    .update("Run failed with non-zero exit status\n")?;
+                    .update("Run failed with non-zero exit status\n");
                 if let Some(code) = e.code() {
-                    runner.reporter.update(&format!("Exit code: {code}\n"))?;
+                    let _ = runner.reporter.update(&format!("Exit code: {code}\n"));
                 } else {
-                    runner.reporter.update("Terminated by signal.\n")?;
+                    let _ = runner.reporter.update("Terminated by signal.\n");
                     // !!! Also terminate the run on this loop
                     runner.run = false;
                 }
             }
         }
-        Ok(())
+        Ok(self)
     }
 
     fn is_err(&self) -> bool {
