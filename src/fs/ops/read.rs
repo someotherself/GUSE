@@ -16,14 +16,7 @@ pub fn read_live(
         bail!(std::io::Error::from_raw_os_error(libc::EBADF))
     };
     if !ctx.source.is_file() {
-        let name = fs.get_name_from_db(ino.into())?;
-        tracing::error!(
-            "Handle {} for ino {} is not a file. name: {}, type: {:?}",
-            fh,
-            ino,
-            name.display(),
-            ctx.source
-        );
+        tracing::error!("Handle {} for ino {} is not a file", fh, ino,);
         bail!(std::io::Error::from_raw_os_error(libc::EBADF))
     }
     if ctx.ino != *ino {
