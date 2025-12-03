@@ -162,7 +162,7 @@ pub struct Handle {
 }
 
 /// Used by `Handle` to hold various data, like files/blobs and directory entries (readdir)
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub enum SourceTypes {
     RealFile(Arc<File>),
     Blob {
@@ -1439,8 +1439,8 @@ impl GitFs {
             tracing::error!("Handle {} for ino {} does not exist", fh_in, ino_in);
             bail!(std::io::Error::from_raw_os_error(libc::EBADF))
         };
-        if !ctx_in.source.is_file() {
-            tracing::error!("Handle {} for ino {} is not a file", fh_in, ino_in);
+        if !ctx_in.source.is_file() & !ctx_in.source.is_blob() {
+            tracing::error!("Handle {} for ino {} is not a file or blob", fh_in, ino_in);
             bail!(std::io::Error::from_raw_os_error(libc::EBADF))
         }
         if ctx_in.ino != ino_in {
@@ -1451,8 +1451,12 @@ impl GitFs {
             tracing::error!("Handle {} for ino {} does not exist", fh_out, ino_out);
             bail!(std::io::Error::from_raw_os_error(libc::EBADF))
         };
-        if !ctx_out.source.is_file() {
-            tracing::error!("Handle {} for ino {} is not a file", fh_out, ino_out);
+        if !ctx_out.source.is_file() & !ctx_out.source.is_blob() {
+            tracing::error!(
+                "Handle {} for ino {} is not a file or blob",
+                fh_out,
+                ino_out
+            );
             bail!(std::io::Error::from_raw_os_error(libc::EBADF))
         }
         if ctx_out.ino != ino_out {

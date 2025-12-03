@@ -19,6 +19,7 @@ use crate::{
     namespec,
 };
 
+#[derive(Debug)]
 pub struct DirectoryStreamCookie {
     pub next_name: Option<OsString>,
     pub last_stream: Vec<OsString>,
