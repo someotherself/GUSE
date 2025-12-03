@@ -36,7 +36,6 @@ pub enum CmdResult {
     ExitFail(ExitStatus),
 }
 
-// impl<'a, U: Updater> Egress<'a, U> for CmdResult {
 impl CmdResult {
     pub fn egress<'a, U: Updater>(&self, runner: &mut ChaseRunner<'a, U>) -> anyhow::Result<()> {
         if self.is_err() && runner.chase.stop_mode == ChaseStopMode::FirstFailure {
