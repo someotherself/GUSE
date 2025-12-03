@@ -78,7 +78,7 @@ pub fn start_chase(
     // Name of a folder so save logs to (if enabled)
     let name = format!("{}", chrono::offset::Utc::now());
     let dir_path = script_path.join(name);
-    let mut chase_runner = ChaseRunner::new(&dir_path, fs, repo_ino, stream, chase.clone());
+    let mut chase_runner = ChaseRunner::new(&dir_path, fs, stream, chase.clone());
     let _ = chase_runner.run();
 
     // 8 - Cleanup any

@@ -67,6 +67,31 @@ pub enum ChaseFsError {
     FsError { msg: String },
 }
 
+// pub trait Egress<'a, U: Updater> {
+//     fn egress(&self, chase: &ChaseRunner<'a, U>);
+// }
+
+// impl<'a, U: Updater> Egress<'a, U> for CmdResult {
+//     fn egress(&self, _chase: &ChaseRunner<'a, U>) {
+//         todo!()
+//         // match self {
+//         //     Ok(_out) => {
+//         //         // Ok(out)
+//         //         todo!()
+//         //     },
+//         //     Err(e) if chase.chase.stop_mode == ChaseStopMode::FirstFailure => match e {
+//         //         CmdError::Err(_e) => {
+//         //             todo!()
+//         //         },
+//         //         CmdError::ExitFail(_e) => {
+//         //             todo!()
+//         //         },
+//         //     },
+//         //     Err(_e) => todo!()
+//         // }
+//     }
+// }
+
 pub trait Reporter {
     /// Implemented on ChaseRunner
     ///

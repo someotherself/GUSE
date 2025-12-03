@@ -24,7 +24,7 @@ impl ChaseRunMode {
     }
 }
 
-#[derive(Debug, Default, Clone)]
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub enum ChaseStopMode {
     #[default]
     Continuous,

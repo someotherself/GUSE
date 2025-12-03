@@ -3,11 +3,11 @@ use std::{
     io::{BufRead, BufReader},
     ops::Deref,
     path::Path,
-    process::{Command, Stdio},
+    process::{Command, ExitStatus, Stdio},
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
-use crate::fs::builds::reporter::Updater;
+use crate::fs::builds::{chase_runner::ChaseRunner, reporter::Updater, runtime::ChaseStopMode};
 
 #[derive(Debug, Clone)]
 pub struct LogLine {
@@ -29,13 +29,55 @@ impl LogLine {
     }
 }
 
-pub fn run_command_on_snap<R: Updater>(
-    path: &Path,
-    command: &str,
-    reporter: &mut R,
-) -> Option<Vec<u8>> {
+#[derive(Debug)]
+pub enum CmdResult {
+    Ok(Vec<u8>),
+    Err(String),
+    ExitFail(ExitStatus),
+}
+
+// impl<'a, U: Updater> Egress<'a, U> for CmdResult {
+impl CmdResult {
+    pub fn egress<'a, U: Updater>(&self, runner: &mut ChaseRunner<'a, U>) -> anyhow::Result<()> {
+        if self.is_err() && runner.chase.stop_mode == ChaseStopMode::FirstFailure {
+            // Stop the guse chase on this loop
+            runner.run = false
+        };
+        // Log whatever happened
+        match self {
+            Self::Ok(val) => runner.reporter.update(str::from_utf8(val).unwrap_or(""))?,
+            Self::Err(e) => {
+                runner
+                    .reporter
+                    .update("Run failed due to an I/O error.\n")?;
+                runner.reporter.update(e)?;
+            }
+            Self::ExitFail(e) => {
+                runner
+                    .reporter
+                    .update("Run failed with non-zero exit status\n")?;
+                if let Some(code) = e.code() {
+                    runner.reporter.update(&format!("Exit code: {code}\n"))?;
+                } else {
+                    runner.reporter.update("Terminated by signal.\n")?;
+                    // !!! Also terminal the run on this loop
+                    runner.run = false;
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn is_err(&self) -> bool {
+        matches!(self, Self::Err(_)) || matches!(self, Self::ExitFail(_))
+    }
+}
+
+pub fn run_command_on_snap<R: Updater>(path: &Path, command: &str, reporter: &mut R) -> CmdResult {
     let mut split = command.split_whitespace();
-    let prog = split.next()?;
+    let Some(prog) = split.next() else {
+        return CmdResult::Err("Error parsing command.\n".to_string());
+    };
     let args: Vec<&str> = split.collect();
     let output = Command::new(prog)
         .stdout(Stdio::piped())
@@ -48,17 +90,21 @@ pub fn run_command_on_snap<R: Updater>(
         Ok(o) => o,
         Err(e) => {
             if e.kind() == std::io::ErrorKind::NotFound {
-                return Some(format!("Command not found: {}\n", prog).into_bytes());
+                return CmdResult::Err(format!("Command not found: {}\n", prog));
             }
-            return Some(format!("Failed to run {}: {}\n", prog, e).into_bytes());
+            return CmdResult::Err(format!("Failed to run {}: {}\n", prog, e));
         }
     };
 
     let mut out_lines = Vec::new();
     let mut log_buf: RingBuffer<LogLine> = RingBuffer::new(5);
 
-    let out = output.stdout.take()?;
-    let err = output.stderr.take()?;
+    let Some(out) = output.stdout.take() else {
+        return CmdResult::Err("Could not read stdout.\n".to_string());
+    };
+    let Some(err) = output.stderr.take() else {
+        return CmdResult::Err("Could not read stderr.\n".to_string());
+    };
 
     let (tx, rx) = crossbeam_channel::unbounded::<LogLine>();
 
@@ -96,12 +142,15 @@ pub fn run_command_on_snap<R: Updater>(
         }
     });
 
-    let _ = output.wait();
-
-    out_lines.sort_by_key(|a| a.t_stmp);
-    let out = out_lines.into_iter().flat_map(|a| a.line).collect();
-
-    Some(out)
+    match output.wait() {
+        Ok(a) if a.success() => {
+            out_lines.sort_by_key(|a| a.t_stmp);
+            let out = out_lines.into_iter().flat_map(|a| a.line).collect();
+            CmdResult::Ok(out)
+        }
+        Ok(a) => CmdResult::ExitFail(a),
+        Err(e) => CmdResult::Err(e.to_string()),
+    }
 }
 
 // https://users.rust-lang.org/t/the-best-ring-buffer-library/58489/5
