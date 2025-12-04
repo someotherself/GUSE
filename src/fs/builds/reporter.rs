@@ -31,6 +31,8 @@ pub enum ChaseError {
     NoCommits,
     #[error("No commands provided")]
     NoCommands,
+    #[error("")]
+    BadInputType { input: String, oid: String },
 }
 
 pub type GuseGitResult<T> = core::result::Result<T, ChaseGitError>;
@@ -53,6 +55,15 @@ pub enum ChaseGitError {
     RefKindNotFound { commit: String },
     #[error("GitFs error")]
     FsError { msg: String },
+    #[error("")]
+    BranchNotFound {
+        branch_type: String,
+        branch_name: String,
+    },
+    #[error("")]
+    BadCommitRange { input: String },
+    #[error("")]
+    NoCommonRef { oid1: String, oid2: String },
 }
 
 pub type GuseFsResult<T> = core::result::Result<T, ChaseFsError>;
@@ -148,6 +159,13 @@ impl<T> ErrorResolver<T> for GuseResult<T> {
                     stream.update("No COMMANDS were found in the script.\n")?;
                     bail!("")
                 }
+                ChaseError::BadInputType { input, oid } => {
+                    stream.update(&format!("Bad input type {input} for oid: {oid}.\n"))?;
+                    stream.update(
+                        "Please choose between: \"Commit\", \"Range\", \"Pr\", \"Branch\",\n",
+                    )?;
+                    bail!("")
+                }
             },
         }
     }
@@ -194,6 +212,26 @@ impl<T> ErrorResolver<T> for GuseGitResult<T> {
                 }
                 ChaseGitError::FsError { msg: _ } => {
                     // stream.update(&prepare_miss_ref_error(&commit))?;
+                    bail!("")
+                }
+                ChaseGitError::BranchNotFound {
+                    branch_type,
+                    branch_name,
+                } => {
+                    stream.update(&format!(
+                        "{branch_type} with name {branch_name:?} not found.\n"
+                    ))?;
+                    bail!("")
+                }
+                ChaseGitError::BadCommitRange { input } => {
+                    stream.update(&format!("Incorrect commit range {input}.\n"))?;
+                    stream.update("Please input correct as \"oid..oid\".\n")?;
+                    bail!("")
+                }
+                ChaseGitError::NoCommonRef { oid1, oid2 } => {
+                    stream.update(&format!(
+                        "No common branch found for commits {oid1} and {oid2}.\n"
+                    ))?;
                     bail!("")
                 }
             },

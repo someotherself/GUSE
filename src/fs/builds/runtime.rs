@@ -7,6 +7,38 @@ use mlua::Lua;
 
 use crate::fs::builds::reporter::{ChaseError, GuseResult};
 
+#[derive(Debug)]
+pub enum InputTypes {
+    Commit,
+    Range,
+    Pr,
+    Branch,
+    Unknown(String),
+}
+
+impl InputTypes {
+    fn from_str(itype: &str) -> Self {
+        match itype.to_lowercase().as_str() {
+            "range" => Self::Range,
+            "pr" => Self::Pr,
+            "branch" => Self::Branch,
+            "commit" => Self::Commit,
+            _ => Self::Unknown(itype.to_string()),
+        }
+    }
+
+    fn is_unknown(&self) -> bool {
+        matches!(self, Self::Unknown(_))
+    }
+
+    fn get_input(&self) -> Option<String> {
+        match self {
+            Self::Unknown(input) => Some(input.to_string()),
+            _ => None,
+        }
+    }
+}
+
 #[derive(Debug, Default, Clone)]
 pub enum ChaseRunMode {
     #[default]
@@ -43,7 +75,7 @@ impl ChaseStopMode {
 
 #[derive(Default, Debug)]
 pub struct LuaConfig {
-    pub commits: Vec<String>,
+    pub commits: Vec<(InputTypes, String)>,
     pub commands: Vec<String>,
     pub run_mode: ChaseRunMode,
     pub stop_mode: ChaseStopMode,
@@ -68,8 +100,9 @@ impl LuaConfig {
             {
                 let commits_ref = Arc::clone(&lua_config);
                 let add_commit = scope
-                    .create_function(move |_, oid: String| {
-                        commits_ref.lock().unwrap().commits.push(oid);
+                    .create_function(move |_, (input_type, oid): (String, String)| {
+                        let input_type = InputTypes::from_str(&input_type);
+                        commits_ref.lock().unwrap().commits.push((input_type, oid));
                         Ok(())
                     })
                     .map_err(|e| ChaseError::LuaError {
@@ -86,8 +119,8 @@ impl LuaConfig {
             {
                 let commands_ref = Arc::clone(&lua_config);
                 let add_command = scope
-                    .create_function(move |_, oid: String| {
-                        commands_ref.lock().unwrap().commands.push(oid);
+                    .create_function(move |_, command: String| {
+                        commands_ref.lock().unwrap().commands.push(command);
                         Ok(())
                     })
                     .map_err(|e| ChaseError::LuaError {
@@ -180,6 +213,16 @@ impl LuaConfig {
     }
 
     fn check_config_fields(&self) -> GuseResult<()> {
+        for (input, oid) in &self.commits {
+            if input.is_unknown() {
+                let input_string = input.get_input().unwrap_or("".to_string());
+                return Err(ChaseError::BadInputType {
+                    input: input_string,
+                    oid: oid.to_string(),
+                });
+            }
+        }
+
         if self.commits.is_empty() {
             return Err(ChaseError::NoCommits);
         }

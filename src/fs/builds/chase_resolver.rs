@@ -12,6 +12,7 @@ use crate::fs::{
     builds::{
         chase::Chase,
         reporter::{ChaseFsError, ChaseGitError, GuseFsResult, GuseGitResult},
+        runtime::InputTypes,
     },
     fileattr::FileType,
     repo::RefKind,
@@ -20,7 +21,7 @@ use crate::fs::{
 pub fn validate_commits(
     fs: &GitFs,
     repo_ino: u64,
-    commits: &[String],
+    commits: &[(InputTypes, String)],
 ) -> GuseGitResult<VecDeque<Oid>> {
     let Ok(repo) = fs.get_repo(repo_ino) else {
         return Err(ChaseGitError::FsError {
@@ -29,11 +30,139 @@ pub fn validate_commits(
     };
     let mut c_oids = VecDeque::new();
     repo.with_repo(|r| -> GuseGitResult<()> {
-        for commit in commits {
-            let commit = r
-                .find_commit_by_prefix(commit)
-                .map_err(|e| map_git_error(commit, e))?;
-            c_oids.push_back(commit.id());
+        for (itype, commit) in commits {
+            // commit can mean a few things
+            // range -> oid...oid
+            // branch/pr -> name
+            // or a single short hash as string
+            match itype {
+                InputTypes::Commit => {
+                    let commit = r
+                        .find_commit_by_prefix(commit)
+                        .map_err(|e| map_git_error(commit, e))?;
+                    c_oids.push_back(commit.id())
+                }
+                &InputTypes::Branch => {
+                    repo.with_state(|s| -> GuseGitResult<()> {
+                        if let Some(commits) = s
+                            .refs_to_snaps
+                            .get(&RefKind::Branch(commit.to_string().into()))
+                        {
+                            for (_, oid) in commits {
+                                c_oids.push_back(*oid)
+                            }
+                        } else {
+                            return Err(ChaseGitError::BranchNotFound {
+                                branch_type: "Branch".to_string(),
+                                branch_name: commit.to_string(),
+                            });
+                        };
+                        Ok(())
+                    })?;
+                }
+                &InputTypes::Pr => {
+                    repo.with_state(|s| -> GuseGitResult<()> {
+                        if let Some(commits) =
+                            s.refs_to_snaps.get(&RefKind::Pr(commit.to_string().into()))
+                        {
+                            for (_, oid) in commits {
+                                c_oids.push_back(*oid)
+                            }
+                        } else {
+                            return Err(ChaseGitError::BranchNotFound {
+                                branch_type: "Pr".to_string(),
+                                branch_name: commit.to_string(),
+                            });
+                        }
+                        Ok(())
+                    })?;
+                }
+                &InputTypes::Range => {
+                    if !commit.contains("..") {
+                        return Err(ChaseGitError::BadCommitRange {
+                            input: commit.to_string(),
+                        });
+                    }
+                    let mut oids = commit.split("..");
+                    let Some(start) = oids.next() else {
+                        return Err(ChaseGitError::BadCommitRange {
+                            input: commit.to_string(),
+                        });
+                    };
+                    let Some(end) = oids.next() else {
+                        return Err(ChaseGitError::BadCommitRange {
+                            input: commit.to_string(),
+                        });
+                    };
+                    let start_commit = {
+                        let start_obj = r
+                            .revparse_single(start)
+                            .map_err(|e| map_git_error(start, e))?;
+                        let oid = start_obj
+                            .peel_to_commit()
+                            .map_err(|e| map_git_error(start, e))?
+                            .id();
+                        r.find_commit(oid)
+                            .map_err(|e| map_git_error(start, e))?
+                            .id()
+                    };
+                    let end_commit = {
+                        let start_obj =
+                            r.revparse_single(end).map_err(|e| map_git_error(end, e))?;
+                        let oid = start_obj
+                            .peel_to_commit()
+                            .map_err(|e| map_git_error(end, e))?
+                            .id();
+                        r.find_commit(oid).map_err(|e| map_git_error(end, e))?.id()
+                    };
+                    let common_ref = repo.with_state(|s| -> GuseGitResult<RefKind> {
+                        let Some(start_refs) = s.snaps_to_ref.get(&start_commit) else {
+                            return Err(ChaseGitError::CommitNotFound {
+                                commit: start_commit.to_string(),
+                            });
+                        };
+                        let Some(end_refs) = s.snaps_to_ref.get(&end_commit) else {
+                            return Err(ChaseGitError::CommitNotFound {
+                                commit: end_commit.to_string(),
+                            });
+                        };
+                        let Some(common_ref_kind) = start_refs.intersection(end_refs).next() else {
+                            return Err(ChaseGitError::NoCommonRef {
+                                oid1: start_commit.to_string(),
+                                oid2: end_commit.to_string(),
+                            });
+                        };
+                        Ok(common_ref_kind.clone())
+                    })?;
+                    let range = repo.with_state(|s| -> GuseGitResult<Vec<Oid>> {
+                        let Some(refs) = s.refs_to_snaps.get(&common_ref) else {
+                            // Should be uncreachable.
+                            return Err(ChaseGitError::NoCommonRef {
+                                oid1: start_commit.to_string(),
+                                oid2: end_commit.to_string(),
+                            });
+                        };
+                        let Some(pos1) = refs.iter().position(|(_, oid)| *oid == start_commit)
+                        else {
+                            return Err(ChaseGitError::CommitNotFound {
+                                commit: start_commit.to_string(),
+                            });
+                        };
+                        let Some(pos2) = refs.iter().position(|(_, oid)| *oid == end_commit) else {
+                            return Err(ChaseGitError::CommitNotFound {
+                                commit: start_commit.to_string(),
+                            });
+                        };
+                        let range = refs[pos1.min(pos2)..=pos1.max(pos2)]
+                            .iter()
+                            .map(|(_, oid)| *oid)
+                            .collect::<Vec<Oid>>();
+                        Ok(range)
+                    })?;
+                    c_oids.extend(range);
+                }
+                _ => unreachable!(),
+            }
         }
         Ok(())
     })?;

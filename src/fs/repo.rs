@@ -52,11 +52,6 @@ pub struct State {
     pub vdir_cache: BTreeMap<VirtualIno, VirtualNode>,
     /// Oid = Commit Oid
     pub build_sessions: HashMap<Oid, Arc<BuildSession>>,
-    /// Map of the Snap and Month folders
-    ///
-    /// <folder name, (MONTH name, Snap name)>
-    /// TODO: remove and add to snapshots
-    pub snaps_map: HashMap<Oid, (OsString, OsString)>,
     /// Maps all the commits to one of more refs
     pub snaps_to_ref: HashMap<Oid, BTreeSet<RefKind>>,
     /// Lists all the commits for a respective ref

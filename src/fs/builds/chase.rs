@@ -48,13 +48,10 @@ pub fn start_chase(
 
     // 2 - Read and parse the script
     let cfg = LuaConfig::read_lua(&script_path).resolve(stream)?;
-    let msg = format!("Found {} commits in script \n", cfg.commits.len());
-    stream.update(&msg)?;
 
     // 3 - Validate the commits, find the Oid
     let commits = validate_commits(fs, repo_ino, &cfg.commits).resolve(stream)?;
     let commands: VecDeque<String> = cfg.commands.into();
-    // TODO: Update message
     let c_oid_vec = commits.iter().collect::<Vec<&Oid>>();
 
     // 4 - Find the Snap folders on disk
@@ -75,7 +72,7 @@ pub fn start_chase(
     cleanup_builds(fs, repo_ino, &chase)?;
 
     // 7 - run chase
-    // Name of a folder so save logs to (if enabled)
+    // Name of a folder to save logs to (if enabled)
     let name = format!("{}", chrono::offset::Utc::now());
     let dir_path = script_path.join(name);
     let mut chase_runner = ChaseRunner::new(&dir_path, fs, stream, chase.clone());
