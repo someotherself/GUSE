@@ -31,8 +31,12 @@ fn main() -> anyhow::Result<()> {
                 let repo_name = up
                     .get_one::<String>("repo-name")
                     .ok_or_else(|| anyhow!("Cannot parse argument"))?;
+                let remote: Option<String> = up.get_one::<String>("remote").cloned();
                 let sock = socket_path()?;
-                let req = ControlReq::RepoUpdate { name: repo_name };
+                let req = ControlReq::RepoUpdate {
+                    name: repo_name,
+                    remote,
+                };
                 send_req(&sock, &req)?;
             }
             _ => {
@@ -183,6 +187,7 @@ fn handle_cli_args() -> ArgMatches {
                     Command::new("update")
                         .about("Perform a new fetch to update the repository")
                         .arg(Arg::new("repo-name").value_name("REPO_NAME").global(true))
+                        .arg(Arg::new("remote").value_name("REMOTE").required(false))
             ),
         )
         .subcommand(

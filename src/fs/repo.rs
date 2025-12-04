@@ -467,22 +467,48 @@ impl GitRepo {
         Ok(out)
     }
 
-    pub fn update_fetch(&self) -> anyhow::Result<()> {
+    pub fn update_fetch(&self, custom_remote: Option<String>) -> anyhow::Result<()> {
         let inner = self.inner.lock();
         let remotes = inner.remotes()?;
-        if !remotes.iter().flatten().any(|r| r == "upstream") {
-            bail!("Could not find remote name");
+        let remotes_vec = remotes.iter().flatten().collect::<Vec<_>>();
+        if remotes_vec.is_empty() {
+            bail!("No remotes found!");
+        };
+        let mut url: Option<String> = None;
+        // Search for user provided remote if available
+        if let Some(cust_rem) = custom_remote
+            && let Ok(remote) = inner.find_remote(&cust_rem)
+        {
+            match remote.url() {
+                Some(u) => url = Some(u.to_owned()),
+                None => bail!(""),
+            };
         }
-        let remote = inner.find_remote("upstream")?;
-        if let Some(url) = remote.url() {
-            self.fetch(url)?;
+        // Fallback to the default GUSE remote "upstream"
+        if url.is_none()
+            && let Ok(remote) = inner.find_remote("upstream")
+        {
+            match remote.url() {
+                Some(u) => url = Some(u.to_owned()),
+                None => bail!(""),
+            };
         }
-        Ok(())
+        drop(inner);
+        if let Some(url) = url {
+            self.fetch(url.as_str())?;
+            self.refresh_refs()?;
+            Ok(())
+        } else {
+            bail!("Could not find remote")
+        }
     }
 
     pub fn fetch(&self, url: &str) -> anyhow::Result<()> {
         let repo = self.inner.lock();
-        let mut remote = repo.remote("upstream", url)?;
+        let mut remote = match repo.find_remote("upstream") {
+            Ok(r) => r,
+            Err(_) => repo.remote("upstream", url)?,
+        };
         let mut cbs = git2::RemoteCallbacks::new();
         cbs.sideband_progress(|d| {
             print!("remote: {}", std::str::from_utf8(d).unwrap_or(""));

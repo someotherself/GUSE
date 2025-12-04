@@ -38,6 +38,7 @@ pub enum ControlReq<'a> {
     },
     RepoUpdate {
         name: &'a str,
+        remote: Option<String>,
     },
     Chase {
         repo: &'a str,
@@ -127,10 +128,10 @@ fn handle_client(
                 stream.update(&format!("Removed repo at {}\n", repo_path.display()))?;
                 Ok(ControlRes::Ok)
             }
-            ControlReq::RepoUpdate { name } => {
+            ControlReq::RepoUpdate { name, remote } => {
                 let name = name.strip_suffix("/").unwrap_or(name);
                 let fs = inner.getfs();
-                if let Err(e) = fs.update_repo(name) {
+                if let Err(e) = fs.update_repo(name, remote) {
                     stream.update(&format!("Error fetching repo {name}: {e}\n"))?;
                     return Ok(ControlRes::Ok);
                 }
