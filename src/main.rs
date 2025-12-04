@@ -27,6 +27,14 @@ fn main() -> anyhow::Result<()> {
                 let req = ControlReq::RepoDelete { name: repo_name };
                 send_req(&sock, &req)?;
             }
+            Some(("update", up)) => {
+                let repo_name = up
+                    .get_one::<String>("repo-name")
+                    .ok_or_else(|| anyhow!("Cannot parse argument"))?;
+                let sock = socket_path()?;
+                let req = ControlReq::RepoUpdate { name: repo_name };
+                send_req(&sock, &req)?;
+            }
             _ => {
                 dbg!("Wrong command!");
                 tracing::error!("Wrong command!")
@@ -170,7 +178,12 @@ fn handle_cli_args() -> ArgMatches {
                     Command::new("remove")
                         .about("Delete a repository by name")
                         .arg(Arg::new("repo-name").value_name("REPO_NAME").global(true)),
-                ),
+                )
+                .subcommand(
+                    Command::new("update")
+                        .about("Perform a new fetch to update the repository")
+                        .arg(Arg::new("repo-name").value_name("REPO_NAME").global(true))
+            ),
         )
         .subcommand(
             Command::new("chase")

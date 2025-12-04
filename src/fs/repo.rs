@@ -467,6 +467,19 @@ impl GitRepo {
         Ok(out)
     }
 
+    pub fn update_fetch(&self) -> anyhow::Result<()> {
+        let inner = self.inner.lock();
+        let remotes = inner.remotes()?;
+        if !remotes.iter().flatten().any(|r| r == "upstream") {
+            bail!("Could not find remote name");
+        }
+        let remote = inner.find_remote("upstream")?;
+        if let Some(url) = remote.url() {
+            self.fetch(url)?;
+        }
+        Ok(())
+    }
+
     pub fn fetch(&self, url: &str) -> anyhow::Result<()> {
         let repo = self.inner.lock();
         let mut remote = repo.remote("upstream", url)?;
