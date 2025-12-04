@@ -86,11 +86,11 @@ impl CmdResult {
 
 impl<'a, R: Updater> ChaseRunner<'a, R> {
     pub fn run_command_on_snap(&mut self, path: &Path, command: &str) -> CmdResult {
-        let mut split = command.split_whitespace();
-        let Some(prog) = split.next() else {
-            return CmdResult::Err("Error parsing command.\n".to_string());
+        let parts = match shell_words::split(command) {
+            Ok(p) => p,
+            Err(_) => return CmdResult::Err("Error parsing command.\n".to_string()),
         };
-        let args: Vec<&str> = split.collect();
+        let (prog, args) = parts.split_first().unwrap();
         let output = Command::new(prog)
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
