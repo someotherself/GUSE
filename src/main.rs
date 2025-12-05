@@ -292,7 +292,16 @@ fn run_mount(matches: &ArgMatches) -> anyhow::Result<()> {
         allow_other,
         disable_socket,
     );
-    guse::mount::mount_fuse(mount_point)?;
+
+    let bg = match guse::mount::mount_fuse(mount_point) {
+        Ok(bg) => bg,
+        Err(e) => {
+            tracing::error!("Failed to mount: {e:?}");
+            return Err(e);
+        }
+    };
+    bg.join();
+
     Ok(())
 }
 

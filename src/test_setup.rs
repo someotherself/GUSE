@@ -87,7 +87,7 @@ pub struct FuseSetupResult {
 
 struct MountGuard {
     mount_dir: PathBuf,
-    th: Option<std::thread::JoinHandle<anyhow::Result<()>>>,
+    th: Option<std::thread::JoinHandle<anyhow::Result<fuser::BackgroundSession>>>,
     rx_done: mpsc::Receiver<anyhow::Result<()>>,
 }
 

@@ -63,7 +63,7 @@ impl MountPoint {
     }
 }
 
-pub fn mount_fuse(opts: MountPoint) -> anyhow::Result<()> {
+pub fn mount_fuse(opts: MountPoint) -> anyhow::Result<fuser::BackgroundSession> {
     let MountPoint {
         mountpoint,
         repos_dir,
@@ -72,6 +72,8 @@ pub fn mount_fuse(opts: MountPoint) -> anyhow::Result<()> {
         allow_other,
         disable_socket,
     } = opts;
+
+    try_force_unmount(&mountpoint);
 
     if !mountpoint.exists() {
         std::fs::create_dir(&mountpoint)?;
@@ -102,9 +104,9 @@ pub fn mount_fuse(opts: MountPoint) -> anyhow::Result<()> {
         notif.clone(),
     )?;
 
-    let mut session = fuser::Session::new(fs.clone(), &mountpoint, &options)?;
-    let notifier = session.notifier();
-    let _ = notif.set(notifier);
+    let session = fuser::Session::new(fs.clone(), &mountpoint, &options)?;
+    let bg = session.spawn()?;
+    let nofitfier = bg.notifier();
 
     if !disable_socket {
         let socket_path = socket_path()?;
@@ -115,8 +117,22 @@ pub fn mount_fuse(opts: MountPoint) -> anyhow::Result<()> {
         )?;
     }
 
-    session.run()?;
-    Ok(())
+    Ok(bg)
+}
+
+fn try_force_unmount(mountpoint: &Path) {
+    #[cfg(target_os = "linux")]
+    {
+        let _ = std::process::Command::new("fusermount")
+            .arg("-u")
+            .arg(mountpoint)
+            .status();
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        let _ = Command::new("umount").arg(mountpoint).status();
+    }
 }
 
 fn fuse_allow_other_enabled() -> std::io::Result<bool> {
