@@ -44,9 +44,8 @@ pub fn validate_commits(
                 }
                 &InputTypes::Branch => {
                     repo.with_ref_state(|s| -> GuseGitResult<()> {
-                        if let Some(commits) = s
-                            .refs_to_snaps
-                            .get(&RefKind::Branch(commit.to_string().into()))
+                        if let Some(commits) =
+                            s.refs_to_snaps.get(&RefKind::Branch(commit.to_string()))
                         {
                             for (_, oid) in commits {
                                 c_oids.push_back(*oid)
@@ -62,8 +61,7 @@ pub fn validate_commits(
                 }
                 &InputTypes::Pr => {
                     repo.with_ref_state(|s| -> GuseGitResult<()> {
-                        if let Some(commits) =
-                            s.refs_to_snaps.get(&RefKind::Pr(commit.to_string().into()))
+                        if let Some(commits) = s.refs_to_snaps.get(&RefKind::Pr(commit.to_string()))
                         {
                             for (_, oid) in commits {
                                 c_oids.push_back(*oid)

@@ -88,12 +88,12 @@ pub struct VirtualNode {
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 ///Stores short name
 pub enum RefKind {
-    Branch(Arc<str>),
-    Tag(Arc<str>),
-    Pr(Arc<str>),
-    PrMerge(Arc<str>),
-    Head(Arc<str>),
-    Main(Arc<str>),
+    Branch(String),
+    Tag(String),
+    Pr(String),
+    PrMerge(String),
+    Head(String),
+    Main(String),
 }
 
 impl RefKind {
