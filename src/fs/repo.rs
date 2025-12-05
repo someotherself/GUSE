@@ -9,6 +9,7 @@ use sha1::{Digest, Sha1};
 use std::{
     collections::{BTreeMap, BTreeSet, HashMap, HashSet},
     ffi::{OsStr, OsString},
+    io::{BufReader, BufWriter},
     path::{Path, PathBuf},
     sync::{
         Arc,
@@ -24,8 +25,14 @@ use crate::{
         fileattr::{FileAttr, InoFlag},
     },
     inodes::VirtualIno,
-    internals::{cache::LruCache, cache_dentry::DentryLru},
+    internals::{
+        cache::LruCache,
+        cache_dentry::DentryLru,
+        store::{BinDecode, BinEncode},
+    },
 };
+
+const REF_STORE: &str = "store";
 
 pub struct GitRepo {
     pub repo_dir: String,
@@ -36,7 +43,7 @@ pub struct GitRepo {
     pub repo_id: u16,
     pub inner: Mutex<Repository>,
     pub inostate: RwLock<InoState>,
-    pub state: RwLock<RefState>,
+    pub refstate: RwLock<RefState>,
     /// LruCache<target_ino, FileAttr>
     pub attr_cache: LruCache<u64, FileAttr>,
     /// LruCache<Dentry>
@@ -46,6 +53,7 @@ pub struct GitRepo {
     pub injected_files: DashMap<u64, InjectedMetadata>,
 }
 
+#[derive(Default)]
 pub struct InoState {
     /// Used inodes to prevent reading from DB
     pub res_inodes: HashSet<u64>,
@@ -55,7 +63,11 @@ pub struct InoState {
     pub build_sessions: HashMap<Oid, Arc<BuildSession>>,
 }
 
+// TODO: Learn how to write a macro
+// Do not make any changes, without changing the serialization/deserialization in store.rs
+#[derive(Clone, Debug, Default)]
 pub struct RefState {
+    pub fingerprint: [u8; 32],
     /// Maps all the commits to one of more refs
     pub snaps_to_ref: HashMap<Oid, BTreeSet<RefKind>>,
     /// Lists all the commits for a respective ref
@@ -174,12 +186,12 @@ impl GitRepo {
     }
 
     pub fn with_ref_state<R>(&self, f: impl FnOnce(&RefState) -> R) -> R {
-        let guard = self.state.write();
+        let guard = self.refstate.write();
         f(&guard)
     }
 
     pub fn with_ref_state_mut<R>(&self, f: impl FnOnce(&mut RefState) -> R) -> R {
-        let mut guard = self.state.write();
+        let mut guard = self.refstate.write();
         f(&mut guard)
     }
 
@@ -191,6 +203,74 @@ impl GitRepo {
     pub fn with_ino_state_mut<R>(&self, f: impl FnOnce(&mut InoState) -> R) -> R {
         let mut guard = self.inostate.write();
         f(&mut guard)
+    }
+
+    fn store_refs_to_file(&self, repo_path: &Path) -> anyhow::Result<()> {
+        let refs_struct = self.refstate.write().clone();
+        let path = repo_path.join(REF_STORE);
+        let file = std::fs::OpenOptions::new()
+            .write(true)
+            .truncate(true)
+            .create(true)
+            .open(path)?;
+        let mut writer = BufWriter::new(file);
+        refs_struct.bin_store(&mut writer)?;
+        Ok(())
+    }
+
+    /// Tries to read the stored refs is the file is available.
+    /// Stored state is saved using BinEncode
+    ///
+    /// If not available, or repo has been changed, it will refresh_refs and re-write the file
+    pub fn load_refs(&self, repo_path: &Path, repo_name: &str) -> anyhow::Result<()> {
+        let stored_file = repo_path.join(REF_STORE);
+        let Ok(store_file) = std::fs::OpenOptions::new().read(true).open(stored_file) else {
+            tracing::warn!("Refreshing repo {repo_name}");
+            self.refresh_refs()?;
+            let fingerprint = self.get_refs_fingerprint()?;
+            self.with_ref_state_mut(|s| s.fingerprint = fingerprint);
+            self.store_refs_to_file(repo_path)?;
+            return Ok(());
+        };
+
+        let mut reader = BufReader::new(store_file);
+        let stored_ref_state = RefState::bin_load(&mut reader)?;
+        let new_fingerprint = self.get_refs_fingerprint()?;
+
+        if new_fingerprint != stored_ref_state.fingerprint {
+            tracing::warn!("Repo fingerprint mismatch. Refreshing {repo_name}");
+            self.refresh_refs()?;
+            self.with_ref_state_mut(|s| s.fingerprint = new_fingerprint);
+            self.store_refs_to_file(repo_path)?;
+            return Ok(());
+        }
+
+        *self.refstate.write() = stored_ref_state;
+        Ok(())
+    }
+
+    pub fn get_refs_fingerprint(&self) -> anyhow::Result<[u8; 32]> {
+        let mut entries = Vec::new();
+        let inner = self.inner.lock();
+        let mut iter = inner.references()?;
+
+        while let Some(reference) = iter.next().transpose()? {
+            let Some(name) = reference.name() else {
+                continue;
+            };
+
+            if let Some(target) = reference.target() {
+                entries.push((name.to_string(), target));
+            }
+        }
+
+        entries.sort_unstable_by(|a, b| a.0.cmp(&b.0));
+        let mut hasher = blake3::Hasher::new();
+        for (name, oid) in entries {
+            hasher.update(name.as_bytes());
+            hasher.update(oid.as_bytes());
+        }
+        Ok(*hasher.finalize().as_bytes())
     }
 
     /// Updates these fields in State: snaps_to_ref, refs_to_snaps and unique_namespaces. They are not updated anywhere else (which means the folder structure is only updated on fetch, or on a new session)

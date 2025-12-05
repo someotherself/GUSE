@@ -6,7 +6,7 @@ use std::path::Path;
 use std::sync::{Arc, OnceLock, RwLock};
 use std::time::{Duration, UNIX_EPOCH};
 use std::{
-    collections::{BTreeMap, HashMap, HashSet},
+    collections::HashMap,
     path::PathBuf,
     sync::atomic::{AtomicU64, Ordering},
     time::SystemTime,
@@ -386,26 +386,14 @@ impl GitFs {
         let _ = std::fs::create_dir(&build_dir);
         let _ = std::fs::create_dir(&chase_dir);
 
-        let state = RefState {
-            refs_to_snaps: HashMap::new(),
-            snaps_to_ref: HashMap::new(),
-            unique_namespaces: HashSet::new(),
-        };
-
-        let inostate = InoState {
-            res_inodes: HashSet::new(),
-            vdir_cache: BTreeMap::new(),
-            build_sessions: HashMap::new(),
-        };
-
         let git_repo = GitRepo {
             repo_dir: repo_name.to_owned(),
             build_dir,
             chase_dir,
             repo_id,
             inner: parking_lot::Mutex::new(repo),
-            state: parking_lot::RwLock::new(state),
-            inostate: parking_lot::RwLock::new(inostate),
+            refstate: parking_lot::RwLock::new(RefState::default()),
+            inostate: parking_lot::RwLock::new(InoState::default()),
             attr_cache: LruCache::new(ATTR_LRU),
             dentry_cache: DentryLru::new(DENTRY_LRU),
             file_cache: LruCache::new(FILE_LRU),
@@ -465,7 +453,7 @@ impl GitFs {
         chase_attr.ino = chase_ino;
 
         let repo = self.get_repo(repo_ino)?;
-        repo.refresh_refs()?;
+        repo.load_refs(&repo_path, repo_name)?;
         repo.with_ino_state_mut(|s| {
             s.res_inodes.insert(live_ino);
             s.res_inodes.insert(build_ino);
@@ -576,26 +564,14 @@ impl GitFs {
         std::fs::create_dir(&live_path)?;
         let repo = git2::Repository::init(live_path)?;
 
-        let state = RefState {
-            refs_to_snaps: HashMap::new(),
-            snaps_to_ref: HashMap::new(),
-            unique_namespaces: HashSet::new(),
-        };
-
-        let inostate = InoState {
-            res_inodes: HashSet::new(),
-            vdir_cache: BTreeMap::new(),
-            build_sessions: HashMap::new(),
-        };
-
         let git_repo = GitRepo {
             repo_dir: repo_name.to_owned(),
             build_dir,
             chase_dir,
             repo_id,
             inner: parking_lot::Mutex::new(repo),
-            inostate: parking_lot::RwLock::new(inostate),
-            state: parking_lot::RwLock::new(state),
+            inostate: parking_lot::RwLock::new(InoState::default()),
+            refstate: parking_lot::RwLock::new(RefState::default()),
             attr_cache: LruCache::new(ATTR_LRU),
             dentry_cache: DentryLru::new(DENTRY_LRU),
             file_cache: LruCache::new(FILE_LRU),
@@ -688,7 +664,7 @@ impl GitFs {
 
         if let Some(url) = url {
             repo.fetch(url)?;
-            repo.refresh_refs()?;
+            repo.load_refs(tmp_path, repo_name)?;
         };
 
         let final_path = self.repos_dir.join(repo_name);
