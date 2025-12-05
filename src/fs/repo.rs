@@ -561,7 +561,11 @@ impl GitRepo {
         Ok(out)
     }
 
-    pub fn update_fetch(&self, custom_remote: Option<String>) -> anyhow::Result<()> {
+    pub fn update_fetch(
+        &self,
+        custom_remote: Option<String>,
+        repo_path: &Path,
+    ) -> anyhow::Result<()> {
         let inner = self.inner.lock();
         let remotes = inner.remotes()?;
         let remotes_vec = remotes.iter().flatten().collect::<Vec<_>>();
@@ -591,6 +595,9 @@ impl GitRepo {
         if let Some(url) = url {
             self.fetch(url.as_str())?;
             self.refresh_refs()?;
+            let fingerprint = self.get_refs_fingerprint()?;
+            self.with_ref_state_mut(|s| s.fingerprint = fingerprint);
+            self.store_refs_to_file(repo_path)?;
             Ok(())
         } else {
             bail!("Could not find remote")

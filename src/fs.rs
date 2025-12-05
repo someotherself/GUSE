@@ -1586,7 +1586,8 @@ impl GitFs {
         if let Some(repo_entry) = self.repos_map.get(repo_name) {
             let repo_ino = GitFs::repo_id_to_ino(*repo_entry.value());
             let repo = self.get_repo(repo_ino)?;
-            repo.update_fetch(remote)?;
+            let repo_path = self.repos_dir.join(&repo.repo_dir);
+            repo.update_fetch(remote, &repo_path)?;
         } else {
             bail!(std::io::Error::from_raw_os_error(libc::EINVAL))
         }
