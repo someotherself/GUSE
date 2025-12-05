@@ -184,7 +184,7 @@ pub fn readdir_repo_dir(fs: &GitFs, parent: NormalIno) -> anyhow::Result<Vec<Dir
 
     // Add the Tags/Brances/Pr/PrMerge (if they exist)
     let mut folders = Vec::new();
-    repo.with_state(|s| {
+    repo.with_ref_state(|s| {
         for rf in s.unique_namespaces.iter() {
             match rf.as_str() {
                 "Branches" => folders.push((OsString::from("Branches"), InoFlag::BranchesRoot)),
@@ -647,7 +647,7 @@ pub fn read_virtual_dir(fs: &GitFs, ino: VirtualIno) -> anyhow::Result<Vec<Direc
 
     let mut dir_entries = vec![];
 
-    let v_node_opt = repo.with_state(|s| s.vdir_cache.get(&ino).cloned());
+    let v_node_opt = repo.with_ino_state(|s| s.vdir_cache.get(&ino).cloned());
     let v_node = match v_node_opt {
         Some(o) => o,
         None => {

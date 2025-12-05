@@ -27,7 +27,7 @@ use crate::fs::meta_db::{DbReturn, DbWriteMsg, MetaDb, oneshot, set_conn_rw_prag
 use crate::fs::ops::readdir::{
     BuildCtxMetadata, DirectoryEntry, DirectoryEntryPlus, DirectoryStreamCookie,
 };
-use crate::fs::repo::{GitRepo, State};
+use crate::fs::repo::{GitRepo, InoState, RefState};
 use crate::inodes::{Inodes, NormalIno, VirtualIno};
 use crate::internals::cache::LruCache;
 use crate::internals::cache_dentry::DentryLru;
@@ -386,13 +386,16 @@ impl GitFs {
         let _ = std::fs::create_dir(&build_dir);
         let _ = std::fs::create_dir(&chase_dir);
 
-        let state: State = State {
-            res_inodes: HashSet::new(),
-            vdir_cache: BTreeMap::new(),
-            build_sessions: HashMap::new(),
+        let state = RefState {
             refs_to_snaps: HashMap::new(),
             snaps_to_ref: HashMap::new(),
             unique_namespaces: HashSet::new(),
+        };
+
+        let inostate = InoState {
+            res_inodes: HashSet::new(),
+            vdir_cache: BTreeMap::new(),
+            build_sessions: HashMap::new(),
         };
 
         let git_repo = GitRepo {
@@ -402,6 +405,7 @@ impl GitFs {
             repo_id,
             inner: parking_lot::Mutex::new(repo),
             state: parking_lot::RwLock::new(state),
+            inostate: parking_lot::RwLock::new(inostate),
             attr_cache: LruCache::new(ATTR_LRU),
             dentry_cache: DentryLru::new(DENTRY_LRU),
             file_cache: LruCache::new(FILE_LRU),
@@ -462,7 +466,7 @@ impl GitFs {
 
         let repo = self.get_repo(repo_ino)?;
         repo.refresh_refs()?;
-        repo.with_state_mut(|s| {
+        repo.with_ino_state_mut(|s| {
             s.res_inodes.insert(live_ino);
             s.res_inodes.insert(build_ino);
             s.res_inodes.insert(chase_ino);
@@ -572,13 +576,16 @@ impl GitFs {
         std::fs::create_dir(&live_path)?;
         let repo = git2::Repository::init(live_path)?;
 
-        let state: State = State {
-            res_inodes: HashSet::new(),
-            vdir_cache: BTreeMap::new(),
-            build_sessions: HashMap::new(),
+        let state = RefState {
             refs_to_snaps: HashMap::new(),
             snaps_to_ref: HashMap::new(),
             unique_namespaces: HashSet::new(),
+        };
+
+        let inostate = InoState {
+            res_inodes: HashSet::new(),
+            vdir_cache: BTreeMap::new(),
+            build_sessions: HashMap::new(),
         };
 
         let git_repo = GitRepo {
@@ -587,6 +594,7 @@ impl GitFs {
             chase_dir,
             repo_id,
             inner: parking_lot::Mutex::new(repo),
+            inostate: parking_lot::RwLock::new(inostate),
             state: parking_lot::RwLock::new(state),
             attr_cache: LruCache::new(ATTR_LRU),
             dentry_cache: DentryLru::new(DENTRY_LRU),
@@ -652,7 +660,7 @@ impl GitFs {
         std::fs::create_dir(&temp_path)?;
 
         let repo = self.get_repo(repo_ino)?;
-        repo.with_state_mut(|s| {
+        repo.with_ino_state_mut(|s| {
             s.res_inodes.insert(live_ino);
             s.res_inodes.insert(build_ino);
             s.res_inodes.insert(chase_ino);
@@ -1808,7 +1816,7 @@ impl GitFs {
         loop {
             let ino = self.next_inode_raw(parent)?;
 
-            if repo.with_state_mut(|s| s.res_inodes.insert(ino)) {
+            if repo.with_ino_state_mut(|s| s.res_inodes.insert(ino)) {
                 return Ok(ino);
             }
         }

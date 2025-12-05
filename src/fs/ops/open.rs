@@ -254,7 +254,7 @@ pub fn open_vfile(fs: &GitFs, ino: Inodes, read: bool, write: bool) -> anyhow::R
 // Searches for RefKind::Pr(_), but only if they have a corresponding RefKind::PrMerge(_)
 fn commits_inside_pr(fs: &GitFs, ino: NormalIno) -> anyhow::Result<Arc<[u8]>> {
     let repo = fs.get_repo(ino.into())?;
-    let ref_entries = repo.with_state(|s| s.refs_to_snaps.clone());
+    let ref_entries = repo.with_ref_state(|s| s.refs_to_snaps.clone());
     let pr_merge_commits = ref_entries
         .iter()
         .filter(|(ref_kind, oids)| matches!(ref_kind, RefKind::PrMerge(_)) && !oids.is_empty())
@@ -291,7 +291,7 @@ fn commits_inside_normal(fs: &GitFs, ino: NormalIno, flag: InoFlag) -> anyhow::R
         }
     };
     let repo = fs.get_repo(ino.into())?;
-    let ref_entries = repo.with_state(|s| s.refs_to_snaps.clone());
+    let ref_entries = repo.with_ref_state(|s| s.refs_to_snaps.clone());
     let commits = ref_entries
         .iter()
         .filter(|&(ref_kind, oids)| check_flag(ref_kind) && !oids.is_empty())
@@ -349,7 +349,7 @@ pub fn open_vdir(
 ) -> anyhow::Result<u64> {
     let name = fs.get_name_from_db(ino.into())?;
     let repo = fs.get_repo(ino.into())?;
-    let v_node_opt = repo.with_state(|s| s.vdir_cache.get(&parent).cloned());
+    let v_node_opt = repo.with_ino_state(|s| s.vdir_cache.get(&parent).cloned());
     let Some(v_node) = v_node_opt else {
         bail!(std::io::Error::from_raw_os_error(libc::ENOENT))
     };

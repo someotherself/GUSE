@@ -111,7 +111,7 @@ pub fn opendir_vdir_file_commits(fs: &GitFs, ino: VirtualIno) -> anyhow::Result<
         log: log_entries,
     };
     let repo = fs.get_repo(ino.to_norm_u64())?;
-    repo.with_state_mut(|s| s.vdir_cache.insert(ino, node));
+    repo.with_ino_state_mut(|s| s.vdir_cache.insert(ino, node));
 
     let iter = DirectoryStreamCookie {
         next_name: None,

@@ -35,7 +35,8 @@ pub struct GitRepo {
     pub chase_dir: PathBuf,
     pub repo_id: u16,
     pub inner: Mutex<Repository>,
-    pub state: RwLock<State>,
+    pub inostate: RwLock<InoState>,
+    pub state: RwLock<RefState>,
     /// LruCache<target_ino, FileAttr>
     pub attr_cache: LruCache<u64, FileAttr>,
     /// LruCache<Dentry>
@@ -45,13 +46,16 @@ pub struct GitRepo {
     pub injected_files: DashMap<u64, InjectedMetadata>,
 }
 
-pub struct State {
+pub struct InoState {
     /// Used inodes to prevent reading from DB
     pub res_inodes: HashSet<u64>,
     /// key: inode of the virtual directory
     pub vdir_cache: BTreeMap<VirtualIno, VirtualNode>,
     /// Oid = Commit Oid
     pub build_sessions: HashMap<Oid, Arc<BuildSession>>,
+}
+
+pub struct RefState {
     /// Maps all the commits to one of more refs
     pub snaps_to_ref: HashMap<Oid, BTreeSet<RefKind>>,
     /// Lists all the commits for a respective ref
@@ -169,13 +173,23 @@ impl GitRepo {
         f(&mut guard)
     }
 
-    pub fn with_state<R>(&self, f: impl FnOnce(&State) -> R) -> R {
+    pub fn with_ref_state<R>(&self, f: impl FnOnce(&RefState) -> R) -> R {
         let guard = self.state.write();
         f(&guard)
     }
 
-    pub fn with_state_mut<R>(&self, f: impl FnOnce(&mut State) -> R) -> R {
+    pub fn with_ref_state_mut<R>(&self, f: impl FnOnce(&mut RefState) -> R) -> R {
         let mut guard = self.state.write();
+        f(&mut guard)
+    }
+
+    pub fn with_ino_state<R>(&self, f: impl FnOnce(&InoState) -> R) -> R {
+        let guard = self.inostate.write();
+        f(&guard)
+    }
+
+    pub fn with_ino_state_mut<R>(&self, f: impl FnOnce(&mut InoState) -> R) -> R {
+        let mut guard = self.inostate.write();
         f(&mut guard)
     }
 
@@ -297,7 +311,7 @@ impl GitRepo {
             }
         }
 
-        self.with_state_mut(|s| {
+        self.with_ref_state_mut(|s| {
             s.refs_to_snaps = refs_to_snaps;
             s.snaps_to_ref = snaps_to_ref;
             s.unique_namespaces = unique_namespaces;
@@ -309,7 +323,7 @@ impl GitRepo {
     pub fn month_folders(&self) -> anyhow::Result<BTreeMap<OsString, ObjectAttr>> {
         let mut out: BTreeMap<OsString, ObjectAttr> = BTreeMap::new();
 
-        self.with_state(|s| {
+        self.with_ref_state(|s| {
             let Some(objects) = s
                 .refs_to_snaps
                 .iter()
@@ -356,7 +370,7 @@ impl GitRepo {
         let mut out: Vec<ObjectAttr> = Vec::new();
         let mut commit_num = 0;
 
-        self.with_state(|s| {
+        self.with_ref_state(|s| {
             let Some(objects) = s
                 .refs_to_snaps
                 .iter()
@@ -402,7 +416,7 @@ impl GitRepo {
             _ => false,
         };
 
-        self.with_state(|s| {
+        self.with_ref_state(|s| {
             for (ref_kind, objects) in s.refs_to_snaps.iter().filter(|(k, _)| matches_flag(k)) {
                 let name = match ref_kind {
                     RefKind::Tag(n)
@@ -443,7 +457,7 @@ impl GitRepo {
             RefKind::Pr(name.to_string_lossy().into())
         };
 
-        self.with_state(|s| {
+        self.with_ref_state(|s| {
             if let Some(objects) = s.refs_to_snaps.iter().find(|k| *k.0 == rf_kind) {
                 let mut sorted = objects.1.clone();
                 sorted.sort_unstable_by(|a, b| a.0.cmp(&b.0));
@@ -923,7 +937,7 @@ impl GitRepo {
         commit_oid: Oid,
         build_folder: &Path,
     ) -> anyhow::Result<Arc<BuildSession>> {
-        self.with_state_mut(|s| match s.build_sessions.entry(commit_oid) {
+        self.with_ino_state_mut(|s| match s.build_sessions.entry(commit_oid) {
             std::collections::hash_map::Entry::Occupied(entry) => {
                 let session = entry.get();
                 Ok(session.clone())

@@ -43,7 +43,7 @@ pub fn validate_commits(
                     c_oids.push_back(commit.id())
                 }
                 &InputTypes::Branch => {
-                    repo.with_state(|s| -> GuseGitResult<()> {
+                    repo.with_ref_state(|s| -> GuseGitResult<()> {
                         if let Some(commits) = s
                             .refs_to_snaps
                             .get(&RefKind::Branch(commit.to_string().into()))
@@ -61,7 +61,7 @@ pub fn validate_commits(
                     })?;
                 }
                 &InputTypes::Pr => {
-                    repo.with_state(|s| -> GuseGitResult<()> {
+                    repo.with_ref_state(|s| -> GuseGitResult<()> {
                         if let Some(commits) =
                             s.refs_to_snaps.get(&RefKind::Pr(commit.to_string().into()))
                         {
@@ -115,7 +115,7 @@ pub fn validate_commits(
                             .id();
                         r.find_commit(oid).map_err(|e| map_git_error(end, e))?.id()
                     };
-                    let common_ref = repo.with_state(|s| -> GuseGitResult<RefKind> {
+                    let common_ref = repo.with_ref_state(|s| -> GuseGitResult<RefKind> {
                         let Some(start_refs) = s.snaps_to_ref.get(&start_commit) else {
                             return Err(ChaseGitError::CommitNotFound {
                                 commit: start_commit.to_string(),
@@ -134,7 +134,7 @@ pub fn validate_commits(
                         };
                         Ok(common_ref_kind.clone())
                     })?;
-                    let range = repo.with_state(|s| -> GuseGitResult<Vec<Oid>> {
+                    let range = repo.with_ref_state(|s| -> GuseGitResult<Vec<Oid>> {
                         let Some(refs) = s.refs_to_snaps.get(&common_ref) else {
                             // Should be uncreachable.
                             return Err(ChaseGitError::NoCommonRef {
@@ -189,7 +189,7 @@ pub fn validate_commit_refs(
         }
         Ok(())
     })?;
-    let kinds = repo.with_state(|s| -> GuseGitResult<Vec<(Oid, BTreeSet<RefKind>, i64)>> {
+    let kinds = repo.with_ref_state(|s| -> GuseGitResult<Vec<(Oid, BTreeSet<RefKind>, i64)>> {
         let mut kinds = vec![];
         for (c, time) in c_oids {
             let ref_kind = s
@@ -453,7 +453,7 @@ fn find_path_in_pr(
 pub fn cleanup_builds(fs: &GitFs, repo_ino: u64, chase: &Chase) -> anyhow::Result<()> {
     let repo = fs.get_repo(repo_ino)?;
     for oid in chase.commits.iter() {
-        let guard = repo.state.read();
+        let guard = repo.inostate.read();
         let exists = guard.build_sessions.contains_key(oid);
         drop(guard);
         if exists {
