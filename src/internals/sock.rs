@@ -15,7 +15,10 @@ use serde_json::Deserializer;
 use crate::{
     fs::{
         GitFs,
-        builds::{chase::start_chase, reporter::Updater},
+        builds::{
+            chase::{ChaseId, chase_set_stop_flag, start_chase, start_chase_connection},
+            reporter::Updater,
+        },
     },
     mount::GitFsAdapter,
 };
@@ -44,6 +47,7 @@ pub enum ControlReq<'a> {
         repo: &'a str,
         build: &'a str,
         log: bool,
+        chase_id: ChaseId,
     },
     NewScript {
         repo: &'a str,
@@ -58,6 +62,10 @@ pub enum ControlReq<'a> {
         old_build: &'a str,
         new_build: &'a str,
     },
+    StopChase {
+        id: ChaseId,
+    },
+    Connect,
     Status,
 }
 
@@ -65,11 +73,11 @@ pub enum ControlReq<'a> {
 #[serde(tag = "status", rename_all = "snake_case")]
 pub enum ControlRes {
     Ok,
-    // User to print error messages to the user cli
-    Error { error: String },
+    Accept { id: ChaseId },
     // Used to print progress to the user cli
     Update { message: Vec<u8> },
     // Used to print progress during a build/compilatin - re-drawing the last 5 lines
+    ChaseStop,
     Draw { message: Vec<Vec<u8>> },
     RepoList { repos: Vec<String> },
     Status { running: bool, mount_point: String },
@@ -113,7 +121,6 @@ fn handle_client(
     let res: ControlRes = (|| -> anyhow::Result<ControlRes> {
         match req {
             ControlReq::RepoDelete { name } => {
-                // TODO. Make a 2 step process, with confirmation.
                 let name = name.strip_suffix("/").unwrap_or(name);
                 let fs = inner.getfs();
                 let Ok(()) = fs.delete_repo(name) else {
@@ -142,10 +149,23 @@ fn handle_client(
                 stream.update("Not implemented!\n")?;
                 Ok(ControlRes::Ok)
             }
-            ControlReq::Chase { repo, build, log } => {
+            ControlReq::Connect => {
+                start_chase_connection(&mut stream)?;
+                Ok(ControlRes::Ok)
+            }
+            ControlReq::Chase {
+                repo,
+                build,
+                log,
+                chase_id,
+            } => {
                 let repo = repo.strip_suffix("/").unwrap_or(repo);
                 let fs = inner.getfs();
-                start_chase(&fs, repo, build, &mut stream, log)?;
+                start_chase(&fs, repo, build, &mut stream, log, chase_id)?;
+                Ok(ControlRes::Ok)
+            }
+            ControlReq::StopChase { id } => {
+                chase_set_stop_flag(id, &mut stream);
                 Ok(ControlRes::Ok)
             }
             ControlReq::NewScript { repo, build } => {
@@ -231,8 +251,9 @@ fn handle_client(
             }
         }
     })()
-    .unwrap_or_else(|e| ControlRes::Error {
-        error: e.to_string(),
+    .unwrap_or_else(|e| {
+        let _ = stream.update(&format!("Socket connection error: {e}"));
+        ControlRes::Ok
     });
 
     let out = serde_json::to_vec(&res)?;
@@ -326,9 +347,11 @@ pub fn send_req(sock: &Path, req: &ControlReq) -> anyhow::Result<ControlRes> {
                     }
                     out.flush()?;
                 }
+                ControlRes::Accept { id } => return Ok(ControlRes::Accept { id }),
+                ControlRes::ChaseStop => return Ok(ControlRes::Ok),
                 other => {
+                    println!("Ending GUSE command");
                     final_res = Some(other);
-                    println!("Ending GUSE command.")
                 }
             }
         }

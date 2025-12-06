@@ -1,11 +1,15 @@
 #![allow(dead_code)]
 
-use std::path::PathBuf;
+use std::{
+    path::PathBuf,
+    sync::{Arc, atomic::AtomicBool},
+    thread,
+};
 
-use anyhow::anyhow;
+use anyhow::{anyhow, bail};
 use clap::{Arg, ArgAction, ArgMatches, Command, command, crate_authors, crate_version};
 
-use guse::internals::sock::{ControlReq, send_req, socket_path};
+use guse::internals::sock::{ControlReq, ControlRes, send_req, socket_path};
 use tracing_subscriber::{EnvFilter, filter::Directive};
 
 fn main() -> anyhow::Result<()> {
@@ -53,8 +57,45 @@ fn main() -> anyhow::Result<()> {
                 .get_one::<String>("build")
                 .ok_or_else(|| anyhow!("Cannot parse argument"))?;
             let log = m.get_flag("log");
-            let req = ControlReq::Chase { repo, build, log };
-            send_req(&sock, &req)?;
+
+            // Send connection request
+            let conn_req = ControlReq::Connect;
+            let accept_res = send_req(&sock, &conn_req)?;
+
+            let ControlRes::Accept { id } = accept_res else {
+                bail!("")
+            };
+
+            let stop_signal = Arc::new(AtomicBool::new(false));
+            let signal_clone = stop_signal.clone();
+
+            let _ = ctrlc::set_handler(move || {
+                signal_clone.store(true, std::sync::atomic::Ordering::SeqCst);
+            });
+
+            let work_sock = sock.clone();
+            let repo_clone = repo.clone();
+            let build_clone = build.clone();
+            let worker = thread::spawn(move || {
+                let chase_req = ControlReq::Chase {
+                    repo: &repo_clone,
+                    build: &build_clone,
+                    log,
+                    chase_id: id,
+                };
+                let _ = send_req(&work_sock, &chase_req);
+            });
+
+            loop {
+                if worker.is_finished() {
+                    break;
+                }
+                if stop_signal.load(std::sync::atomic::Ordering::Relaxed) {
+                    let stop_req = ControlReq::StopChase { id };
+                    let _ = send_req(&sock.clone(), &stop_req);
+                    break;
+                }
+            }
         }
         Some(("script", m)) => match m.subcommand() {
             Some(("new", s)) => {

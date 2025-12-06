@@ -55,7 +55,9 @@ impl CmdResult {
     pub fn egress<'a, U: Updater>(self, runner: &mut ChaseRunner<'a, U>) -> anyhow::Result<Self> {
         if self.is_err() && runner.chase.stop_mode == ChaseStopMode::FirstFailure {
             // Stop the guse chase on this loop
-            runner.run = false
+            runner
+                .stop_flag
+                .store(true, std::sync::atomic::Ordering::SeqCst);
         };
         match &self {
             Self::Ok(_) => {}
@@ -72,7 +74,9 @@ impl CmdResult {
                 } else {
                     let _ = runner.reporter.update("Terminated by signal.\n");
                     // !!! Also terminate the run on this loop
-                    runner.run = false;
+                    runner
+                        .stop_flag
+                        .store(true, std::sync::atomic::Ordering::SeqCst);
                 }
             }
         }
@@ -90,7 +94,9 @@ impl<'a, R: Updater> ChaseRunner<'a, R> {
             Ok(p) => p,
             Err(_) => return CmdResult::Err("Error parsing command.\n".to_string()),
         };
-        let (prog, args) = parts.split_first().unwrap();
+        let Some((prog, args)) = parts.split_first() else {
+            return CmdResult::Err(format!("Could not parse chase command: {command}"));
+        };
         let output = Command::new(prog)
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -152,6 +158,13 @@ impl<'a, R: Updater> ChaseRunner<'a, R> {
                 let _ = self.report(str::from_utf8(&line.line).unwrap());
                 // log_buf.push(line);
                 // let _ = reporter.refresh_cli(log_buf.iter().cloned().collect());
+                let status = self.stop_flag.load(std::sync::atomic::Ordering::Relaxed);
+                if status {
+                    unsafe {
+                        libc::kill(-(output.id() as i32), libc::SIGKILL);
+                    }
+                    let _ = output.kill();
+                };
             }
         });
 

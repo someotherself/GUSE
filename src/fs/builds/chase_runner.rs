@@ -1,6 +1,8 @@
 use std::collections::VecDeque;
 use std::path::Path;
 use std::path::PathBuf;
+use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
 
 use git2::Oid;
 
@@ -44,16 +46,22 @@ pub struct ChaseRunner<'a, R: Updater> {
     pub reporter: &'a mut R,
     pub chase: Chase,
     pub curr_log_file: Option<std::fs::File>,
-    pub run: bool,
     results: Vec<ChaseResult>,
+    pub stop_flag: Arc<AtomicBool>,
 }
 
 impl<'a, R: Updater> ChaseRunner<'a, R> {
-    pub fn new(dir: &Path, fs: &'a GitFs, reporter: &'a mut R, mut chase: Chase) -> Self {
+    pub fn new(
+        dir: &Path,
+        fs: &'a GitFs,
+        reporter: &'a mut R,
+        mut chase: Chase,
+        stop_flag: Arc<AtomicBool>,
+    ) -> Self {
         // Folder where the logs will be saved
         if chase.log && std::fs::create_dir(dir).is_err() {
             // If the folder can't be created, don't try to log
-            let _ = reporter.update(&color_red("COULD NOT CREATE LOGGING DIRECTORY."));
+            let _ = reporter.update(&color_red("COULD NOT CREATE LOGGING DIRECTORY.\n"));
             chase.log = false;
         }
         Self {
@@ -62,8 +70,8 @@ impl<'a, R: Updater> ChaseRunner<'a, R> {
             reporter,
             chase,
             curr_log_file: None,
-            run: true,
             results: Vec::new(),
+            stop_flag,
         }
     }
 
@@ -75,9 +83,10 @@ impl<'a, R: Updater> ChaseRunner<'a, R> {
         let mut commit_list = self.chase.commits.clone();
 
         // RUN THROUGH EACH COMMIT
-        while let Some(oid) = commit_list.pop_front()
-            && self.run
-        {
+        while let Some(oid) = commit_list.pop_front() {
+            if self.stop_flag.load(std::sync::atomic::Ordering::Relaxed) {
+                break;
+            }
             curr_run += 1;
 
             self.update_curr_log_file(curr_run, oid);
@@ -105,6 +114,9 @@ impl<'a, R: Updater> ChaseRunner<'a, R> {
 
             // RUN COMMANDS
             while let Some(command) = commands.pop_front() {
+                if self.stop_flag.load(std::sync::atomic::Ordering::Relaxed) {
+                    break;
+                }
                 self.report(&format!(
                     "==> Running command {:?} for {} ({}/{})\n",
                     command, oid, curr_run, total
