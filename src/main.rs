@@ -66,6 +66,7 @@ fn main() -> anyhow::Result<()> {
                 bail!("")
             };
 
+            println!("Received ID: {id}");
             let stop_signal = Arc::new(AtomicBool::new(false));
             let signal_clone = stop_signal.clone();
 

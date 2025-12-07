@@ -98,7 +98,15 @@ pub fn start_control_server(
                     let mp = mountpoint.clone();
                     thread::spawn(move || {
                         if let Err(e) = handle_client(&fs, stream, &mp) {
-                            tracing::error!(e = %e, "Control client error");
+                            if let Some(ioe) = e.downcast_ref::<std::io::Error>() {
+                                if ioe.kind() == std::io::ErrorKind::BrokenPipe
+                                    || ioe.kind() == std::io::ErrorKind::ConnectionReset
+                                {
+                                    tracing::error!("control client disconnected");
+                                }
+                            } else {
+                                tracing::error!(e = %e, "Control client error");
+                            }
                         }
                     });
                 }
@@ -161,12 +169,14 @@ fn handle_client(
             } => {
                 let repo = repo.strip_suffix("/").unwrap_or(repo);
                 let fs = inner.getfs();
-                start_chase(&fs, repo, build, &mut stream, log, chase_id)?;
+                let res = start_chase(&fs, repo, build, &mut stream, log, chase_id);
+                tracing::warn!("Exiting with res: {res:?}");
+                println!("Exiting with res OK");
                 Ok(ControlRes::Ok)
             }
             ControlReq::StopChase { id } => {
                 chase_set_stop_flag(id, &mut stream);
-                Ok(ControlRes::Ok)
+                Ok(ControlRes::ChaseStop)
             }
             ControlReq::NewScript { repo, build } => {
                 let repo_name = repo.strip_suffix("/").unwrap_or(repo);
@@ -348,8 +358,11 @@ pub fn send_req(sock: &Path, req: &ControlReq) -> anyhow::Result<ControlRes> {
                     out.flush()?;
                 }
                 ControlRes::Accept { id } => return Ok(ControlRes::Accept { id }),
-                ControlRes::ChaseStop => return Ok(ControlRes::Ok),
+                ControlRes::ChaseStop => {
+                    println!("Chase END signal received");
+                }
                 other => {
+                    println!("{other:?}");
                     println!("Ending GUSE command");
                     final_res = Some(other);
                 }

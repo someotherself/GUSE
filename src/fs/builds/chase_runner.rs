@@ -24,14 +24,14 @@ impl ChaseTarget {
 }
 
 #[derive(Debug, Clone)]
-pub struct ChaseResult {
+pub struct ChaseResult<T> {
     pos: usize,
     oid: Oid,
-    result: CmdResult,
+    result: CmdResult<T>,
 }
 
-impl ChaseResult {
-    fn new(pos: usize, oid: Oid, cmd_res: CmdResult) -> Self {
+impl<T> ChaseResult<T> {
+    fn new(pos: usize, oid: Oid, cmd_res: CmdResult<T>) -> Self {
         Self {
             pos,
             oid,
@@ -46,7 +46,7 @@ pub struct ChaseRunner<'a, R: Updater> {
     pub reporter: &'a mut R,
     pub chase: Chase,
     pub curr_log_file: Option<std::fs::File>,
-    results: Vec<ChaseResult>,
+    results: Vec<ChaseResult<()>>,
     pub stop_flag: Arc<AtomicBool>,
 }
 
@@ -121,7 +121,12 @@ impl<'a, R: Updater> ChaseRunner<'a, R> {
                     "==> Running command {:?} for {} ({}/{})\n",
                     command, oid, curr_run, total
                 ))?;
-                if let Ok(cmd_res) = self.run_command_on_snap(&cur_path, &command).egress(self) {
+                // if let Ok(cmd_res) = self.run_command_on_snap(&cur_path, &command).egress(self) {
+                //     self.reporter.update("Exited cmd. Pushing results")?;
+                //     self.results.push(ChaseResult::new(curr_run, oid, cmd_res));
+                // }
+                let res = self.run_command_on_snap(&cur_path, &command);
+                if let Ok(cmd_res) = res.egress(self) {
                     self.results.push(ChaseResult::new(curr_run, oid, cmd_res));
                 }
                 self.report(&format!("--> FINISHED command {} for {}\n", command, oid))?;
@@ -131,6 +136,7 @@ impl<'a, R: Updater> ChaseRunner<'a, R> {
         }
 
         self.print_chase_results();
+        self.reporter.update("Ending chase with Ok(())")?;
         Ok(())
     }
 

@@ -4,12 +4,13 @@ use std::{
     io::{BufRead, BufReader},
     ops::Deref,
     path::Path,
-    process::{Command, ExitStatus, Stdio},
+    process::{Command, ExitStatus},
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
 use crate::fs::builds::{
     chase_runner::ChaseRunner,
+    job::Job,
     reporter::{Reporter, Updater},
     runtime::ChaseStopMode,
 };
@@ -35,13 +36,13 @@ impl LogLine {
 }
 
 #[derive(Debug, Clone)]
-pub enum CmdResult {
-    Ok(()),
+pub enum CmdResult<T> {
+    Ok(T),
     Err(String),
     ExitFail(ExitStatus),
 }
 
-impl Display for CmdResult {
+impl<T> Display for CmdResult<T> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Ok(_) => write!(f, "SUCCESS"),
@@ -51,7 +52,7 @@ impl Display for CmdResult {
     }
 }
 
-impl CmdResult {
+impl<T> CmdResult<T> {
     pub fn egress<'a, U: Updater>(self, runner: &mut ChaseRunner<'a, U>) -> anyhow::Result<Self> {
         if self.is_err() && runner.chase.stop_mode == ChaseStopMode::FirstFailure {
             // Stop the guse chase on this loop
@@ -63,7 +64,7 @@ impl CmdResult {
             Self::Ok(_) => {}
             Self::Err(e) => {
                 let _ = runner.reporter.update("Run failed due to an I/O error.\n");
-                runner.reporter.update(e)?;
+                let _ = runner.reporter.update(e);
             }
             Self::ExitFail(e) => {
                 let _ = runner
@@ -89,7 +90,7 @@ impl CmdResult {
 }
 
 impl<'a, R: Updater> ChaseRunner<'a, R> {
-    pub fn run_command_on_snap(&mut self, path: &Path, command: &str) -> CmdResult {
+    pub fn run_command_on_snap(&mut self, path: &Path, command: &str) -> CmdResult<()> {
         let parts = match shell_words::split(command) {
             Ok(p) => p,
             Err(_) => return CmdResult::Err("Error parsing command.\n".to_string()),
@@ -97,34 +98,27 @@ impl<'a, R: Updater> ChaseRunner<'a, R> {
         let Some((prog, args)) = parts.split_first() else {
             return CmdResult::Err(format!("Could not parse chase command: {command}"));
         };
-        let output = Command::new(prog)
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .current_dir(path)
-            .args(args)
-            .spawn();
+        let mut command = Command::new(prog);
+        command.current_dir(path).args(args);
 
-        let mut output = match output {
-            Ok(o) => o,
-            Err(e) => {
-                if e.kind() == std::io::ErrorKind::NotFound {
-                    return CmdResult::Err(format!("Command not found: {}\n", prog));
-                }
-                return CmdResult::Err(format!("Failed to run {}: {}\n", prog, e));
-            }
+        let mut job = match Job::spawn(command) {
+            CmdResult::Ok(val) => val,
+            CmdResult::Err(e) => return CmdResult::Err(e),
+            CmdResult::ExitFail(e) => return CmdResult::ExitFail(e),
         };
 
         let mut out_lines = Vec::new();
-        let mut _log_buf: RingBuffer<LogLine> = RingBuffer::new(5);
 
-        let Some(out) = output.stdout.take() else {
+        let Some(out) = job.child.stdout.take() else {
             return CmdResult::Err("Could not read stdout.\n".to_string());
         };
-        let Some(err) = output.stderr.take() else {
+        let Some(err) = job.child.stderr.take() else {
             return CmdResult::Err("Could not read stderr.\n".to_string());
         };
 
         let (tx, rx) = crossbeam_channel::unbounded::<LogLine>();
+
+        let mut interrupted = false;
 
         std::thread::scope(|s| {
             {
@@ -156,26 +150,23 @@ impl<'a, R: Updater> ChaseRunner<'a, R> {
             while let Ok(line) = rx.recv_timeout(Duration::from_secs(5)) {
                 out_lines.push(line.clone());
                 let _ = self.report(str::from_utf8(&line.line).unwrap());
-                // log_buf.push(line);
-                // let _ = reporter.refresh_cli(log_buf.iter().cloned().collect());
                 let status = self.stop_flag.load(std::sync::atomic::Ordering::Relaxed);
                 if status {
-                    unsafe {
-                        libc::kill(-(output.id() as i32), libc::SIGKILL);
-                    }
-                    let _ = output.kill();
+                    job.terminate();
+                    interrupted = true;
+                    return;
                 };
             }
         });
 
-        match output.wait() {
-            Ok(a) if a.success() => {
-                // out_lines.sort_by_key(|a| a.t_stmp);
-                // let out = out_lines.into_iter().flat_map(|a| a.line).collect();
-                CmdResult::Ok(())
+        if !interrupted {
+            match job.child.wait() {
+                Ok(a) if a.success() => CmdResult::Ok(()),
+                Ok(a) => CmdResult::ExitFail(a),
+                Err(e) => CmdResult::Err(e.to_string()),
             }
-            Ok(a) => CmdResult::ExitFail(a),
-            Err(e) => CmdResult::Err(e.to_string()),
+        } else {
+            CmdResult::Err("Terminated by ctrl+c".to_string())
         }
     }
 }

@@ -89,6 +89,7 @@ pub fn start_chase_connection(stream: &mut UnixStream) -> anyhow::Result<()> {
 pub fn chase_set_stop_flag(chase_id: ChaseId, sock: &mut UnixStream) {
     let map = chase_id_reg().lock();
     if let Some(flag) = map.get(&chase_id) {
+        let _ = sock.update("Stop signal set\n");
         flag.store(true, std::sync::atomic::Ordering::SeqCst);
     } else {
         let _ = sock.update("Stop signal not recognized by any active Chase");
@@ -140,7 +141,8 @@ pub fn start_chase(
     let name = format!("{}", chrono::offset::Utc::now());
     let dir_path = script_path.join(name);
     let stop_flag = get_stop_flag(chase_id);
-    let mut chase_runner = ChaseRunner::new(&dir_path, fs, stream, chase.clone(), stop_flag);
+    let mut chase_runner: ChaseRunner<'_, UnixStream> =
+        ChaseRunner::new(&dir_path, fs, stream, chase.clone(), stop_flag);
     let _ = chase_runner.run();
 
     // 8 - Cleanup any
