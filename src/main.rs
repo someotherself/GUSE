@@ -63,10 +63,10 @@ fn main() -> anyhow::Result<()> {
             let accept_res = send_req(&sock, &conn_req)?;
 
             let ControlRes::Accept { id } = accept_res else {
+                println!("Chase ID not received");
                 bail!("")
             };
 
-            println!("Received ID: {id}");
             let stop_signal = Arc::new(AtomicBool::new(false));
             let signal_clone = stop_signal.clone();
 

@@ -3,10 +3,7 @@ use std::{
     io::Write,
     os::unix::net::UnixStream,
     path::PathBuf,
-    sync::{
-        Arc, OnceLock,
-        atomic::{AtomicBool, AtomicU64},
-    },
+    sync::{Arc, OnceLock, atomic::AtomicU64},
 };
 
 use anyhow::bail;
@@ -17,10 +14,12 @@ use crate::{
     fs::{
         GitFs,
         builds::{
+            chase_handle::ChaseHandle,
             chase_resolver::{
                 cleanup_builds, resolve_path_for_refs, validate_commit_refs, validate_commits,
             },
             chase_runner::ChaseRunner,
+            logger::CmdResult,
             reporter::{ErrorResolver, Updater},
             runtime::{ChaseRunMode, ChaseStopMode, LuaConfig},
         },
@@ -30,37 +29,11 @@ use crate::{
 
 pub type ChaseId = u64;
 
-static CHASE_ID: AtomicU64 = AtomicU64::new(1);
-static CHASE_STOP_FLAGS: OnceLock<Mutex<HashMap<ChaseId, Arc<AtomicBool>>>> = OnceLock::new();
+pub static CHASE_ID: AtomicU64 = AtomicU64::new(1);
+pub static CHASE_STOP_FLAGS: OnceLock<Mutex<HashMap<ChaseId, Arc<ChaseHandle>>>> = OnceLock::new();
 
-fn next_chase_id() -> u64 {
+pub fn next_chase_id() -> u64 {
     CHASE_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
-}
-
-pub fn register_chase_id() -> ChaseId {
-    let id = next_chase_id();
-    let flag = Arc::new(AtomicBool::new(false));
-    {
-        let mut guard = chase_id_reg().lock();
-        guard.insert(id, flag);
-    }
-    id as ChaseId
-}
-
-fn deregister_chase_id(id: ChaseId) {
-    let mut guard = chase_id_reg().lock();
-    guard.remove(&id);
-}
-
-fn chase_id_reg() -> &'static Mutex<HashMap<ChaseId, Arc<AtomicBool>>> {
-    CHASE_STOP_FLAGS.get_or_init(|| Mutex::new(HashMap::new()))
-}
-
-fn get_stop_flag(id: ChaseId) -> Arc<AtomicBool> {
-    let mut reg = chase_id_reg().lock();
-    reg.entry(id)
-        .or_insert_with(|| Arc::new(AtomicBool::new(false)))
-        .clone()
 }
 
 #[derive(Clone)]
@@ -79,21 +52,12 @@ pub struct Chase {
 // Accepts a handshake between "client" and "server"
 // The Chase id is used for client to find and manage the chase once started
 pub fn start_chase_connection(stream: &mut UnixStream) -> anyhow::Result<()> {
-    let id = register_chase_id();
-    let res = ControlRes::Accept { id };
-    let buf = serde_json::to_vec(&res)?;
-    stream.write_all(&buf)?;
-    Ok(())
-}
-
-pub fn chase_set_stop_flag(chase_id: ChaseId, sock: &mut UnixStream) {
-    let map = chase_id_reg().lock();
-    if let Some(flag) = map.get(&chase_id) {
-        let _ = sock.update("Stop signal set\n");
-        flag.store(true, std::sync::atomic::Ordering::SeqCst);
-    } else {
-        let _ = sock.update("Stop signal not recognized by any active Chase");
+    if let CmdResult::Ok(id) = ChaseHandle::register_chase_id() {
+        let res = ControlRes::Accept { id };
+        let buf = serde_json::to_vec(&res)?;
+        stream.write_all(&buf)?;
     }
+    Ok(())
 }
 
 pub fn start_chase(
@@ -104,6 +68,9 @@ pub fn start_chase(
     log: bool,
     chase_id: ChaseId,
 ) -> anyhow::Result<()> {
+    if let CmdResult::Err(e) = ChaseHandle::start_run(chase_id) {
+        stream.update(&format!("Chase id not found. Unable to cancel run: {e}"))?;
+    };
     let repo_ino = get_repo_ino(fs, repo_name, stream)?;
     let repo = fs.get_repo(repo_ino)?;
 
@@ -140,14 +107,17 @@ pub fn start_chase(
     // Name of a folder to save logs to (if enabled)
     let name = format!("{}", chrono::offset::Utc::now());
     let dir_path = script_path.join(name);
-    let stop_flag = get_stop_flag(chase_id);
+    let Some(handle) = ChaseHandle::get_handle(&chase_id) else {
+        bail!("Error. Chase handle does not exist for id {chase_id}")
+    };
     let mut chase_runner: ChaseRunner<'_, UnixStream> =
-        ChaseRunner::new(&dir_path, fs, stream, chase.clone(), stop_flag);
+        ChaseRunner::new(&dir_path, fs, stream, chase.clone(), handle);
     let _ = chase_runner.run();
 
-    // 8 - Cleanup any
+    // 8 - Cleanup all the files created during the chase
     cleanup_builds(fs, repo_ino, &chase)?;
 
+    ChaseHandle::deregister_chase_id(chase_id);
     Ok(())
 }
 

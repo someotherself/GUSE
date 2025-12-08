@@ -2,10 +2,10 @@ use std::collections::VecDeque;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::sync::atomic::AtomicBool;
 
 use git2::Oid;
 
+use crate::fs::builds::chase_handle::{ChaseHandle, ChaseState};
 use crate::fs::builds::logger::CmdResult;
 use crate::fs::builds::runtime::ChaseRunMode;
 use crate::fs::{
@@ -23,6 +23,7 @@ impl ChaseTarget {
     }
 }
 
+/// Used to sumarize the success/failure of each commit after a chase
 #[derive(Debug, Clone)]
 pub struct ChaseResult<T> {
     pos: usize,
@@ -40,6 +41,8 @@ impl<T> ChaseResult<T> {
     }
 }
 
+/// Coordinates running chase commands across a list of commits,
+/// managing logging, filesystem state, and holds the stop signal handling.
 pub struct ChaseRunner<'a, R: Updater> {
     dir_path: PathBuf,
     fs: &'a GitFs,
@@ -47,7 +50,7 @@ pub struct ChaseRunner<'a, R: Updater> {
     pub chase: Chase,
     pub curr_log_file: Option<std::fs::File>,
     results: Vec<ChaseResult<()>>,
-    pub stop_flag: Arc<AtomicBool>,
+    pub handle: Arc<ChaseHandle>,
 }
 
 impl<'a, R: Updater> ChaseRunner<'a, R> {
@@ -56,7 +59,7 @@ impl<'a, R: Updater> ChaseRunner<'a, R> {
         fs: &'a GitFs,
         reporter: &'a mut R,
         mut chase: Chase,
-        stop_flag: Arc<AtomicBool>,
+        handle: Arc<ChaseHandle>,
     ) -> Self {
         // Folder where the logs will be saved
         if chase.log && std::fs::create_dir(dir).is_err() {
@@ -71,7 +74,7 @@ impl<'a, R: Updater> ChaseRunner<'a, R> {
             chase,
             curr_log_file: None,
             results: Vec::new(),
-            stop_flag,
+            handle,
         }
     }
 
@@ -84,7 +87,11 @@ impl<'a, R: Updater> ChaseRunner<'a, R> {
 
         // RUN THROUGH EACH COMMIT
         while let Some(oid) = commit_list.pop_front() {
-            if self.stop_flag.load(std::sync::atomic::Ordering::Relaxed) {
+            if self
+                .handle
+                .stop_flag
+                .load(std::sync::atomic::Ordering::Relaxed)
+            {
                 break;
             }
             curr_run += 1;
@@ -114,19 +121,18 @@ impl<'a, R: Updater> ChaseRunner<'a, R> {
 
             // RUN COMMANDS
             while let Some(command) = commands.pop_front() {
-                if self.stop_flag.load(std::sync::atomic::Ordering::Relaxed) {
+                if self
+                    .handle
+                    .stop_flag
+                    .load(std::sync::atomic::Ordering::Relaxed)
+                {
                     break;
                 }
                 self.report(&format!(
                     "==> Running command {:?} for {} ({}/{})\n",
                     command, oid, curr_run, total
                 ))?;
-                // if let Ok(cmd_res) = self.run_command_on_snap(&cur_path, &command).egress(self) {
-                //     self.reporter.update("Exited cmd. Pushing results")?;
-                //     self.results.push(ChaseResult::new(curr_run, oid, cmd_res));
-                // }
-                let res = self.run_command_on_snap(&cur_path, &command);
-                if let Ok(cmd_res) = res.egress(self) {
+                if let Ok(cmd_res) = self.run_command_on_snap(&cur_path, &command).egress(self) {
                     self.results.push(ChaseResult::new(curr_run, oid, cmd_res));
                 }
                 self.report(&format!("--> FINISHED command {} for {}\n", command, oid))?;
@@ -136,7 +142,6 @@ impl<'a, R: Updater> ChaseRunner<'a, R> {
         }
 
         self.print_chase_results();
-        self.reporter.update("Ending chase with Ok(())")?;
         Ok(())
     }
 
@@ -170,6 +175,14 @@ impl<'a, R: Updater> ChaseRunner<'a, R> {
                 .reporter
                 .update(&format!("pos.{}-{}-{}\n", res.pos, res.oid, res.result));
         }
+    }
+}
+
+impl<'a, R: Updater> Drop for ChaseRunner<'a, R> {
+    fn drop(&mut self) {
+        let mut state = self.handle.state.lock();
+        *state = ChaseState::Stopped;
+        self.handle.cv.notify_all();
     }
 }
 

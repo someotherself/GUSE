@@ -16,7 +16,9 @@ use crate::{
     fs::{
         GitFs,
         builds::{
-            chase::{ChaseId, chase_set_stop_flag, start_chase, start_chase_connection},
+            chase::{ChaseId, start_chase, start_chase_connection},
+            chase_handle::{ChaseHandle, ChaseState},
+            logger::CmdResult,
             reporter::Updater,
         },
     },
@@ -169,13 +171,26 @@ fn handle_client(
             } => {
                 let repo = repo.strip_suffix("/").unwrap_or(repo);
                 let fs = inner.getfs();
-                let res = start_chase(&fs, repo, build, &mut stream, log, chase_id);
-                tracing::warn!("Exiting with res: {res:?}");
-                println!("Exiting with res OK");
+                let _ = start_chase(&fs, repo, build, &mut stream, log, chase_id);
                 Ok(ControlRes::Ok)
             }
             ControlReq::StopChase { id } => {
-                chase_set_stop_flag(id, &mut stream);
+                if let CmdResult::Err(e) = ChaseHandle::set_stop_flag(id) {
+                    let _ =
+                        stream.update(&format!("Chase id not found. Could not stop chase: {e}"));
+                    return Ok(ControlRes::Ok);
+                };
+
+                let Some(handle) = ChaseHandle::get_handle(&id) else {
+                    let _ = stream.update("Chase id not found. Could not stop chase.");
+                    return Ok(ControlRes::Ok);
+                };
+
+                let mut state = handle.state.lock();
+                handle
+                    .cv
+                    .wait_while(&mut state, |s| !matches!(*s, ChaseState::Stopped));
+
                 Ok(ControlRes::ChaseStop)
             }
             ControlReq::NewScript { repo, build } => {
@@ -358,11 +373,8 @@ pub fn send_req(sock: &Path, req: &ControlReq) -> anyhow::Result<ControlRes> {
                     out.flush()?;
                 }
                 ControlRes::Accept { id } => return Ok(ControlRes::Accept { id }),
-                ControlRes::ChaseStop => {
-                    println!("Chase END signal received");
-                }
+                ControlRes::ChaseStop => {}
                 other => {
-                    println!("{other:?}");
                     println!("Ending GUSE command");
                     final_res = Some(other);
                 }

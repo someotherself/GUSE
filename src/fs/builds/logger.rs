@@ -15,6 +15,7 @@ use crate::fs::builds::{
     runtime::ChaseStopMode,
 };
 
+/// A single line of output from either stdout or stderr with the timestamp in micros
 #[derive(Debug, Clone)]
 pub struct LogLine {
     pub t_stmp: u128,
@@ -53,10 +54,12 @@ impl<T> Display for CmdResult<T> {
 }
 
 impl<T> CmdResult<T> {
+    /// Prints any errors that happened after a command was ran on a process
     pub fn egress<'a, U: Updater>(self, runner: &mut ChaseRunner<'a, U>) -> anyhow::Result<Self> {
         if self.is_err() && runner.chase.stop_mode == ChaseStopMode::FirstFailure {
             // Stop the guse chase on this loop
             runner
+                .handle
                 .stop_flag
                 .store(true, std::sync::atomic::Ordering::SeqCst);
         };
@@ -74,8 +77,8 @@ impl<T> CmdResult<T> {
                     let _ = runner.reporter.update(&format!("Exit code: {code}\n"));
                 } else {
                     let _ = runner.reporter.update("Terminated by signal.\n");
-                    // !!! Also terminate the run on this loop
                     runner
+                        .handle
                         .stop_flag
                         .store(true, std::sync::atomic::Ordering::SeqCst);
                 }
@@ -101,6 +104,7 @@ impl<'a, R: Updater> ChaseRunner<'a, R> {
         let mut command = Command::new(prog);
         command.current_dir(path).args(args);
 
+        // Spawn a child process for this cli command
         let mut job = match Job::spawn(command) {
             CmdResult::Ok(val) => val,
             CmdResult::Err(e) => return CmdResult::Err(e),
@@ -150,7 +154,10 @@ impl<'a, R: Updater> ChaseRunner<'a, R> {
             while let Ok(line) = rx.recv_timeout(Duration::from_secs(5)) {
                 out_lines.push(line.clone());
                 let _ = self.report(str::from_utf8(&line.line).unwrap());
-                let status = self.stop_flag.load(std::sync::atomic::Ordering::Relaxed);
+                let status = self
+                    .handle
+                    .stop_flag
+                    .load(std::sync::atomic::Ordering::Relaxed);
                 if status {
                     job.terminate();
                     interrupted = true;
@@ -166,7 +173,7 @@ impl<'a, R: Updater> ChaseRunner<'a, R> {
                 Err(e) => CmdResult::Err(e.to_string()),
             }
         } else {
-            CmdResult::Err("Terminated by ctrl+c".to_string())
+            CmdResult::Err("Terminated by ctrl+c signal\n".to_string())
         }
     }
 }

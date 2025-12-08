@@ -8,6 +8,7 @@ use git2::Oid;
 use tempfile::TempDir;
 
 pub mod chase;
+pub mod chase_handle;
 pub mod chase_resolver;
 pub mod chase_runner;
 pub mod inject;
