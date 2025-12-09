@@ -5,7 +5,7 @@ use std::sync::{
 
 use dashmap::DashMap;
 
-use crate::fs::{GitFs, Handle, meta_db::DbWriteMsg};
+use crate::fs::{GitFs, Handle};
 
 pub struct FileHandles {
     current_handle: AtomicU64,
