@@ -33,14 +33,18 @@ local commits = {
 local commands = {
 }
 
--- Sets the run mode. Can be "Binary" or "Continuous"
+-- Sets the run mode. For the moment, only "Continuous" mode is implemented. "Binary" mode is a work in progress.
 local run_mode = "Continuous"
 -- Sets the build mode. Can be "FirstFailure" or "Continuous"
 local stop_mode = "FirstFailure"
 
 -- Load functions
-for _, oid in ipairs(commits) do
-  cfg.add_commit(oid)
+for input_type, oid in pairs(commits) do
+  if type(input_type) == "number" then 
+    cfg.add_commit("commit", oid)
+  else
+    cfg.add_commit(input_type, oid)
+  end
 end
 
 for _, command in ipairs(commands) do
@@ -58,11 +62,15 @@ end
 
 ### Adding commits
 ```text
-For the moment, commits can only be added manually, one by one. Commit ranges are not supported.
-They can be entered as:
+Commits can be input in multiple ways: as single commits, a range of commits or a whole Branch or Pr. Or any combination of these.
 ```
 ```lua
 local commits = {"b074789", "0f9cd69", "c155149", "b2e00c3"}
+local commits = {Branch = "branch_name" }
+local commits = {Pr = "pr_name" }
+local commits = {Range = "b074789..b2e00c3" }
+local commits = {Branch = "branch_name", Range = "b074789..b2e00c3", "10a4g89" }
+
 ```
 
 ### Adding commands
@@ -76,7 +84,7 @@ local commands = { "echo some", "pwd", "cargo test" }
 Run mode means the order in which the commits will be ran.
 This field is optional. The default value will be Continuous
 - Continuous is the order in which they are provided
-- Binary is is a binary order (same as git bisect)
+- Binary is is a binary search (Not implemented)
 ```
 
 ## Stop mode
