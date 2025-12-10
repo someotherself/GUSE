@@ -1785,6 +1785,9 @@ impl GitFs {
     ///
     /// When releasing a filehandle, check if the inode can safely be deleted from storage
     pub fn is_active(&self, target_ino: u64) -> anyhow::Result<bool> {
+        if target_ino == ROOT_INO {
+            return Ok(true);
+        }
         let repo = self.get_repo(target_ino)?;
         let store = &repo.ino_table;
         Ok(store.is_active(target_ino))

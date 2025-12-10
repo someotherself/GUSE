@@ -217,10 +217,12 @@ impl InodeTable {
             let index = entry.value();
             if let Some(ino_entry) = self.table[*index].write().as_mut() {
                 let entry = Entry {
-                    name: dentry.target_name,
+                    name: dentry.target_name.clone(),
                     parent_ino: dentry.parent_ino,
                 };
                 ino_entry.dentry.push(entry);
+                self.dentry_map
+                    .insert((dentry.parent_ino, dentry.target_name), ino);
             }
         }
     }
@@ -239,10 +241,11 @@ impl InodeTable {
     }
 
     pub fn set_inactive(&self, parent_ino: ParId, target_name: &OsStr) -> Option<usize> {
-        let target_ino_entry = self
+        let target_ino = self
             .dentry_map
-            .get(&(parent_ino, target_name.to_os_string()))?;
-        if let Some(entry) = self.inodes_map.get(target_ino_entry.value()) {
+            .get(&(parent_ino, target_name.to_os_string()))
+            .map(|e| *e.value())?;
+        if let Some(entry) = self.inodes_map.get(&target_ino) {
             let index = entry.value();
             if let Some(map) = self.table[*index].write().as_mut() {
                 let len = map.dentry.len();
@@ -250,6 +253,8 @@ impl InodeTable {
                     return Some(0);
                 } else if len == 1 {
                     map.dentry.pop();
+                    self.dentry_map
+                        .remove(&(parent_ino, target_name.to_os_string()));
                     return Some(0);
                 } else {
                     if let Some(pos) = map
@@ -257,6 +262,8 @@ impl InodeTable {
                         .iter()
                         .position(|e| e.name == target_name && e.parent_ino == parent_ino)
                     {
+                        self.dentry_map
+                            .remove(&(parent_ino, target_name.to_os_string()));
                         map.dentry.remove(pos);
                     }
                     return Some(map.dentry.len());
@@ -503,11 +510,13 @@ impl InodeTable {
             return DbReturn::Missing;
         };
 
-        self.insert_dentry(Dentry {
-            target_ino: node.attr.ino,
-            parent_ino: node.parent_ino,
-            target_name: node.name.clone(),
-        });
+        {
+            self.insert_dentry(Dentry {
+                target_ino: node.attr.ino,
+                parent_ino: node.parent_ino,
+                target_name: node.name.clone(),
+            });
+        }
 
         if let Some(id_entry) = self.inodes_map.get(&node.attr.ino) {
             let index = id_entry.value();
