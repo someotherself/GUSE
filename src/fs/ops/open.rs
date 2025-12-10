@@ -57,7 +57,7 @@ pub fn open_git(
                 Ok(file) => {
                     if truncate {
                         file.trucate(0)?;
-                        fs.update_size_in_db(ino, 0)?;
+                        fs.update_size_in_storage(ino, 0)?;
                     }
                     file
                 }

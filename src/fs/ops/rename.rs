@@ -3,14 +3,14 @@ use std::{
     time::SystemTime,
 };
 
-use anyhow::{Context, anyhow, bail};
+use anyhow::bail;
 use git2::Oid;
 
 use crate::{
     fs::{
         GitFs,
         fileattr::{FileType, InoFlag, StorageNode},
-        meta_db::{DbReturn, DbWriteMsg, oneshot},
+        meta_db::DbReturn,
     },
     inodes::NormalIno,
     mount::InvalMsg,
@@ -190,29 +190,8 @@ fn update_all_oids(fs: &GitFs, target_ino: u64, oid: Oid) -> anyhow::Result<()> 
     read_oid_targets(fs, &mut targets, target_ino)?;
 
     let repo = fs.get_repo(target_ino)?;
-    repo.attr_cache.with_many_mut(&targets, |a| a.oid = oid);
-
-    let repo_id = GitFs::ino_to_repo_id(target_ino);
-    let writer_tx = {
-        let guard = fs
-            .conn_list
-            .get(&repo_id)
-            .ok_or_else(|| anyhow!("No db for repo id {repo_id}"))?;
-        guard.writer_tx.clone()
-    };
-
-    let (tx, rx) = oneshot::<()>();
-    let msg = DbWriteMsg::UpdateOid {
-        targets,
-        oid,
-        resp: Some(tx),
-    };
-
-    writer_tx
-        .send(msg)
-        .context("writer_tx error on write_dentry")?;
-
-    rx.recv().context("writer_rx disc on write_inodes")??;
+    let store = &repo.ino_table;
+    store.update_oid_targets(oid, &targets);
 
     Ok(())
 }

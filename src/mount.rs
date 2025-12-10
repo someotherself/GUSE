@@ -233,7 +233,7 @@ impl fuser::Filesystem for GitFsAdapter {
                     let parent_ino = if parent == ROOT_INO {
                         ROOT_INO
                     } else {
-                        fs.get_dir_parent(parent).unwrap_or(ROOT_INO)
+                        fs.get_single_parent(parent).unwrap_or(ROOT_INO)
                     };
                     let Ok(parent_attr) = fs.getattr(parent_ino) else {
                         return reply.error(libc::ENOENT);
@@ -444,7 +444,7 @@ impl fuser::Filesystem for GitFsAdapter {
         let parent_ino = if ino == ROOT_INO {
             ROOT_INO
         } else {
-            fs.get_dir_parent(ino).unwrap_or(ROOT_INO)
+            fs.get_single_parent(ino).unwrap_or(ROOT_INO)
         };
 
         let state_arc = {

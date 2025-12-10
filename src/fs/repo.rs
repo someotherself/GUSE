@@ -22,13 +22,12 @@ use crate::{
     fs::{
         GitFs, LIVE_FOLDER, ObjectAttr, SourceTypes,
         builds::{BuildSession, inject::InjectedMetadata},
-        fileattr::{FileAttr, InoFlag},
+        fileattr::InoFlag,
         meta_db::InodeTable,
     },
     inodes::VirtualIno,
     internals::{
         cache::LruCache,
-        cache_dentry::DentryLru,
         store::{BinDecode, BinEncode},
     },
 };
