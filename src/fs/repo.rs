@@ -1,5 +1,5 @@
 use anyhow::{anyhow, bail};
-use chrono::{DateTime, Datelike};
+use chrono::{DateTime, Datelike, TimeZone};
 use dashmap::DashMap;
 use git2::{
     Commit, Delta, Direction, FileMode, ObjectType, Oid, Repository, Time, Tree, TreeWalkResult,
@@ -809,7 +809,6 @@ impl GitRepo {
 
         const MAX_STEPS: usize = 200_000;
         let mut steps = 0usize;
-        let mut blob_count = 1usize;
         let mut out = Vec::new();
         let mut last_pushed_oid: Option<Oid> = None;
 
@@ -819,12 +818,11 @@ impl GitRepo {
                 bail!("Aborting blob history: exceeded {MAX_STEPS} steps.");
             }
             let tree = commit.tree()?;
-            if let Some(attr) = {
-                self.object_attr_for_path_in_tree(&repo, &tree, &current_path, &commit, blob_count)?
-            } {
+            if let Some(attr) =
+                { self.object_attr_for_path_in_tree(&repo, &tree, &current_path, &commit)? }
+            {
                 if last_pushed_oid != Some(attr.oid) {
                     last_pushed_oid = Some(attr.oid);
-                    blob_count += 1;
                     out.push(attr);
                 }
             } else {
@@ -878,8 +876,8 @@ impl GitRepo {
             }
         }
 
-        tracing::warn!("Returning file history with len: {}", out.len());
-        Ok(out)
+        let rev = out.into_iter().rev().collect();
+        Ok(rev)
     }
 
     fn object_attr_for_path_in_tree(
@@ -888,7 +886,6 @@ impl GitRepo {
         tree: &Tree,
         path: &str,
         commit: &Commit,
-        count: usize,
     ) -> anyhow::Result<Option<ObjectAttr>> {
         let entry = match tree.get_path(std::path::Path::new(path)) {
             Ok(e) => e,
@@ -901,7 +898,15 @@ impl GitRepo {
         let blob = repo.find_blob(oid)?;
         let git_mode = entry.filemode() as u32;
         let commit_time = commit.time();
-        let name = OsString::from(format!("{count:04}_{:.7}", commit.id()));
+        let offset = chrono::FixedOffset::east_opt(commit_time.offset_minutes() * 60).unwrap();
+        let dt = match offset.timestamp_opt(commit_time.seconds(), 0) {
+            chrono::LocalResult::Single(dt) => {
+                format!("{:02}-{:02}-{:04}", dt.day(), dt.month(), dt.year())
+            }
+            _ => "00-00-0000".to_string(),
+        };
+
+        let name = OsString::from(format!("{}_{:.7}", dt, commit.id()));
 
         Ok(Some(ObjectAttr {
             name,
@@ -985,21 +990,6 @@ impl GitRepo {
         } else {
             None
         }
-    }
-
-    fn head_commit(&self) -> anyhow::Result<Oid> {
-        let repo = &self.inner.lock();
-        Ok(repo.head()?.peel_to_commit()?.id())
-    }
-
-    #[allow(dead_code)]
-    fn head_tree(&self) -> anyhow::Result<Oid> {
-        let oid = self.head_commit()?;
-        self.with_repo(|r| -> anyhow::Result<Oid> {
-            let commit = r.find_commit(oid)?;
-            let tree = commit.tree()?.id();
-            Ok(tree)
-        })
     }
 
     /// Similar to `get_or_init_build_session` but does not insert into build_sessions map

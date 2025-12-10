@@ -148,8 +148,10 @@ fn log_entries(
 
     let mut log_entries: BTreeMap<OsString, (u64, ObjectAttr)> = BTreeMap::new();
     let mut nodes: Vec<StorageNode> = Vec::with_capacity(entries.len());
+    let mut count = 0_usize;
     for e in entries {
-        let name = OsString::from(format!("{}{file_ext}", e.name.display()));
+        count += 1;
+        let name = OsString::from(format!("{count:04}_{}{file_ext}", e.name.display()));
         let new_ino = match fs.exists_by_name(parent, &e.name)? {
             DbReturn::Found { value: ino } => ino,
             DbReturn::Missing => {
