@@ -416,7 +416,11 @@ pub fn build_dot_git_path(fs: &GitFs, target_ino: NormalIno) -> anyhow::Result<P
     Ok(dot_git_path.join(out.iter().collect::<PathBuf>()))
 }
 
-fn read_inside_dot_git(fs: &GitFs, parent_ino: NormalIno) -> anyhow::Result<Vec<DirectoryEntry>> {
+fn read_inside_dot_git(
+    fs: &GitFs,
+    parent_ino: NormalIno,
+    commit_oid: Oid,
+) -> anyhow::Result<Vec<DirectoryEntry>> {
     let mut entries: Vec<DirectoryEntry> = vec![];
     let mut nodes: Vec<StorageNode> = vec![];
     let parent_flag = fs.get_ino_flag_from_db(parent_ino)?;
@@ -465,9 +469,12 @@ fn read_inside_dot_git(fs: &GitFs, parent_ino: NormalIno) -> anyhow::Result<Vec<
     }
 
     if parent_flag == InoFlag::DotGitRoot && !index_exists {
+        let repo = fs.get_repo(parent_ino.into())?;
         let index_ino = fs.next_inode_checked(parent_ino.into())?;
         let mut index_attr: FileAttr = file_attr(InoFlag::IndexFile).into();
         index_attr.ino = index_ino;
+        let contents = repo.build_index_for_snap(commit_oid)?;
+        index_attr.size = contents.len() as u64;
         let index_entry = DirectoryEntry::new(
             index_ino,
             Oid::zero(),
@@ -583,7 +590,10 @@ pub fn readdir_git_dir(fs: &GitFs, parent: NormalIno) -> anyhow::Result<Vec<Dire
             let path = build_chase_path(fs, parent)?;
             populate_entries_by_path(fs, parent, &path)?
         }
-        InoFlag::DotGitRoot | InoFlag::InsideDotGit => read_inside_dot_git(fs, parent)?,
+        InoFlag::DotGitRoot | InoFlag::InsideDotGit => {
+            let commit_oid = fs.get_parent_commit(parent.into())?;
+            read_inside_dot_git(fs, parent, commit_oid)?
+        }
         _ => {
             bail!(std::io::Error::from_raw_os_error(libc::EPERM))
         }

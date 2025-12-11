@@ -130,15 +130,6 @@ pub fn open_git(
                 let commit = fs.get_parent_commit(ino.into())?;
                 let repo = fs.get_repo(ino.into())?;
                 let index = repo.build_index_for_snap(commit)?;
-                {
-                    let index_size = index.len();
-                    let _ = fs.notifier.try_send(crate::mount::InvalMsg::Store {
-                        ino: ino.to_norm_u64(),
-                        off: 0_u64,
-                        data: index.clone(),
-                    });
-                    fs.update_size_in_db(ino, index_size as u64)?;
-                }
                 SourceTypes::Blob {
                     oid: metadata.oid,
                     data: index.into(),
