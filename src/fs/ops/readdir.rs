@@ -15,7 +15,7 @@ use crate::{
         meta_db::DbReturn,
         repo::git2time_to_system,
     },
-    inodes::{NormalIno, VirtualIno},
+    inodes::{Inodes, NormalIno, VirtualIno},
     namespec,
 };
 
@@ -470,30 +470,83 @@ fn read_inside_dot_git(
     }
 
     if parent_flag == InoFlag::DotGitRoot && !index_exists {
-        let repo = fs.get_repo(parent_ino.into())?;
-        let index_ino = fs.next_inode_checked(parent_ino.into())?;
-        let mut index_attr: FileAttr = file_attr(InoFlag::IndexFile).into();
-        index_attr.ino = index_ino;
-        let contents = repo.build_index_for_snap(commit_oid)?;
-        index_attr.size = contents.len() as u64;
-        let index_entry = DirectoryEntry::new(
-            index_ino,
-            Oid::zero(),
-            OsString::from("index"),
-            FileType::RegularFile,
-        );
-        entries.push(index_entry);
+        add_dot_git_contents(fs, parent_ino.into(), commit_oid, &mut entries, &mut nodes)?;
+    }
 
-        nodes.push(StorageNode {
-            parent_ino: parent_ino.into(),
-            name: OsString::from("index"),
-            attr: index_attr,
-        });
+    if parent_flag == InoFlag::VirDotGitRoot && !index_exists {
+        add_vir_dot_git_contents(fs, parent_ino.into(), &mut entries, &mut nodes)?;
     }
 
     fs.write_inodes_to_db(nodes)?;
     entries.sort_unstable_by(|a, b| a.name.as_encoded_bytes().cmp(b.name.as_encoded_bytes()));
     Ok(entries)
+}
+
+fn add_dot_git_contents(
+    fs: &GitFs,
+    parent_ino: u64,
+    commit_oid: Oid,
+    entries: &mut Vec<DirectoryEntry>,
+    nodes: &mut Vec<StorageNode>,
+) -> anyhow::Result<()> {
+    let repo = fs.get_repo(parent_ino)?;
+    let index_ino = fs.next_inode_checked(parent_ino)?;
+    let mut index_attr: FileAttr = file_attr(InoFlag::IndexFile).into();
+    index_attr.ino = index_ino;
+    let contents = repo.build_index_for_snap(commit_oid)?;
+    index_attr.size = contents.len() as u64;
+    let index_entry = DirectoryEntry::new(
+        index_ino,
+        Oid::zero(),
+        OsString::from("index"),
+        FileType::RegularFile,
+    );
+    entries.push(index_entry);
+
+    nodes.push(StorageNode {
+        parent_ino,
+        name: OsString::from("index"),
+        attr: index_attr,
+    });
+    Ok(())
+}
+
+fn add_vir_dot_git_contents(
+    fs: &GitFs,
+    parent_ino: u64,
+    entries: &mut Vec<DirectoryEntry>,
+    nodes: &mut Vec<StorageNode>,
+) -> anyhow::Result<()> {
+    let repo = fs.get_repo(parent_ino)?;
+    let index_ino = fs.next_inode_checked(parent_ino)?;
+    let mut index_attr: FileAttr = file_attr(InoFlag::VirIndexFile).into();
+    index_attr.ino = index_ino;
+
+    let dot_git_parent: Inodes = fs.get_single_parent(parent_ino)?.into();
+    let Some(v_node) =
+        repo.with_ino_state(|s| s.vdir_cache.get(&dot_git_parent.to_virt()).cloned())
+    else {
+        bail!(
+            "Could not find VirtualIndex file for {}",
+            dot_git_parent.to_virt()
+        );
+    };
+    let contents = repo.build_index_for_vdir(v_node.log)?;
+    index_attr.size = contents.len() as u64;
+    let index_entry = DirectoryEntry::new(
+        index_ino,
+        Oid::zero(),
+        OsString::from("index"),
+        FileType::RegularFile,
+    );
+    entries.push(index_entry);
+
+    nodes.push(StorageNode {
+        parent_ino,
+        name: OsString::from("index"),
+        attr: index_attr,
+    });
+    Ok(())
 }
 
 fn dot_git_root(fs: &GitFs, parent_ino: u64) -> anyhow::Result<DirectoryEntry> {
@@ -591,7 +644,7 @@ pub fn readdir_git_dir(fs: &GitFs, parent: NormalIno) -> anyhow::Result<Vec<Dire
             let path = build_chase_path(fs, parent)?;
             populate_entries_by_path(fs, parent, &path)?
         }
-        InoFlag::DotGitRoot | InoFlag::InsideDotGit => {
+        InoFlag::DotGitRoot | InoFlag::VirDotGitRoot | InoFlag::InsideDotGit => {
             let commit_oid = fs.get_parent_commit(parent.into())?;
             read_inside_dot_git(fs, parent, commit_oid)?
         }
@@ -673,6 +726,29 @@ pub fn read_virtual_dir(fs: &GitFs, ino: VirtualIno) -> anyhow::Result<Vec<Direc
             FileType::RegularFile,
         ));
     }
+    let dit_git_name = OsString::from(".git");
+    let new_ino = match fs.exists_by_name(ino.to_norm_u64(), &dit_git_name)? {
+        DbReturn::Found { value: ino } => ino,
+        _ => {
+            let new_ino = fs.next_inode_checked(ino.to_norm_u64())?;
+            let mut dot_git_attr: FileAttr = dir_attr(InoFlag::VirDotGitRoot).into();
+            dot_git_attr.ino = new_ino;
+            let node = StorageNode {
+                parent_ino: ino.to_norm_u64(),
+                name: dit_git_name.clone(),
+                attr: dot_git_attr,
+            };
+            fs.write_inodes_to_db(vec![node])?;
+            new_ino
+        }
+    };
+    let dot_git_entry = DirectoryEntry {
+        ino: new_ino,
+        oid: Oid::zero(),
+        name: dit_git_name,
+        kind: FileType::Directory,
+    };
+    dir_entries.push(dot_git_entry);
     Ok(dir_entries)
 }
 

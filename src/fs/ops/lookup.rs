@@ -1,4 +1,9 @@
-use std::ffi::{OsStr, OsString};
+use std::{
+    ffi::{OsStr, OsString},
+    os::unix::ffi::OsStrExt,
+};
+
+use anyhow::bail;
 
 use crate::{
     fs::{
@@ -117,6 +122,14 @@ pub fn lookup_vdir(
     parent: VirtualIno,
     name: &OsStr,
 ) -> anyhow::Result<Option<FileAttr>> {
+    if name.as_bytes() == b".git" {
+        let Ok(res) = fs::ops::lookup::lookup_git(fs, parent.to_norm(), name) else {
+            bail!(std::io::Error::from_raw_os_error(libc::ENOENT))
+        };
+        let Some(attr) = res else { return Ok(None) };
+        let _ = fs::ops::readdir::readdir_git_dir(fs, attr.ino.into());
+        return Ok(Some(attr));
+    };
     let repo = fs.get_repo(u64::from(parent))?;
     let v_node_opt = repo.with_ino_state(|s| s.vdir_cache.get(&parent).cloned());
     let Some(v_node) = v_node_opt else {

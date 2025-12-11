@@ -774,6 +774,93 @@ impl GitRepo {
         Ok(out)
     }
 
+    // 1, 2, 3, 4, 5, 6...
+    // -, 1, 2, 3, 4, 5...
+    pub fn build_index_for_vdir(
+        &self,
+        log: BTreeMap<OsString, (u64, ObjectAttr)>,
+    ) -> anyhow::Result<Vec<u8>> {
+        let mut last_object = Oid::zero();
+        let mut entries: Vec<Entry> = vec![];
+
+        struct Entry {
+            path: String,
+            hash: Oid,
+            mode: u32,
+        }
+
+        let mut objectattr = log
+            .values()
+            .map(|e| e.1.clone())
+            .collect::<Vec<ObjectAttr>>();
+        objectattr.sort_unstable_by(|a, b| a.name.cmp(&b.name));
+
+        for object in objectattr {
+            if last_object == Oid::zero() {
+                last_object = object.oid;
+                continue;
+            }
+            let Ok(path) = object.name.into_string() else {
+                continue;
+            };
+            let entry: Entry = Entry {
+                path,
+                hash: last_object,
+                mode: object.git_mode,
+            };
+            entries.push(entry);
+            last_object = object.oid;
+        }
+
+        entries.sort_by(|a, b| a.path.as_bytes().cmp(b.path.as_bytes()));
+
+        let mut out = vec![];
+
+        out.extend([b'D', b'I', b'R', b'C']);
+        out.extend(2_u32.to_be_bytes());
+        out.extend((entries.len() as u32).to_be_bytes());
+
+        for entry in &entries {
+            let mut e = Vec::<u8>::new();
+
+            e.extend_from_slice(&[0u8; 24]);
+
+            e.extend_from_slice(&entry.mode.to_be_bytes());
+
+            e.extend_from_slice(&[0u8; 12]);
+
+            e.extend_from_slice(entry.hash.as_bytes());
+
+            let path_bytes = entry.path.as_bytes();
+            let name_len = path_bytes.len();
+            let name_len_field = if name_len >= 0x0fff {
+                0x0fff
+            } else {
+                name_len as u16
+            };
+
+            #[allow(clippy::identity_op)]
+            let flags: u16 = (0b00u16 << 12) | name_len_field;
+
+            e.extend(flags.to_be_bytes());
+
+            e.extend_from_slice(path_bytes);
+            e.push(0u8);
+
+            let padding = (8 - (e.len() % 8)) % 8;
+            e.extend(vec![0u8; padding]);
+
+            out.extend_from_slice(&e);
+        }
+
+        let mut hasher = Sha1::new();
+        hasher.update(&out);
+        let checksum = hasher.finalize();
+        out.extend_from_slice(&checksum);
+
+        Ok(out)
+    }
+
     pub fn commit_to_objects(
         &self,
         commits: Vec<(String, Oid)>,

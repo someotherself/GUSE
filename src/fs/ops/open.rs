@@ -142,6 +142,33 @@ pub fn open_git(
             };
             fs.handles.open(handle)
         }
+        InoFlag::VirIndexFile => {
+            // TODO
+            let file = {
+                let repo = fs.get_repo(ino.into())?;
+                let first_parent: Inodes = fs.get_single_parent(ino.to_norm_u64())?.into();
+                let second_parent: Inodes = fs.get_single_parent(first_parent.into())?.into();
+                let Some(v_node) =
+                    repo.with_ino_state(|s| s.vdir_cache.get(&second_parent.to_virt()).cloned())
+                else {
+                    bail!(
+                        "Could not open VirtualIndex file for {}",
+                        second_parent.to_virt()
+                    );
+                };
+                let index = repo.build_index_for_vdir(v_node.log)?;
+                SourceTypes::Blob {
+                    oid: metadata.oid,
+                    data: index.into(),
+                }
+            };
+            let handle = Handle {
+                ino: ino.to_norm_u64(),
+                source: file,
+                write: false,
+            };
+            fs.handles.open(handle)
+        }
         InoFlag::InsideChase => {
             let file = {
                 let path = build_chase_path(fs, ino)?;

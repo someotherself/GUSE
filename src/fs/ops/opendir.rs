@@ -149,9 +149,10 @@ fn log_entries(
     let mut log_entries: BTreeMap<OsString, (u64, ObjectAttr)> = BTreeMap::new();
     let mut nodes: Vec<StorageNode> = Vec::with_capacity(entries.len());
     let mut count = 0_usize;
-    for e in entries {
+    for mut e in entries.clone().into_iter() {
         count += 1;
         let name = OsString::from(format!("{count:04}_{}{file_ext}", e.name.display()));
+        e.name = name.clone();
         let new_ino = match fs.exists_by_name(parent, &e.name)? {
             DbReturn::Found { value: ino } => ino,
             DbReturn::Missing => {
@@ -169,7 +170,6 @@ fn log_entries(
             }
             DbReturn::Negative => continue,
         };
-        // Format the name as 0001.<7char oid>.<orig file ext> (0001_e1ca722.txt)
         log_entries.insert(name, (new_ino, e));
     }
     fs.write_inodes_to_db(nodes)?;

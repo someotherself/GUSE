@@ -212,6 +212,8 @@ pub enum InoFlag {
     PrFolder = 1 << 19,
     BranchFolder = 1 << 20,
     IndexFile = 1 << 21,
+    VirIndexFile = 1 << 22,
+    VirDotGitRoot = 1 << 23,
 }
 impl InoFlag {
     pub const fn as_str(&self) -> &'static str {
@@ -238,6 +240,9 @@ impl InoFlag {
             InoFlag::PrFolder => "PrFolder",
             InoFlag::BranchFolder => "BranchFolder",
             InoFlag::IndexFile => "IndexFile",
+            // Used for creating the .git folder and index inside a VDIR
+            InoFlag::VirIndexFile => "VirIndexFile",
+            InoFlag::VirDotGitRoot => "VirDotGitRoot",
         }
     }
 }
@@ -274,6 +279,8 @@ impl TryFrom<u64> for InoFlag {
             x if x == InoFlag::PrFolder as u64 => Ok(InoFlag::PrFolder),
             x if x == InoFlag::BranchFolder as u64 => Ok(InoFlag::BranchFolder),
             x if x == InoFlag::IndexFile as u64 => Ok(InoFlag::IndexFile),
+            x if x == InoFlag::VirIndexFile as u64 => Ok(InoFlag::VirIndexFile),
+            x if x == InoFlag::VirDotGitRoot as u64 => Ok(InoFlag::VirDotGitRoot),
             _ => {
                 bail!("Unknown InoFlag valueL {v:#x}")
             }
