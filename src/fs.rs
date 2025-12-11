@@ -1916,7 +1916,7 @@ impl GitFs {
             return Ok(true);
         }
 
-        self.inode_exists(ino)
+        self.inode_exists(ino.into())
     }
 
     fn is_dir(&self, ino: Inodes) -> anyhow::Result<bool> {
@@ -2062,6 +2062,9 @@ impl GitFs {
         while let DbReturn::Found { value: dentry } = store.get_dentry(curr) {
             components.push(dentry.target_name);
             curr = dentry.parent_ino;
+            if curr == ROOT_INO {
+                break;
+            }
         }
         if components.is_empty() && target_ino != ROOT_INO {
             tracing::error!("Could not build path for {target_ino}");
@@ -2079,10 +2082,10 @@ impl GitFs {
         store.get_oid(ino).into()
     }
 
-    fn inode_exists(&self, ino: u64) -> anyhow::Result<bool> {
-        let repo = self.get_repo(ino)?;
+    fn inode_exists(&self, ino: NormalIno) -> anyhow::Result<bool> {
+        let repo = self.get_repo(ino.into())?;
         let store = &repo.ino_table;
-        Ok(store.is_active(ino))
+        Ok(store.is_active(ino.into()))
     }
 
     pub fn get_ino_flag_from_db(&self, ino: NormalIno) -> anyhow::Result<InoFlag> {

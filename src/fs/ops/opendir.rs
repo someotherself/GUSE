@@ -34,7 +34,7 @@ pub fn opendir_root(fs: &GitFs, ino: NormalIno) -> anyhow::Result<u64> {
 }
 
 pub fn opendir_repo(fs: &GitFs, ino: NormalIno) -> anyhow::Result<u64> {
-    if !fs.inode_exists(ino.into())? {
+    if !fs.inode_exists(ino)? {
         bail!(std::io::Error::from_raw_os_error(libc::ENOENT))
     };
     let iter = DirectoryStreamCookie {
@@ -54,7 +54,7 @@ pub fn opendir_repo(fs: &GitFs, ino: NormalIno) -> anyhow::Result<u64> {
 }
 
 pub fn opendir_live(fs: &GitFs, ino: NormalIno) -> anyhow::Result<u64> {
-    if !fs.inode_exists(ino.into())? {
+    if !fs.inode_exists(ino)? {
         bail!(std::io::Error::from_raw_os_error(libc::ENOENT))
     };
     let iter = DirectoryStreamCookie {
@@ -75,7 +75,7 @@ pub fn opendir_live(fs: &GitFs, ino: NormalIno) -> anyhow::Result<u64> {
 }
 
 pub fn opendir_git(fs: &GitFs, ino: NormalIno) -> anyhow::Result<u64> {
-    if !fs.inode_exists(ino.into())? {
+    if !fs.inode_exists(ino)? {
         bail!(std::io::Error::from_raw_os_error(libc::ENOENT))
     };
     let iter = DirectoryStreamCookie {
@@ -96,7 +96,7 @@ pub fn opendir_git(fs: &GitFs, ino: NormalIno) -> anyhow::Result<u64> {
 
 /// Saves the files in the GitRepo state, then prepares the handle so readdir can populate it
 pub fn opendir_vdir_file_commits(fs: &GitFs, ino: VirtualIno) -> anyhow::Result<u64> {
-    if !fs.inode_exists(ino.into())? {
+    if !fs.inode_exists(ino.to_norm())? {
         bail!(std::io::Error::from_raw_os_error(libc::ENOENT))
     };
 
