@@ -204,7 +204,6 @@ impl InodeTable {
 
         self.dentry_map.insert((node.parent_ino, node.name), ino);
         let idx = self.aloc_idx();
-        tracing::warn!("Creted idx: {idx}");
         *self.table[idx].write() = Some(inodedata);
         self.inodes_map.insert(ino, idx);
     }
