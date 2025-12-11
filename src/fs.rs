@@ -669,68 +669,6 @@ impl GitFs {
         Ok(repo)
     }
 
-    // pub fn init_meta_db<P: AsRef<Path>>(&self, db_path: P) -> anyhow::Result<()> {
-    //     let dbp = db_path.as_ref();
-
-    //     if dbp.exists() {
-    //         std::fs::remove_file(dbp)?;
-    //         let wal = dbp.with_extension(format!(
-    //             "{}-wal",
-    //             dbp.extension().and_then(|s| s.to_str()).unwrap_or("")
-    //         ));
-    //         let shm = dbp.with_extension(format!(
-    //             "{}-shm",
-    //             dbp.extension().and_then(|s| s.to_str()).unwrap_or("")
-    //         ));
-    //         let _ = std::fs::remove_file(dbp.with_extension("db-wal"));
-    //         let _ = std::fs::remove_file(dbp.with_extension("db-shm"));
-    //         let _ = std::fs::remove_file(wal);
-    //         let _ = std::fs::remove_file(shm);
-    //     }
-
-    //     let conn = rusqlite::Connection::open(dbp)?;
-
-    //     set_conn_rw_pragmas(&conn)?;
-
-    //     conn.execute_batch(
-    //         r#"
-    //             CREATE TABLE IF NOT EXISTS inode_map (
-    //                 inode        INTEGER PRIMARY KEY,
-    //                 oid          TEXT    NOT NULL,
-    //                 kind         INTEGER NOT NULL,
-    //                 size         INTEGER NOT NUll,
-    //                 inode_flag   INTEGER NOT NUll,
-    //                 uid          INTEGER NOT NULL,
-    //                 gid          INTEGER NOT NULL,
-    //                 atime_secs   INTEGER NOT NULL,
-    //                 atime_nsecs  INTEGER NOT NULL,
-    //                 mtime_secs   INTEGER NOT NULL,
-    //                 mtime_nsecs  INTEGER NOT NULL,
-    //                 ctime_secs   INTEGER NOT NULL,
-    //                 ctime_nsecs  INTEGER NOT NULL,
-    //                 nlink        INTEGER NOT NULL,
-    //                 rdev         INTEGER NOT NULL,
-    //                 flags        INTEGER NOT NULL
-    //             );
-
-    //             CREATE TABLE IF NOT EXISTS dentries (
-    //             parent_inode INTEGER NOT NULL,
-    //             target_inode INTEGER NOT NULL,
-    //             name         BLOB    NOT NULL,
-    //             is_active    INTEGER NOT NULL,
-    //             PRIMARY KEY (parent_inode, name),
-    //             FOREIGN KEY (parent_inode) REFERENCES inode_map(inode) ON DELETE RESTRICT,
-    //             FOREIGN KEY (target_inode) REFERENCES inode_map(inode) ON DELETE RESTRICT
-    //             ) WITHOUT ROWID;
-
-    //             CREATE INDEX IF NOT EXISTS dentries_by_target ON dentries(target_inode);
-    //             CREATE INDEX IF NOT EXISTS dentries_by_parent ON dentries(parent_inode);
-    //             CREATE INDEX IF NOT EXISTS dentries_active_by_target ON dentries(target_inode) WHERE is_active = 1;
-    //         "#,
-    //     )?;
-    //     Ok(())
-    // }
-
     #[instrument(level = "debug", skip(self), fields(ino = %ino), ret(level = Level::DEBUG), err(Display))]
     pub fn open(&self, ino: u64, read: bool, write: bool, truncate: bool) -> anyhow::Result<u64> {
         let ino: Inodes = ino.into();
@@ -1816,7 +1754,7 @@ impl GitFs {
         if let DbReturn::Found { value: parents } = store.get_all_parents(ino) {
             return Ok(parents);
         }
-        bail!("DB: no parent found for ino={ino}")
+        bail!("Storage: no parent found for ino={ino}")
     }
 
     pub fn get_single_parent(&self, ino: u64) -> anyhow::Result<u64> {
@@ -1825,7 +1763,7 @@ impl GitFs {
         if let DbReturn::Found { value: parents } = store.get_all_parents(ino) {
             return Ok(parents[0]);
         }
-        bail!("DB: no parent found for ino={ino}")
+        bail!("Storage: no parent found for ino={ino}")
     }
 
     #[inline]
