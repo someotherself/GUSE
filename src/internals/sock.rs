@@ -138,10 +138,7 @@ fn handle_client(
                     return Ok(ControlRes::Ok);
                 };
                 let repo_path = fs.repos_dir.join(name);
-                if repo_path.exists() {
-                    std::fs::remove_dir_all(&repo_path)?;
-                }
-                fs.delete_repo(name)?;
+                let _ = std::fs::remove_dir_all(&repo_path);
                 stream.update(&format!("Removed repo at {}\n", repo_path.display()))?;
                 Ok(ControlRes::Ok)
             }

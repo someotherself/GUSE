@@ -320,10 +320,11 @@ impl GitFs {
         for entry in repos_dir.read_dir()? {
             let entry = entry?;
             let repo_name_os = entry.file_name();
-            let repo_name = repo_name_os.to_str().context("Not a valid UTF-8 name")?;
+            let Some(repo_name) = repo_name_os.to_str() else {
+                continue;
+            };
             let repo_path = entry.path();
-            // TODO: Allow orphaned repos?
-            if !repo_path.join(META_STORE).exists() {
+            if !repo_path.join(LIVE_FOLDER).exists() && !repo_path.join(CHASE_FOLDER).exists() {
                 continue;
             }
             fs.load_repo(repo_name)?;
@@ -1543,7 +1544,7 @@ impl GitFs {
     }
 
     pub fn delete_repo(&self, repo_name: &str) -> anyhow::Result<()> {
-        if let Some(repo_id) = self.repos_map.get(repo_name) {
+        if let Some(repo_id) = self.repos_map.get(repo_name).map(|e| *e.value()) {
             self.repos_list.remove(&repo_id);
         } else {
             bail!(std::io::Error::from_raw_os_error(libc::EINVAL))
