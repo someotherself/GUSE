@@ -169,9 +169,12 @@ impl InodeTable {
         }
     }
 
-    // TODO: Make this an option
     fn aloc_idx(&self) -> usize {
-        self.next_idx.fetch_add(1, SeqCst) as usize
+        let idx = self.next_idx.fetch_add(1, SeqCst) as usize;
+        if idx >= TABLE_SIZE {
+            panic!("Reached max INODE Number");
+        }
+        idx
     }
 
     pub fn remove_inode(&self, target_ino: u64) {
@@ -201,6 +204,7 @@ impl InodeTable {
 
         self.dentry_map.insert((node.parent_ino, node.name), ino);
         let idx = self.aloc_idx();
+        tracing::warn!("Creted idx: {idx}");
         *self.table[idx].write() = Some(inodedata);
         self.inodes_map.insert(ino, idx);
     }
