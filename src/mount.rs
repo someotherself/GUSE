@@ -126,6 +126,7 @@ fn try_force_unmount(mountpoint: &Path) {
     {
         let _ = std::process::Command::new("fusermount")
             .arg("-u")
+            .arg("-q")
             .arg(mountpoint)
             .status();
     }
