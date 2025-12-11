@@ -43,7 +43,7 @@ impl<T> DbReturn<T> {
     }
 
     /// ONLY USE FOR TESTS
-    pub fn try_unwrap(self) -> T {
+    pub fn unwrap(self) -> T {
         match self {
             DbReturn::Found { value } => value,
             DbReturn::Missing => panic!("Called try_unwwap on a missing entry"),
@@ -227,7 +227,7 @@ impl InodeTable {
         }
     }
 
-    pub fn remove_dentry(&self, parent_ino: ParId, target_name: &OsStr, open_handles: bool) {
+    pub fn remove_dentry(&self, parent_ino: u64, target_name: &OsStr, open_handles: bool) {
         if let Some((key, target_ino)) = self
             .dentry_map
             .remove(&(parent_ino, target_name.to_os_string()))
@@ -240,7 +240,7 @@ impl InodeTable {
         }
     }
 
-    pub fn set_inactive(&self, parent_ino: ParId, target_name: &OsStr) -> Option<usize> {
+    pub fn set_inactive(&self, parent_ino: u64, target_name: &OsStr) -> Option<usize> {
         let target_ino = self
             .dentry_map
             .get(&(parent_ino, target_name.to_os_string()))
@@ -274,16 +274,7 @@ impl InodeTable {
         None
     }
 
-    pub fn update_size(&self, target_ino: InoId, size: u64) {
-        if let Some(id_entry) = self.inodes_map.get(&target_ino) {
-            let idx = id_entry.value();
-            if let Some(entry) = self.table[*idx].read().as_ref() {
-                entry.metadata.size.store(size, SeqCst);
-            }
-        }
-    }
-
-    pub fn get_size(&self, target_ino: InoId) -> DbReturn<u64> {
+    pub fn get_size(&self, target_ino: u64) -> DbReturn<u64> {
         if let Some(id_entry) = self.inodes_map.get(&target_ino) {
             let idx = id_entry.value();
             if let Some(entry) = self.table[*idx].read().as_ref() {
@@ -294,7 +285,7 @@ impl InodeTable {
         DbReturn::Missing
     }
 
-    pub fn set_size(&self, target_ino: InoId, size: u64) {
+    pub fn set_size(&self, target_ino: u64, size: u64) {
         if let Some(id_entry) = self.inodes_map.get(&target_ino) {
             let idx = id_entry.value();
             if let Some(entry) = self.table[*idx].read().as_ref() {
