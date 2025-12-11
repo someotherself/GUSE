@@ -697,7 +697,8 @@ impl GitRepo {
     pub fn build_index_for_snap(&self, commit_oid: Oid) -> anyhow::Result<Vec<u8>> {
         let repo = self.inner.lock();
         let commit = repo.find_commit(commit_oid)?;
-        let p_commit = commit.parent(0)?;
+        // If commit is initial commit, there will be no parent
+        let p_commit = commit.parent(0).unwrap_or(commit.clone());
         let tree = if commit.parent(1).is_ok() {
             commit.tree()?
         } else {
