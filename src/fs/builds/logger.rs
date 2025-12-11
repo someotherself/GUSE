@@ -151,7 +151,7 @@ impl<'a, R: Updater> ChaseRunner<'a, R> {
             }
             drop(tx);
 
-            while let Ok(line) = rx.recv_timeout(Duration::from_secs(5)) {
+            while let Ok(line) = rx.recv() {
                 out_lines.push(line.clone());
                 let _ = self.report(str::from_utf8(&line.line).unwrap());
                 let status = self
