@@ -572,11 +572,10 @@ impl InodeTable {
                 if build_dir && inodedata.metadata.ino_flag != InoFlag::InsideBuild {
                     continue;
                 };
-                let name = if !inodedata.dentry.is_empty() {
-                    inodedata.dentry[0].name.clone()
-                } else {
+                if inodedata.dentry.is_empty() {
                     continue;
                 };
+                let name = entry.key().1.clone();
                 let entry = DirectoryEntry {
                     ino: *target,
                     oid: inodedata.metadata.oid,
