@@ -5,7 +5,7 @@ use std::{
     ops::Deref,
     path::Path,
     process::{Command, ExitStatus},
-    time::{Duration, SystemTime, UNIX_EPOCH},
+    time::{SystemTime, UNIX_EPOCH},
 };
 
 use crate::fs::builds::{

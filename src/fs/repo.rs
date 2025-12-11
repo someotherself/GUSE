@@ -775,8 +775,6 @@ impl GitRepo {
         Ok(out)
     }
 
-    // 1, 2, 3, 4, 5, 6...
-    // -, 1, 2, 3, 4, 5...
     pub fn build_index_for_vdir(
         &self,
         log: BTreeMap<OsString, (u64, ObjectAttr)>,

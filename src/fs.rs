@@ -817,7 +817,7 @@ impl GitFs {
         let Some(ino) = self.handles.exists(fh) else {
             return Ok(false);
         };
-        if self.is_active(ino)? && self.handles.close(fh)? {
+        if self.handles.close(fh)? && !self.is_active(ino)? {
             // Entry was remove while it had open file handles
             // Remove it now
             let repo = self.get_repo(ino)?;
@@ -1720,9 +1720,9 @@ impl GitFs {
         }
     }
 
-    /// Used to Handles
+    /// Used bu `release`
     ///
-    /// When releasing a filehandle, check if the inode can safely be deleted from storage
+    /// When releasing a filehandle, returns true if the inode can safely be deleted from storage
     pub fn is_active(&self, target_ino: u64) -> anyhow::Result<bool> {
         if target_ino == ROOT_INO {
             return Ok(true);
@@ -1903,7 +1903,13 @@ impl GitFs {
     fn remove_db_dentry(&self, parent_ino: NormalIno, target_name: &OsStr) -> anyhow::Result<()> {
         let repo = self.get_repo(parent_ino.into())?;
         let store = &repo.ino_table;
-        store.set_inactive(parent_ino.into(), target_name);
+        let DbReturn::Found { value: target_ino } =
+            self.exists_by_name(parent_ino.into(), target_name)?
+        else {
+            bail!(std::io::Error::from_raw_os_error(libc::ENOENT));
+        };
+        let open_fh = self.handles.check_open_handle(target_ino);
+        store.remove_dentry(parent_ino.into(), target_name, open_fh);
         Ok(())
     }
 

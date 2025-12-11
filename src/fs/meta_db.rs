@@ -11,7 +11,7 @@ use std::{
 use anyhow::bail;
 use dashmap::DashMap;
 use git2::Oid;
-use parking_lot::RwLock;
+use parking_lot::{Mutex, RwLock};
 
 use crate::fs::{
     fileattr::{
@@ -154,6 +154,7 @@ pub struct InodeTable {
     dentry_map: DashMap<(ParId, OsString), InoId>,
     table: Vec<RwLock<Option<InodeData>>>,
     next_idx: AtomicU32,
+    free: Mutex<Vec<InoIdx>>,
 }
 
 impl InodeTable {
@@ -166,11 +167,15 @@ impl InodeTable {
             dentry_map: DashMap::new(),
             table,
             next_idx: AtomicU32::new(0),
+            free: Mutex::new(Vec::new()),
         }
     }
 
     fn aloc_idx(&self) -> usize {
-        let idx = self.next_idx.fetch_add(1, SeqCst) as usize;
+        let idx = match self.free.lock().pop() {
+            Some(i) => i,
+            None => self.next_idx.fetch_add(1, SeqCst) as usize,
+        };
         if idx >= TABLE_SIZE {
             panic!("Reached max INODE Number");
         }
@@ -180,7 +185,8 @@ impl InodeTable {
     pub fn remove_inode(&self, target_ino: u64) {
         if let Some(idx_entry) = self.inodes_map.get(&target_ino) {
             let idx = idx_entry.value();
-            *self.table[*idx].write() = None
+            *self.table[*idx].write() = None;
+            self.free.lock().push(*idx);
         }
     }
 
@@ -231,18 +237,22 @@ impl InodeTable {
     }
 
     pub fn remove_dentry(&self, parent_ino: u64, target_name: &OsStr, open_handles: bool) {
-        if let Some((key, target_ino)) = self
+        if let Some(target_ino) = self
             .dentry_map
-            .remove(&(parent_ino, target_name.to_os_string()))
-            && let Some(active_dentries) = self.set_inactive(key.0, &key.1)
+            .get(&(parent_ino, target_name.to_os_string()))
+            .map(|e| *e.value())
+            && let Some(active_dentries) = self.set_inactive(parent_ino, target_name)
             && active_dentries == 0
             && !open_handles
         {
             self.remove_inode(target_ino);
-            self.inodes_map.remove(&key.0);
+            self.inodes_map.remove(&target_ino);
         }
     }
 
+    /// Sets a dentry as inactive (negative)
+    ///
+    /// Removes it from the `dentry_map` and from `InodeData.dentry`
     pub fn set_inactive(&self, parent_ino: u64, target_name: &OsStr) -> Option<usize> {
         let target_ino = self
             .dentry_map
@@ -259,17 +269,14 @@ impl InodeTable {
                     self.dentry_map
                         .remove(&(parent_ino, target_name.to_os_string()));
                     return Some(0);
-                } else {
-                    if let Some(pos) = map
-                        .dentry
-                        .iter()
-                        .position(|e| e.name == target_name && e.parent_ino == parent_ino)
-                    {
-                        self.dentry_map
-                            .remove(&(parent_ino, target_name.to_os_string()));
-                        map.dentry.remove(pos);
-                    }
-                    return Some(map.dentry.len());
+                } else if let Some(pos) = map
+                    .dentry
+                    .iter()
+                    .position(|e| e.name == target_name && e.parent_ino == parent_ino)
+                {
+                    self.dentry_map
+                        .remove(&(parent_ino, target_name.to_os_string()));
+                    map.dentry.remove(pos);
                 }
             }
             return None;
