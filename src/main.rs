@@ -335,14 +335,7 @@ fn run_mount(matches: &ArgMatches) -> anyhow::Result<()> {
         disable_socket,
     );
 
-    let bg = match guse::mount::mount_fuse(mount_point) {
-        Ok(bg) => bg,
-        Err(e) => {
-            tracing::error!("Failed to mount: {e:?}");
-            return Err(e);
-        }
-    };
-    bg.join();
+    guse::mount::mount_fuse(mount_point)?;
 
     Ok(())
 }

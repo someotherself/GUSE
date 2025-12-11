@@ -63,7 +63,7 @@ impl MountPoint {
     }
 }
 
-pub fn mount_fuse(opts: MountPoint) -> anyhow::Result<fuser::BackgroundSession> {
+pub fn mount_fuse(opts: MountPoint) -> anyhow::Result<()> {
     let MountPoint {
         mountpoint,
         repos_dir,
@@ -104,9 +104,9 @@ pub fn mount_fuse(opts: MountPoint) -> anyhow::Result<fuser::BackgroundSession> 
         notif.clone(),
     )?;
 
-    let session = fuser::Session::new(fs.clone(), &mountpoint, &options)?;
-    let bg = session.spawn()?;
-    let nofitfier = bg.notifier();
+    let mut session = fuser::Session::new(fs.clone(), &mountpoint, &options)?;
+    let notifier = session.notifier();
+    let _ = notif.set(notifier);
 
     if !disable_socket {
         let socket_path = socket_path()?;
@@ -117,7 +117,8 @@ pub fn mount_fuse(opts: MountPoint) -> anyhow::Result<fuser::BackgroundSession> 
         )?;
     }
 
-    Ok(bg)
+    session.run()?;
+    Ok(())
 }
 
 fn try_force_unmount(mountpoint: &Path) {
