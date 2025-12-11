@@ -32,8 +32,6 @@ pub struct Dentry {
     pub target_ino: u64,
     pub parent_ino: u64,
     pub target_name: OsString,
-    /// Is this entry active or marked for deletion?
-    pub is_active: bool,
 }
 
 #[derive(Clone, Debug)]

@@ -69,6 +69,7 @@ impl From<ObjectAttr> for DirectoryEntry {
     }
 }
 
+#[derive(Debug)]
 pub struct BuildCtxMetadata {
     pub kind: FileType,
     pub oid: Oid,
@@ -379,7 +380,7 @@ fn populate_entries_by_path(
             }
             _ => continue,
         };
-        fs.write_inodes_to_cache(ino.into(), nodes)?;
+        fs.write_inodes_to_db(nodes)?;
         let entry = DirectoryEntry::new(entry_ino, Oid::zero(), node_name, kind);
         out.push(entry);
     }

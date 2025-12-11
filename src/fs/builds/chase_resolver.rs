@@ -518,7 +518,7 @@ fn remove_dir_all(fs: &GitFs, parent: u64) -> anyhow::Result<()> {
     for (par, name) in dirs.into_iter().rev() {
         fs.rmdir(par, &name)?;
     }
-    let par_parent = fs.get_dir_parent(parent)?;
+    let par_parent = fs.get_single_parent(parent)?;
     let par_name = fs.get_name_from_db(parent)?;
     fs.rmdir(par_parent, &par_name)?;
     Ok(())

@@ -100,7 +100,7 @@ impl ChaseHandle {
 
     pub fn deregister_chase_id(id: ChaseId) -> CmdResult<()> {
         let Some(map) = CHASE_STOP_FLAGS.get() else {
-            return CmdResult::Err(format!("Chade Id: {} does not exist", id));
+            return CmdResult::Err(format!("Chase Id: {} does not exist", id));
         };
         map.lock().remove(&id);
         CmdResult::Ok(())

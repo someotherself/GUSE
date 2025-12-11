@@ -635,7 +635,7 @@ mod test {
 
         lru.insert(1, attr);
         lru.with_get_mut(&1, |a| a.size = 12);
-        let attr = lru.get(&1).try_unwrap();
+        let attr = lru.get(&1).unwrap();
         assert_eq!(attr.size, 12);
     }
 }

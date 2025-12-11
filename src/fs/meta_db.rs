@@ -1,29 +1,27 @@
 use std::{
-    collections::HashSet,
     ffi::{OsStr, OsString},
     fmt::Debug,
-    os::unix::ffi::{OsStrExt, OsStringExt},
-    path::{Path, PathBuf},
-};
-
-use anyhow::{Context, anyhow, bail};
-use crossbeam_channel::{Receiver, Sender};
-use git2::Oid;
-use r2d2::Pool;
-use r2d2_sqlite::SqliteConnectionManager;
-use rusqlite::{OpenFlags, OptionalExtension, TransactionBehavior, params};
-
-use crate::{
-    fs::{
-        ROOT_INO,
-        fileattr::{
-            Dentry, FileAttr, FileType, InoFlag, SetFileAttr, StorageNode, pair_to_system_time,
-            system_time_to_pair,
-        },
-        ops::readdir::{BuildCtxMetadata, DirectoryEntry},
+    sync::atomic::{
+        AtomicI32, AtomicI64, AtomicU32, AtomicU64,
+        Ordering::{Relaxed, SeqCst},
     },
-    inodes::NormalIno,
+    time::SystemTime,
 };
+
+use anyhow::bail;
+use dashmap::DashMap;
+use git2::Oid;
+use parking_lot::RwLock;
+
+use crate::fs::{
+    fileattr::{
+        Dentry, FileAttr, FileType, InoFlag, SetFileAttr, StorageNode, dir_attr,
+        pair_to_system_time, system_time_to_pair,
+    },
+    ops::readdir::{BuildCtxMetadata, DirectoryEntry},
+};
+
+const TABLE_SIZE: usize = 250_000;
 
 #[derive(Debug)]
 pub enum DbReturn<U> {
@@ -45,7 +43,7 @@ impl<T> DbReturn<T> {
     }
 
     /// ONLY USE FOR TESTS
-    pub fn try_unwrap(self) -> T {
+    pub fn unwrap(self) -> T {
         match self {
             DbReturn::Found { value } => value,
             DbReturn::Missing => panic!("Called try_unwwap on a missing entry"),
@@ -75,16 +73,6 @@ impl<U> From<Option<U>> for DbReturn<U> {
     }
 }
 
-impl From<Dentry> for DbReturn<Dentry> {
-    fn from(value: Dentry) -> DbReturn<Dentry> {
-        if value.is_active {
-            DbReturn::Found { value }
-        } else {
-            DbReturn::Negative
-        }
-    }
-}
-
 impl<U: Debug> From<DbReturn<U>> for anyhow::Result<U> {
     fn from(value: DbReturn<U>) -> Self {
         match value {
@@ -96,1502 +84,540 @@ impl<U: Debug> From<DbReturn<U>> for anyhow::Result<U> {
     }
 }
 
-pub struct MetaDb {
-    pub ro_pool: Pool<SqliteConnectionManager>,
-    pub writer_tx: Sender<DbWriteMsg>,
-}
+// Target Inode
+type InoId = u64;
+// A parent Inode
+type ParId = u64;
+// The index of a Target Inode (InoId) in table
+type InoIdx = usize;
 
-// https://github.com/the-lean-crate/criner/issues/1#issue-577429787
-pub fn set_conn_ro_pragmas(conn: &rusqlite::Connection) -> rusqlite::Result<()> {
-    conn.execute_batch(
-        r#"
-        PRAGMA synchronous=NORMAL;
-        PRAGMA foreign_keys=ON;
-        PRAGMA temp_store=MEMORY;
-        PRAGMA journal_size_limit = 67108864; -- 64 megabytes
-        PRAGMA mmap_size = 134217728; -- 128 megabytes
-        PRAGMA cache_size=-20000;
-        PRAGMA wal_autocheckpoint=1000;
-        PRAGMA read_uncommitted=OFF;
-        PRAGMA busy_timeout = 5000
-    "#,
-    )?;
+impl FileAttr {
+    pub fn into_storage(self, name: &OsStr, parent_ino: u64) -> InodeData {
+        let (atime_secs, atime_nanos) = system_time_to_pair(self.atime);
+        let (mtime_secs, mtime_nanos) = system_time_to_pair(self.mtime);
 
-    Ok(())
-}
+        let metadata: StoreAttr = StoreAttr {
+            ino: self.ino as InoId,
+            oid: self.oid,
+            ino_flag: self.ino_flag,
+            size: AtomicU64::new(self.size),
+            atime_secs: AtomicI64::new(atime_secs),
+            atime_nanos: AtomicI32::new(atime_nanos),
+            mtime_secs: AtomicI64::new(mtime_secs),
+            mtime_nanos: AtomicI32::new(mtime_nanos),
+            kind: self.kind,
+            perm: self.perm,
+            uid: self.uid,
+            gid: self.gid,
+        };
 
-pub fn set_conn_rw_pragmas(conn: &rusqlite::Connection) -> rusqlite::Result<()> {
-    conn.pragma_update(None, "journal_mode", "WAL")?;
-
-    conn.execute_batch(
-        r#"
-        PRAGMA synchronous=NORMAL;
-        PRAGMA foreign_keys=ON;
-        PRAGMA temp_store=MEMORY;
-        PRAGMA journal_size_limit = 67108864; -- 64 megabytes
-        PRAGMA mmap_size = 134217728; -- 128 megabytes
-        PRAGMA cache_size=-20000;
-        PRAGMA wal_autocheckpoint=1000;
-        PRAGMA read_uncommitted=OFF;
-        PRAGMA busy_timeout = 5000
-    "#,
-    )?;
-
-    Ok(())
-}
-
-pub fn new_repo_db<P: AsRef<Path>>(db_path: P) -> anyhow::Result<std::sync::Arc<MetaDb>> {
-    let ro_mgr = SqliteConnectionManager::file(&db_path)
-        .with_flags(OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_URI)
-        .with_init(|c| set_conn_ro_pragmas(c));
-
-    let ro_pool = Pool::builder()
-        .max_size(num_cpus::get() as u32 * 2)
-        .min_idle(Some(2))
-        .build(ro_mgr)?;
-
-    let writer = rusqlite::Connection::open(&db_path)?;
-    set_conn_rw_pragmas(&writer)?;
-
-    let (writer_tx, _) = spawn_repo_writer(db_path.as_ref().to_path_buf())?;
-
-    Ok(std::sync::Arc::new(MetaDb { ro_pool, writer_tx }))
-}
-
-pub type Resp<T> = crossbeam_channel::Sender<anyhow::Result<T>>;
-
-/// Creates a one-shot channel for sending a single `anyhow::Result<T>` response.
-///
-/// Returns a `(Sender, Receiver)` pair backed by a bounded crossbeam channel of size 1.
-pub fn oneshot<T>() -> (Resp<T>, crossbeam_channel::Receiver<anyhow::Result<T>>) {
-    crossbeam_channel::bounded(1)
-}
-
-pub enum DbWriteMsg {
-    EnsureRoot {
-        resp: Resp<()>,
-    },
-    WriteDentry {
-        dentry: Dentry,
-        resp: Option<Resp<()>>,
-    },
-    WriteInodes {
-        nodes: Vec<StorageNode>,
-        resp: Option<Resp<()>>,
-    },
-    UpdateMetadata {
-        attr: SetFileAttr,
-        resp: Option<Resp<()>>,
-    },
-    UpdateSize {
-        ino: NormalIno,
-        size: u64,
-        resp: Option<Resp<()>>,
-    },
-    UpdateRecord {
-        old_parent: NormalIno,
-        old_name: OsString,
-        node: StorageNode,
-        resp: Option<Resp<()>>,
-    },
-    RemoveDentry {
-        parent_ino: NormalIno,
-        target_name: OsString,
-        resp: Option<Resp<()>>,
-    },
-    CleanupEntry {
-        target_ino: NormalIno,
-        resp: Option<Resp<()>>,
-    },
-    SetNegative {
-        parent_ino: NormalIno,
-        target_name: OsString,
-        resp: Option<Resp<()>>,
-    },
-    CleanNegative {
-        entries: Vec<(u64, u64, OsString)>,
-        resp: Option<Resp<()>>,
-    },
-    UpdateOid {
-        targets: Vec<u64>,
-        oid: Oid,
-        resp: Option<Resp<()>>,
-    },
-}
-
-fn spawn_repo_writer(
-    db_path: PathBuf,
-) -> anyhow::Result<(Sender<DbWriteMsg>, std::thread::JoinHandle<()>)> {
-    let (tx, rx): (Sender<DbWriteMsg>, Receiver<DbWriteMsg>) = crossbeam_channel::unbounded();
-    let handle = std::thread::Builder::new()
-        .name(format!("db-writer-{}", db_path.display()))
-        .spawn(move || {
-            let mut conn = match rusqlite::Connection::open(&db_path) {
-                Ok(c) => c,
-                Err(e) => {
-                    tracing::error!("Writer open failed: {e}");
-                    return;
-                }
-            };
-            if let Err(e) = set_conn_rw_pragmas(&conn) {
-                tracing::error!("Writer PRAGMA failed: {e}");
-                return;
-            }
-
-            while let Ok(first) = rx.recv() {
-                if let Err(e) = (|| -> anyhow::Result<()> {
-                    let tx_sql = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
-
-                    let mut acks: Vec<crossbeam_channel::Sender<anyhow::Result<()>>> = Vec::new();
-
-                    apply_msg(&tx_sql, first, &mut acks)?;
-
-                    for _ in 0..80 {
-                        match rx.try_recv() {
-                            Ok(m) => apply_msg(&tx_sql, m, &mut acks)?,
-                            Err(crossbeam_channel::TryRecvError::Empty) => break,
-                            Err(crossbeam_channel::TryRecvError::Disconnected) => break,
-                        }
-                    }
-
-                    tx_sql.commit()?;
-
-                    for r in acks {
-                        let _ = r.send(Ok(()));
-                    }
-                    Ok(())
-                })() {
-                    tracing::error!("Writer failed: {e}");
-                }
-            }
-        })?;
-
-    Ok((tx, handle))
-}
-
-fn apply_msg<C>(
-    conn: &C,
-    msg: DbWriteMsg,
-    results: &mut Vec<crossbeam_channel::Sender<anyhow::Result<()>>>,
-) -> anyhow::Result<()>
-where
-    C: std::ops::Deref<Target = rusqlite::Connection>,
-{
-    match msg {
-        DbWriteMsg::EnsureRoot { resp } => {
-            MetaDb::ensure_root(conn).map(|_| ())?;
-            results.push(resp);
-            Ok(())
-        }
-        DbWriteMsg::WriteDentry { dentry, resp } => {
-            let res = MetaDb::write_dentry(conn, dentry);
-            match resp {
-                Some(tx) => {
-                    results.push(tx);
-                    Ok(())
-                }
-                None => {
-                    if let Err(e) = &res {
-                        tracing::warn!("db write_dentry failed: {e}");
-                    }
-                    Ok(())
-                }
-            }
-        }
-        DbWriteMsg::WriteInodes { nodes, resp } => {
-            let res = MetaDb::write_inodes_to_db(conn, nodes);
-            match resp {
-                Some(tx) => {
-                    results.push(tx);
-                    Ok(())
-                }
-                None => {
-                    if let Err(e) = &res {
-                        tracing::warn!("db write_inodes_to_db failed: {e}");
-                    }
-                    Ok(())
-                }
-            }
-        }
-        DbWriteMsg::UpdateMetadata { attr, resp } => {
-            let res = MetaDb::update_inodes_table(conn, attr);
-            match resp {
-                Some(tx) => {
-                    results.push(tx);
-                    Ok(())
-                }
-                None => {
-                    if let Err(e) = &res {
-                        tracing::warn!("db write_inodes_to_db failed: {e}");
-                    }
-                    Ok(())
-                }
-            }
-        }
-        DbWriteMsg::UpdateSize { ino, size, resp } => {
-            let res = MetaDb::update_size_in_db(conn, ino.into(), size);
-            match resp {
-                Some(tx) => {
-                    results.push(tx);
-                    Ok(())
-                }
-                None => {
-                    if let Err(e) = &res {
-                        tracing::warn!("db update_size_in_db failed: {e}");
-                    }
-                    Ok(())
-                }
-            }
-        }
-        DbWriteMsg::UpdateRecord {
-            old_parent,
-            old_name,
-            node,
-            resp,
-        } => {
-            let res = MetaDb::update_db_record(conn, old_parent.into(), &old_name, node);
-            match resp {
-                Some(tx) => {
-                    results.push(tx);
-                    Ok(())
-                }
-                None => {
-                    if let Err(e) = &res {
-                        tracing::warn!("db update_db_record failed: {e}");
-                    }
-                    Ok(())
-                }
-            }
-        }
-        DbWriteMsg::RemoveDentry {
+        let entry: Entry = Entry {
+            name: name.to_os_string(),
             parent_ino,
-            target_name,
-            resp,
-        } => {
-            let _ = MetaDb::remove_db_dentry(conn, parent_ino.into(), &target_name);
-            match resp {
-                Some(tx) => {
-                    results.push(tx);
-                    Ok(())
-                }
-                None => Ok(()),
-            }
-        }
-        DbWriteMsg::CleanupEntry { target_ino, resp } => {
-            let _ = MetaDb::cleanup_dentry(conn, target_ino.into());
-            match resp {
-                Some(tx) => {
-                    results.push(tx);
-                    Ok(())
-                }
-                None => Ok(()),
-            }
-        }
-        DbWriteMsg::SetNegative {
-            parent_ino,
-            target_name,
-            resp,
-        } => {
-            let res = MetaDb::set_entry_negative(conn, parent_ino.into(), &target_name);
-            match resp {
-                Some(tx) => {
-                    results.push(tx);
-                    Ok(())
-                }
-                None => {
-                    if let Err(e) = &res {
-                        tracing::warn!("db set_negative failed: {e}");
-                    }
-                    Ok(())
-                }
-            }
-        }
-        DbWriteMsg::CleanNegative { entries, resp } => {
-            let res = MetaDb::cleanup_neg_entries(conn, &entries);
-            match resp {
-                Some(tx) => {
-                    results.push(tx);
-                    Ok(())
-                }
-                None => {
-                    if let Err(e) = &res {
-                        tracing::warn!("db clean negative failed: {e}");
-                    }
-                    Ok(())
-                }
-            }
-        }
-        DbWriteMsg::UpdateOid { targets, oid, resp } => {
-            let res = MetaDb::update_oids(conn, &targets, oid);
-            match resp {
-                Some(tx) => {
-                    results.push(tx);
-                    Ok(())
-                }
-                None => {
-                    if let Err(e) = &res {
-                        tracing::warn!("db update_oids failed: {e}");
-                    }
-                    Ok(())
-                }
-            }
+        };
+
+        InodeData {
+            metadata,
+            dentry: vec![entry],
         }
     }
 }
 
-impl MetaDb {
-    pub fn write_inodes_to_db<C>(tx: &C, nodes: Vec<StorageNode>) -> anyhow::Result<()>
-    where
-        C: std::ops::Deref<Target = rusqlite::Connection>,
-    {
-        let mut upsert_inode = tx.prepare(
-            r#"
-        INSERT INTO inode_map
-            (inode, oid, kind, size, inode_flag,
-             uid, gid, nlink,
-             atime_secs, atime_nsecs,
-             mtime_secs, mtime_nsecs,
-             ctime_secs, ctime_nsecs,
-             rdev, flags)
-        VALUES
-            (?1, ?2, ?3, ?4, ?5,
-             ?6, ?7, 0,
-             ?8, ?9,
-             ?10, ?11,
-             ?12, ?13,
-             ?14, ?15)
-        ON CONFLICT(inode) DO UPDATE SET
-            oid         = excluded.oid,
-            kind        = excluded.kind,
-            size        = excluded.size,
-            inode_flag  = excluded.inode_flag,
-            uid         = excluded.uid,
-            gid         = excluded.gid,
-            atime_secs  = excluded.atime_secs,
-            atime_nsecs = excluded.atime_nsecs,
-            mtime_secs  = excluded.mtime_secs,
-            mtime_nsecs = excluded.mtime_nsecs,
-            ctime_secs  = excluded.ctime_secs,
-            ctime_nsecs = excluded.ctime_nsecs,
-            rdev        = excluded.rdev,
-            flags       = excluded.flags
-        ;
-        "#,
-        )?;
+pub struct StoreAttr {
+    pub ino: InoId,
+    pub ino_flag: InoFlag,
+    pub oid: Oid,
+    pub size: AtomicU64,
+    pub atime_secs: AtomicI64,
+    pub atime_nanos: AtomicI32,
+    pub mtime_secs: AtomicI64,
+    pub mtime_nanos: AtomicI32,
+    pub kind: FileType,
+    pub perm: u16,
+    pub uid: u32,
+    pub gid: u32,
+}
 
-        let mut insert_dentry = tx.prepare(
-            r#"
-        INSERT INTO dentries (parent_inode, name, target_inode, is_active)
-        VALUES (?1, ?2, ?3, ?4)
-        ON CONFLICT(parent_inode, name) DO UPDATE
-        SET target_inode = excluded.target_inode;
-        "#,
-        )?;
+#[derive(Clone)]
+pub struct Entry {
+    pub name: OsString,
+    pub parent_ino: InoId,
+}
 
-        let mut affected: std::collections::BTreeSet<i64> = std::collections::BTreeSet::new();
+pub struct InodeData {
+    pub metadata: StoreAttr,
+    pub dentry: Vec<Entry>,
+}
 
-        for node in nodes {
-            let a = &node.attr;
-            let (atime_secs, atime_nsecs) = system_time_to_pair(a.atime);
-            let (mtime_secs, mtime_nsecs) = system_time_to_pair(a.mtime);
-            let (ctime_secs, ctime_nsecs) = system_time_to_pair(a.ctime);
+pub struct InodeTable {
+    inodes_map: DashMap<InoId, InoIdx>,
+    dentry_map: DashMap<(ParId, OsString), InoId>,
+    table: Vec<RwLock<Option<InodeData>>>,
+    next_idx: AtomicU32,
+}
 
-            upsert_inode.execute(params![
-                a.ino as i64,
-                a.oid.to_string(),
-                i64::from(a.kind),
-                a.size as i64,
-                a.ino_flag as i64,
-                a.uid as i64,
-                a.gid as i64,
-                atime_secs,
-                atime_nsecs,
-                mtime_secs,
-                mtime_nsecs,
-                ctime_secs,
-                ctime_nsecs,
-                a.rdev as i64,
-                a.flags as i64,
-            ])?;
-
-            insert_dentry.execute(params![
-                node.parent_ino as i64,
-                node.name.as_bytes(),
-                a.ino as i64,
-                true
-            ])?;
-
-            affected.insert(a.ino as i64);
+impl InodeTable {
+    #[allow(clippy::new_without_default)]
+    pub fn new() -> Self {
+        let mut table = Vec::with_capacity(TABLE_SIZE);
+        table.resize_with(TABLE_SIZE, || RwLock::new(None));
+        Self {
+            inodes_map: DashMap::new(),
+            dentry_map: DashMap::new(),
+            table,
+            next_idx: AtomicU32::new(0),
         }
-
-        let mut upd = tx.prepare(
-            "UPDATE inode_map
-         SET nlink = (SELECT COUNT(*) FROM dentries d WHERE d.target_inode = inode_map.inode AND is_active = 1)
-         WHERE inode = ?1",
-        )?;
-        for ino in affected {
-            upd.execute(params![ino])?;
-        }
-
-        Ok(())
     }
 
-    pub fn ensure_root<C>(tx: &C) -> anyhow::Result<()>
-    where
-        C: std::ops::Deref<Target = rusqlite::Connection>,
-    {
-        tx.execute(
-            r#"
-        INSERT INTO inode_map
-            (inode, oid, kind, size, inode_flag, uid, gid, atime_secs, atime_nsecs, mtime_secs, mtime_nsecs, ctime_secs, ctime_nsecs, nlink, rdev, flags)
-        VALUES
-            (?1, '', 0, ?2, ?3, 0, ?4, 0, 0, 0, 0, 0, 0, 1, 0, 0)
-        ON CONFLICT(inode) DO NOTHING;
-        "#,
-            rusqlite::params![
-                ROOT_INO as i64,
-                InoFlag::Root as i64,
-                unsafe { libc::getuid() } as i64,
-                unsafe { libc::getgid() } as i64,
-            ],
-        )?;
-
-        Ok(())
+    // TODO: Make this an option
+    fn aloc_idx(&self) -> usize {
+        self.next_idx.fetch_add(1, SeqCst) as usize
     }
 
-    pub fn update_inodes_table<C>(tx: &C, attr: SetFileAttr) -> anyhow::Result<()>
-    where
-        C: std::ops::Deref<Target = rusqlite::Connection>,
-    {
-        let (atime_secs, atime_nsecs) = match attr.atime {
-            Some(atime) => {
-                let (s, n) = system_time_to_pair(atime);
-                (Some(s), Some(n))
+    pub fn remove_inode(&self, target_ino: u64) {
+        if let Some(idx_entry) = self.inodes_map.get(&target_ino) {
+            let idx = idx_entry.value();
+            *self.table[*idx].write() = None
+        }
+    }
+
+    /// Returns true if there are any active dentries for this inode
+    pub fn is_active(&self, target_ino: u64) -> bool {
+        if let Some(idx_entry) = self.inodes_map.get(&target_ino) {
+            let idx = idx_entry.value();
+            if let Some(ino_entry) = self.table[*idx].read().as_ref() {
+                !ino_entry.dentry.is_empty()
+            } else {
+                false
             }
-            None => (None, None),
-        };
-        let (mtime_secs, mtime_nsecs) = match attr.mtime {
-            Some(mtime) => {
-                let (s, n) = system_time_to_pair(mtime);
-                (Some(s), Some(n))
-            }
-            None => (None, None),
-        };
-        tx.execute(
-            r#"
-            UPDATE inode_map SET
-                size        = COALESCE(:size, size),
-                uid         = COALESCE(:uid, uid),
-                gid         = COALESCE(:gid, gid),
-                flags       = COALESCE(:flags, flags),
-                atime_secs  = COALESCE(:atime_s, atime_secs),
-                atime_nsecs = COALESCE(:atime_ns, atime_nsecs),
-                mtime_secs  = COALESCE(:mtime_s, mtime_secs),
-                mtime_nsecs = COALESCE(:mtime_ns, mtime_nsecs)
-            WHERE inode = :ino
-            "#,
-            rusqlite::named_params! {
-                ":ino":       attr.ino as i64,
-                ":size":      attr.size.map(|v| v as i64),
-                ":uid":       attr.uid.map(|v| v as i64),
-                ":gid":       attr.gid.map(|v| v as i64),
-                ":flags":     attr.flags.map(|v| v as i64),
-                ":atime_s":   atime_secs,
-                ":atime_ns":  atime_nsecs.map(|v| v as i64),
-                ":mtime_s":   mtime_secs,
-                ":mtime_ns":  mtime_nsecs.map(|v| v as i64),
-            },
-        )?;
-        Ok(())
-    }
-
-    pub fn populate_res_inodes(conn: &rusqlite::Connection) -> anyhow::Result<HashSet<u64>> {
-        let mut set = HashSet::new();
-        let mut stmt = conn.prepare("SELECT inode FROM inode_map")?;
-        let rows = stmt.query_map(params![], |row| row.get::<_, i64>(0))?;
-        for r in rows {
-            set.insert(r? as u64);
-        }
-        Ok(set)
-    }
-
-    pub fn get_dir_parent(conn: &rusqlite::Connection, ino: NormalIno) -> anyhow::Result<u64> {
-        let ino = ino.to_norm_u64();
-        let parent: Option<i64> = conn
-            .query_row(
-                r#"
-                SELECT parent_inode
-                FROM dentries
-                WHERE target_inode = ?1 AND is_active = 1
-                ORDER BY parent_inode
-                LIMIT 1
-                "#,
-                [ino as i64],
-                |r| r.get(0),
-            )
-            .optional()?;
-
-        match parent {
-            Some(p) => Ok(p as u64),
-            None => Err(anyhow!("get_dir_parent: no parent found for dir ino={ino}")),
-        }
-    }
-
-    pub fn get_all_parents(conn: &rusqlite::Connection, ino: u64) -> anyhow::Result<Vec<u64>> {
-        let mut stmt = conn.prepare(
-            r#"
-            SELECT parent_inode
-            FROM dentries
-            WHERE target_inode = ?1 AND is_active = 1
-            ORDER BY parent_inode
-            "#,
-        )?;
-
-        let rows = stmt.query_map(params![ino as i64], |r| r.get::<_, i64>(0))?;
-
-        let mut out: Vec<u64> = Vec::new();
-        for row in rows {
-            let p: i64 = row?;
-            out.push(u64::try_from(p)?);
-        }
-
-        out.dedup();
-
-        Ok(out)
-    }
-
-    pub fn count_children(conn: &rusqlite::Connection, ino: u64) -> anyhow::Result<usize> {
-        let mut stmt = conn.prepare(
-            "
-            SELECT COUNT(*) 
-            FROM dentries 
-            WHERE parent_inode = ?1 AND is_active = 1
-            ",
-        )?;
-
-        let count: usize = stmt.query_row([ino], |row| row.get(0))?;
-        Ok(count)
-    }
-
-    /// build_dir: If true, will ignore entries which are not in the build dir
-    ///
-    /// true: used for readdir / false: Used by getattr to check children
-    pub fn read_children(
-        conn: &rusqlite::Connection,
-        parent_ino: u64,
-        build_dir: bool,
-    ) -> anyhow::Result<Vec<DirectoryEntry>> {
-        let sql = r#"
-        SELECT
-            d.target_inode,
-            d.name,
-            m.oid,
-            m.kind,
-            m.inode_flag
-        FROM dentries AS d
-        LEFT JOIN inode_map as m ON m.inode = d.target_inode
-        WHERE d.parent_inode = ?1
-        ORDER BY d.name
-    "#;
-
-        let mut out = vec![];
-        let mut stmt = conn.prepare_cached(sql)?;
-        let mut rows = stmt.query(params![parent_ino as i64])?;
-
-        while let Some(row) = rows.next()? {
-            let t_ino_i64: i64 = row.get(0)?;
-            let target_ino = u64::try_from(t_ino_i64)?;
-
-            let name_bytes: Vec<u8> = row.get(1)?;
-            let name = OsString::from_vec(name_bytes);
-
-            let oid_str: String = row.get(2)?;
-            let oid = Oid::from_str(&oid_str)?;
-
-            let kind_i64: i64 = row.get(3)?;
-            let kind = FileType::try_from(kind_i64 as u64)?;
-
-            if build_dir {
-                let ino_flag_i64: i64 = row.get(4)?;
-                let ino_flag = u64::try_from(ino_flag_i64)?;
-                let ino_flag = InoFlag::try_from(ino_flag)?;
-                if ino_flag != InoFlag::InsideBuild {
-                    continue;
-                }
-            }
-
-            out.push(DirectoryEntry {
-                ino: target_ino,
-                oid,
-                name,
-                kind,
-            });
-        }
-
-        Ok(out)
-    }
-
-    pub fn get_single_parent(conn: &rusqlite::Connection, ino: u64) -> anyhow::Result<u64> {
-        let mut stmt = conn.prepare(
-            r#"
-            SELECT parent_inode
-            FROM dentries
-            WHERE target_inode = ?1 AND is_active = 1
-            ORDER BY parent_inode
-            LIMIT 2
-            "#,
-        )?;
-        let mut rows = stmt.query(params![ino as i64])?;
-
-        let first = match rows.next()? {
-            Some(row) => Some(row.get::<_, i64>(0)?),
-            None => None,
-        };
-
-        match first {
-            None => {
-                bail!("DB: no parent found for ino={ino}")
-            }
-            Some(p1) => Ok(u64::try_from(p1)?),
-        }
-    }
-
-    pub fn get_ino_from_db(
-        conn: &rusqlite::Connection,
-        parent: u64,
-        name: &OsStr,
-    ) -> anyhow::Result<DbReturn<u64>> {
-        let mut stmt = conn.prepare_cached(
-            r#"
-            SELECT target_inode
-            FROM dentries
-            WHERE parent_inode = ?1 AND name = ?2 AND is_active = 1
-            LIMIT 1
-            "#,
-        )?;
-        let result: Option<i64> = stmt
-            .query_row((parent as i64, name.as_bytes()), |r| r.get(0))
-            .optional()?;
-
-        match result {
-            None => Ok(DbReturn::Missing),
-            Some(child_i64) => {
-                let child = u64::try_from(child_i64)
-                    .map_err(|_| anyhow::anyhow!("child_ino out of range: {child_i64}"))?;
-                Ok(DbReturn::Found { value: child })
-            }
-        }
-    }
-
-    pub fn get_dentry_from_db(
-        conn: &rusqlite::Connection,
-        parent: u64,
-        name: &OsStr,
-    ) -> anyhow::Result<DbReturn<Dentry>> {
-        let sql = r#"
-            SELECT target_inode, is_active
-            FROM dentries
-            WHERE parent_inode = ?1 AND name = ?2
-            LIMIT 2
-        "#;
-
-        let mut stmt = conn.prepare_cached(sql)?;
-        let mut rows = stmt.query((parent as i64, name.as_bytes()))?;
-
-        let first = rows.next()?;
-        let Some(row) = first else {
-            return Ok(DbReturn::Missing);
-        };
-
-        let child_i64: i64 = row.get(0)?;
-        let is_active: bool = row.get(1)?;
-        let child = u64::try_from(child_i64)
-            .map_err(|_| anyhow!("child_ino out of range: {}", child_i64))?;
-
-        if rows.next()?.is_some() {
-            bail!("Multiple dentries for ({parent}, {})", name.display());
-        }
-        let dentry: Dentry = Dentry {
-            target_ino: child,
-            parent_ino: parent,
-            target_name: name.to_owned(),
-            is_active,
-        };
-
-        Ok(DbReturn::Found { value: dentry })
-    }
-
-    pub fn update_size_in_db<C>(tx: &C, ino: u64, new_size: u64) -> anyhow::Result<()>
-    where
-        C: std::ops::Deref<Target = rusqlite::Connection>,
-    {
-        let changed = tx.execute(
-            "UPDATE inode_map SET size = ?1 WHERE inode = ?2",
-            rusqlite::params![new_size as i64, ino as i64],
-        )?;
-
-        if changed != 1 {
-            bail!(
-                "update_size_in_db: expected to update 1 row for ino {}, updated {}",
-                ino,
-                changed
-            );
-        }
-        Ok(())
-    }
-
-    pub fn get_size_from_db<C>(tx: &C, ino: u64) -> anyhow::Result<u64>
-    where
-        C: std::ops::Deref<Target = rusqlite::Connection>,
-    {
-        let mut stmt = tx.prepare(
-            "SELECT size
-            FROM inode_map
-            WHERE inode = ?1",
-        )?;
-
-        let size_opt: i64 = stmt.query_row(params![ino as i64], |row| row.get(0))?;
-
-        let size = u64::try_from(size_opt)?;
-        Ok(size)
-    }
-
-    pub fn get_kind_from_db(conn: &rusqlite::Connection, ino: u64) -> anyhow::Result<FileType> {
-        let mut stmt = conn.prepare(
-            "SELECT kind
-           FROM inode_map
-          WHERE inode = ?1",
-        )?;
-
-        let kind_i64: i64 = stmt.query_row(rusqlite::params![ino as i64], |row| row.get(0))?;
-
-        FileType::try_from(kind_i64 as u64)
-    }
-
-    pub fn get_oid_from_db(conn: &rusqlite::Connection, ino: u64) -> anyhow::Result<Oid> {
-        let mut stmt = conn.prepare(
-            "SELECT oid
-           FROM inode_map
-          WHERE inode = ?1",
-        )?;
-
-        let oid_str: Option<String> = stmt
-            .query_row(rusqlite::params![ino as i64], |row| row.get(0))
-            .optional()?;
-
-        let oid_str = oid_str.ok_or_else(|| anyhow!(format!("Could not find Oid for {ino}")))?;
-        Ok(git2::Oid::from_str(&oid_str)?)
-    }
-
-    pub fn inode_exists(conn: &rusqlite::Connection, ino: u64) -> anyhow::Result<bool> {
-        let exists: i64 = conn.query_row(
-            "SELECT EXISTS(SELECT 1 FROM inode_map WHERE inode = ?1)",
-            [ino as i64],
-            |row| row.get(0),
-        )?;
-        Ok(exists != 0)
-    }
-
-    pub fn get_ino_flag_from_db(conn: &rusqlite::Connection, ino: u64) -> anyhow::Result<u64> {
-        let mut stmt = conn.prepare(
-            "SELECT inode_flag
-           FROM inode_map
-          WHERE inode = ?1",
-        )?;
-
-        let ino_flag_opt: Option<i64> = stmt
-            .query_row(rusqlite::params![ino as i64], |row| row.get(0))
-            .optional()?;
-
-        if let Some(ino_flag) = ino_flag_opt {
-            Ok(ino_flag as u64)
         } else {
-            bail!(format!("Could not find {ino} - ino_flag"))
+            false
         }
     }
 
-    pub fn get_name_from_db(conn: &rusqlite::Connection, ino: u64) -> anyhow::Result<OsString> {
-        let mut stmt = conn.prepare(
-            r#"
-            SELECT name
-            FROM dentries
-            WHERE target_inode = ?1 AND is_active = 1
-            "#,
-        )?;
+    pub fn insert(&self, node: StorageNode) {
+        let ino = node.attr.ino;
+        let inodedata = node.attr.into_storage(&node.name, node.parent_ino);
 
-        let mut rows = stmt.query(params![ino as i64])?;
+        self.dentry_map.insert((node.parent_ino, node.name), ino);
+        let idx = self.aloc_idx();
+        *self.table[idx].write() = Some(inodedata);
+        self.inodes_map.insert(ino, idx);
+    }
 
-        let first = match rows.next()? {
-            Some(row) => Some(row.get::<_, Vec<u8>>(0)?),
-            None => None,
+    pub fn insert_dentry(&self, dentry: Dentry) {
+        let ino = dentry.target_ino;
+        if self
+            .dentry_map
+            .contains_key(&(dentry.parent_ino, dentry.target_name.clone()))
+        {
+            return;
         };
-
-        match first {
-            None => {
-                bail!("DB: No name found for ino={ino}")
-            }
-
-            Some(p1) => Ok(OsString::from_vec(p1)),
-        }
-    }
-
-    pub fn get_name_in_parent(
-        conn: &rusqlite::Connection,
-        parent_ino: u64,
-        ino: u64,
-    ) -> anyhow::Result<OsString> {
-        let mut stmt = conn.prepare(
-            r#"
-        SELECT name
-        FROM dentries
-        WHERE parent_inode = ?1 AND target_inode = ?2 AND is_active = 1
-        "#,
-        )?;
-        let name_opt: Option<Vec<u8>> = stmt
-            .query_row(rusqlite::params![parent_ino as i64, ino as i64], |row| {
-                row.get(0)
-            })
-            .optional()?;
-
-        match name_opt {
-            Some(n) => Ok(OsString::from_vec(n)),
-            None => {
-                bail!("DB: name not found for ino={ino} in parent={parent_ino}")
+        if let Some(entry) = self.inodes_map.get(&ino) {
+            let index = entry.value();
+            if let Some(ino_entry) = self.table[*index].write().as_mut() {
+                let entry = Entry {
+                    name: dentry.target_name.clone(),
+                    parent_ino: dentry.parent_ino,
+                };
+                ino_entry.dentry.push(entry);
+                self.dentry_map
+                    .insert((dentry.parent_ino, dentry.target_name), ino);
             }
         }
     }
 
-    pub fn write_dentry<C>(tx: &C, dentry: Dentry) -> anyhow::Result<()>
-    where
-        C: std::ops::Deref<Target = rusqlite::Connection>,
-    {
-        let parent_i64 = i64::try_from(dentry.parent_ino)?;
-        let source_i64 = i64::try_from(dentry.target_ino)?;
-
-        let parent_exists: Option<i64> = tx
-            .prepare("SELECT 1 FROM inode_map WHERE inode = ?1")?
-            .query_row(params![parent_i64], |r| r.get(0))
-            .optional()?;
-        if parent_exists.is_none() {
-            bail!(
-                "write_dentry: parent inode {} does not exist",
-                dentry.parent_ino
-            );
+    pub fn remove_dentry(&self, parent_ino: u64, target_name: &OsStr, open_handles: bool) {
+        if let Some((key, target_ino)) = self
+            .dentry_map
+            .remove(&(parent_ino, target_name.to_os_string()))
+            && let Some(active_dentries) = self.set_inactive(key.0, &key.1)
+            && active_dentries == 0
+            && !open_handles
+        {
+            self.remove_inode(target_ino);
+            self.inodes_map.remove(&key.0);
         }
-
-        let target_exists: Option<i64> = tx
-            .prepare("SELECT 1 FROM inode_map WHERE inode = ?1")?
-            .query_row(params![source_i64], |r| r.get(0))
-            .optional()?;
-        if target_exists.is_none() {
-            bail!(
-                "write_dentry: Source inode {} does not exist",
-                dentry.target_ino
-            );
-        }
-
-        let inserted = tx.execute(
-            r#"
-            INSERT INTO dentries (parent_inode, target_inode, name, is_active)
-            VALUES (?1, ?2, ?3, ?4)
-            "#,
-            params![
-                parent_i64,
-                source_i64,
-                dentry.target_name.as_bytes(),
-                dentry.is_active
-            ],
-        )?;
-        if inserted != 1 {
-            bail!(
-                "write_dentry: expected to insert 1 dentry, inserted {}",
-                inserted
-            );
-        }
-
-        let updated = tx.execute(
-            r#"
-            UPDATE inode_map
-            SET nlink = (SELECT COUNT(*) FROM dentries WHERE target_inode = ?1 AND is_active = 1)
-            WHERE inode = ?1
-            "#,
-            params![source_i64],
-        )?;
-        if updated != 1 {
-            bail!(
-                "write_dentry: failed to update nlink for inode {}",
-                dentry.target_ino
-            );
-        }
-
-        Ok(())
     }
 
-    pub fn get_single_dentry(
-        conn: &rusqlite::Connection,
-        target_ino: u64,
-    ) -> anyhow::Result<Dentry> {
-        let mut stmt = conn.prepare(
-            r#"
-            SELECT parent_inode, name
-            FROM dentries
-            WHERE target_inode = ?1 AND is_active = 1
-            LIMIT 1
-            "#,
-        )?;
-
-        let (parent_ino, target_name): (i64, Vec<u8>) = stmt
-            .query_row(params![target_ino as i64], |row| {
-                Ok((row.get(0)?, row.get(1)?))
-            })?;
-
-        let parent_ino = u64::try_from(parent_ino)?;
-        let target_name = OsString::from_vec(target_name);
-
-        Ok(Dentry {
-            target_ino,
-            parent_ino,
-            target_name,
-            is_active: true,
-        })
+    pub fn set_inactive(&self, parent_ino: u64, target_name: &OsStr) -> Option<usize> {
+        let target_ino = self
+            .dentry_map
+            .get(&(parent_ino, target_name.to_os_string()))
+            .map(|e| *e.value())?;
+        if let Some(entry) = self.inodes_map.get(&target_ino) {
+            let index = entry.value();
+            if let Some(map) = self.table[*index].write().as_mut() {
+                let len = map.dentry.len();
+                if len == 0 {
+                    return Some(0);
+                } else if len == 1 {
+                    map.dentry.pop();
+                    self.dentry_map
+                        .remove(&(parent_ino, target_name.to_os_string()));
+                    return Some(0);
+                } else {
+                    if let Some(pos) = map
+                        .dentry
+                        .iter()
+                        .position(|e| e.name == target_name && e.parent_ino == parent_ino)
+                    {
+                        self.dentry_map
+                            .remove(&(parent_ino, target_name.to_os_string()));
+                        map.dentry.remove(pos);
+                    }
+                    return Some(map.dentry.len());
+                }
+            }
+            return None;
+        }
+        None
     }
 
-    pub fn update_oids<C>(tx: &C, targets: &[u64], oid: Oid) -> anyhow::Result<()>
-    where
-        C: std::ops::Deref<Target = rusqlite::Connection>,
-    {
-        let mut stmt = tx.prepare(
-            r#"UPDATE inode_map
-         SET oid = 1?
-         WHERE inode = 2?
-         "#,
-        )?;
+    pub fn get_size(&self, target_ino: u64) -> DbReturn<u64> {
+        if let Some(id_entry) = self.inodes_map.get(&target_ino) {
+            let idx = id_entry.value();
+            if let Some(entry) = self.table[*idx].read().as_ref() {
+                let size = entry.metadata.size.load(Relaxed);
+                return DbReturn::Found { value: size };
+            }
+        }
+        DbReturn::Missing
+    }
 
-        for &inode in targets {
-            stmt.execute(params![oid.as_bytes(), inode as i64])?;
+    pub fn set_size(&self, target_ino: u64, size: u64) {
+        if let Some(id_entry) = self.inodes_map.get(&target_ino) {
+            let idx = id_entry.value();
+            if let Some(entry) = self.table[*idx].read().as_ref() {
+                entry.metadata.size.store(size, SeqCst);
+            }
+        }
+    }
+
+    pub fn get_all_parents(&self, target_ino: u64) -> DbReturn<Vec<u64>> {
+        if let Some(id_entry) = self.inodes_map.get(&target_ino) {
+            let index = id_entry.value();
+            if let Some(map) = self.table[*index].read().as_ref() {
+                let len = map.dentry.len();
+                if len == 0 {
+                    return DbReturn::Negative;
+                } else if len == 1 {
+                    let parent = map.dentry[0].parent_ino;
+                    return DbReturn::Found {
+                        value: vec![parent],
+                    };
+                } else {
+                    let mut parents = vec![];
+                    for e in &map.dentry {
+                        parents.push(e.parent_ino);
+                    }
+                    return DbReturn::Found { value: parents };
+                }
+            }
+        }
+        DbReturn::Missing
+    }
+
+    pub fn exists_by_name(&self, parent_ino: u64, target_name: &OsStr) -> DbReturn<u64> {
+        let Some(target_ino_entry) = self
+            .dentry_map
+            .get(&(parent_ino, target_name.to_os_string()))
+        else {
+            return DbReturn::Missing;
+        };
+        DbReturn::Found {
+            value: *target_ino_entry.value(),
+        }
+    }
+
+    pub fn get_ino_flag(&self, target_ino: u64) -> DbReturn<InoFlag> {
+        if let Some(id_entry) = self.inodes_map.get(&target_ino) {
+            let idx = id_entry.value();
+            if let Some(entry) = self.table[*idx].read().as_ref() {
+                let flag = entry.metadata.ino_flag;
+                return DbReturn::Found { value: flag };
+            }
+        }
+        DbReturn::Missing
+    }
+
+    pub fn get_oid(&self, target_ino: u64) -> DbReturn<Oid> {
+        if let Some(id_entry) = self.inodes_map.get(&target_ino) {
+            let idx = id_entry.value();
+            if let Some(entry) = self.table[*idx].read().as_ref() {
+                let oid = entry.metadata.oid;
+                return DbReturn::Found { value: oid };
+            }
+        }
+        DbReturn::Missing
+    }
+
+    pub fn get_kind(&self, target_ino: u64) -> DbReturn<FileType> {
+        if let Some(id_entry) = self.inodes_map.get(&target_ino) {
+            let idx = id_entry.value();
+            if let Some(entry) = self.table[*idx].read().as_ref() {
+                let kind = entry.metadata.kind;
+                return DbReturn::Found { value: kind };
+            }
+        }
+        DbReturn::Missing
+    }
+
+    pub fn get_name(&self, target_ino: u64) -> DbReturn<OsString> {
+        if let Some(id_entry) = self.inodes_map.get(&target_ino) {
+            let index = id_entry.value();
+            if let Some(map) = self.table[*index].read().as_ref() {
+                if map.dentry.is_empty() {
+                    return DbReturn::Negative;
+                } else {
+                    let name = map.dentry[0].name.clone();
+                    return DbReturn::Found { value: name };
+                }
+            }
+        }
+        DbReturn::Missing
+    }
+
+    pub fn get_dentry(&self, target_ino: u64) -> DbReturn<Dentry> {
+        if let Some(id_entry) = self.inodes_map.get(&target_ino) {
+            let index = id_entry.value();
+            if let Some(map) = self.table[*index].read().as_ref() {
+                if map.dentry.is_empty() {
+                    return DbReturn::Negative;
+                } else {
+                    let entry = &map.dentry[0];
+                    let dentry = Dentry {
+                        parent_ino: entry.parent_ino,
+                        target_ino,
+                        target_name: entry.name.clone(),
+                    };
+                    return DbReturn::Found { value: dentry };
+                }
+            }
+        }
+        DbReturn::Missing
+    }
+
+    pub fn get_metadata(&self, target_ino: u64) -> DbReturn<FileAttr> {
+        if let Some(id_entry) = self.inodes_map.get(&target_ino) {
+            let index = id_entry.value();
+            if let Some(map) = self.table[*index].read().as_ref() {
+                let store_attr = &map.metadata;
+                let atime = pair_to_system_time(
+                    store_attr.atime_secs.load(Relaxed),
+                    store_attr.atime_nanos.load(Relaxed),
+                );
+                let mtime = pair_to_system_time(
+                    store_attr.mtime_secs.load(Relaxed),
+                    store_attr.mtime_nanos.load(Relaxed),
+                );
+
+                let attr: FileAttr = FileAttr {
+                    ino: target_ino,
+                    ino_flag: store_attr.ino_flag,
+                    oid: store_attr.oid,
+                    size: store_attr.size.load(Relaxed),
+                    blocks: 0,
+                    atime,
+                    mtime,
+                    ctime: SystemTime::now(),
+                    crtime: SystemTime::now(),
+                    kind: store_attr.kind,
+                    perm: store_attr.perm,
+                    nlink: 1,
+                    uid: store_attr.uid,
+                    gid: store_attr.gid,
+                    rdev: 0,
+                    blksize: 0,
+                    flags: 0,
+                };
+                return DbReturn::Found { value: attr };
+            }
         }
 
-        Ok(())
+        DbReturn::Missing
     }
 
-    // Used by rename (mv)
-    pub fn update_db_record<C>(
-        tx: &C,
+    pub fn update_metadata(&self, attr: &SetFileAttr) -> DbReturn<FileAttr> {
+        if let Some(id_entry) = self.inodes_map.get(&attr.ino) {
+            let index = id_entry.value();
+            if let Some(map) = self.table[*index].read().as_ref() {
+                if let Some(size) = attr.size {
+                    map.metadata.size.store(size, SeqCst);
+                };
+                if let Some(atime) = attr.atime {
+                    let (atime_secs, atime_nanos) = system_time_to_pair(atime);
+                    map.metadata.atime_secs.store(atime_secs, SeqCst);
+                    map.metadata.atime_nanos.store(atime_nanos, SeqCst);
+                };
+                if let Some(mtime) = attr.mtime {
+                    let (mtime_secs, mtime_nanos) = system_time_to_pair(mtime);
+                    map.metadata.mtime_secs.store(mtime_secs, SeqCst);
+                    map.metadata.mtime_nanos.store(mtime_nanos, SeqCst);
+                };
+
+                let store_attr = &map.metadata;
+                let atime = pair_to_system_time(
+                    store_attr.atime_secs.load(Relaxed),
+                    store_attr.atime_nanos.load(Relaxed),
+                );
+                let mtime = pair_to_system_time(
+                    store_attr.mtime_secs.load(Relaxed),
+                    store_attr.mtime_nanos.load(Relaxed),
+                );
+
+                let attr: FileAttr = FileAttr {
+                    ino: attr.ino,
+                    ino_flag: store_attr.ino_flag,
+                    oid: store_attr.oid,
+                    size: store_attr.size.load(Relaxed),
+                    blocks: 0,
+                    atime,
+                    mtime,
+                    ctime: SystemTime::now(),
+                    crtime: SystemTime::now(),
+                    kind: store_attr.kind,
+                    perm: store_attr.perm,
+                    nlink: 1,
+                    uid: store_attr.uid,
+                    gid: store_attr.gid,
+                    rdev: 0,
+                    blksize: 0,
+                    flags: 0,
+                };
+                return DbReturn::Found { value: attr };
+            }
+        }
+        DbReturn::Missing
+    }
+
+    pub fn update_record(
+        &self,
         old_parent: u64,
         old_name: &OsStr,
         node: StorageNode,
-    ) -> anyhow::Result<()>
-    where
-        C: std::ops::Deref<Target = rusqlite::Connection>,
-    {
+    ) -> DbReturn<()> {
+        if self.set_inactive(old_parent, old_name).is_none() {
+            return DbReturn::Missing;
+        };
+
         {
-            let a = &node.attr;
-            let (atime_secs, atime_nsecs) = system_time_to_pair(a.atime);
-            let (mtime_secs, mtime_nsecs) = system_time_to_pair(a.mtime);
-            let (ctime_secs, ctime_nsecs) = system_time_to_pair(a.ctime);
-            tx.execute(
-                r#"
-                INSERT INTO inode_map
-                    (inode, oid, kind, size, inode_flag, uid, gid, nlink, atime_secs, atime_nsecs, mtime_secs, mtime_nsecs, ctime_secs, ctime_nsecs, rdev, flags)
-                VALUES
-                    (?1, ?2, ?3, ?4, ?5, ?6, ?7, 1, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)
-                ON CONFLICT(inode) DO UPDATE SET
-                    oid      = excluded.oid,
-                    kind    = excluded.kind,
-                    size     = excluded.size,
-                    inode_flag = excluded.inode_flag,
-                    uid      = excluded.uid,
-                    gid      = excluded.gid,
-                    atime_secs  = excluded.atime_secs,
-                    atime_nsecs = excluded.atime_nsecs,
-                    mtime_secs  = excluded.mtime_secs,
-                    mtime_nsecs = excluded.mtime_nsecs,
-                    ctime_secs  = excluded.ctime_secs,
-                    ctime_nsecs = excluded.ctime_nsecs,
-                    rdev     = excluded.rdev,
-                    flags    = excluded.flags
-                ;
-                "#,
-                params![
-                    a.ino as i64,
-                    a.oid.to_string(),
-                    i64::from(a.kind),
-                    a.size as i64,
-                    a.ino_flag as i64,
-                    a.uid as i64,
-                    a.gid as i64,
-                    atime_secs,
-                    atime_nsecs,
-                    mtime_secs,
-                    mtime_nsecs,
-                    ctime_secs,
-                    ctime_nsecs,
-                    a.rdev as i64,
-                    a.flags as i64,
-                ],
-            )?;
+            self.insert_dentry(Dentry {
+                target_ino: node.attr.ino,
+                parent_ino: node.parent_ino,
+                target_name: node.name.clone(),
+            });
         }
 
-        let _ = tx.execute(
-            r#"
-        DELETE FROM dentries
-        WHERE parent_inode = ?1 AND name = ?2 AND target_inode = ?3
-        "#,
-            rusqlite::params![old_parent as i64, old_name.as_bytes(), node.attr.ino as i64],
-        )?;
-
-        tx.execute(
-            r#"
-        INSERT INTO dentries (parent_inode, name, target_inode, is_active)
-        VALUES (?1, ?2, ?3, ?4)
-        ON CONFLICT(parent_inode, name) DO UPDATE
-        SET target_inode = excluded.target_inode
-        "#,
-            rusqlite::params![
-                node.parent_ino as i64,
-                node.name.as_bytes(),
-                node.attr.ino as i64,
-                true
-            ],
-        )?;
-
-        tx.execute(
-            r#"
-        UPDATE inode_map
-        SET nlink = (SELECT COUNT(*) FROM dentries WHERE target_inode = ?1 AND is_active = 1)
-        WHERE inode = ?1
-        "#,
-            rusqlite::params![node.attr.ino as i64],
-        )?;
-
-        Ok(())
-    }
-
-    /// Will only remove the dentry and decrement the nlink in inode_map
-    ///
-    /// Record is removed from inode_map when there are no more open file handles
-    /// (see [`crate::fs::GitFs::release`])
-    pub fn remove_db_dentry<C>(tx: &C, parent_ino: u64, target_name: &OsStr) -> anyhow::Result<()>
-    where
-        C: std::ops::Deref<Target = rusqlite::Connection>,
-    {
-        let target_inode: u64 = tx
-            .prepare(
-                r#"
-            SELECT target_inode
-            FROM dentries
-            WHERE parent_inode = ?1 AND name = ?2
-            "#,
-            )?
-            .query_row(params![parent_ino as i64, target_name.as_bytes()], |row| {
-                row.get::<_, i64>(0)
-            })
-            .optional()?
-            .map(|v| v as u64)
-            .ok_or_else(|| {
-                anyhow!(
-                    "No such dentry: parent_ino={} name={}",
-                    parent_ino,
-                    target_name.display()
-                )
-            })?;
-
-        tx.execute(
-            r#"
-        DELETE FROM dentries
-        WHERE parent_inode = ?1 AND name = ?2
-        "#,
-            params![parent_ino as i64, target_name.as_bytes()],
-        )?;
-
-        tx.execute(
-            r#"
-            UPDATE inode_map
-            SET nlink = (
-                SELECT COUNT(*)
-                FROM dentries
-                WHERE target_inode = ?1
-            )
-            WHERE inode = ?1
-            "#,
-            params![target_inode as i64],
-        )?;
-
-        Ok(())
-    }
-
-    pub fn set_entry_negative<C>(tx: &C, parent_ino: u64, target_name: &OsStr) -> anyhow::Result<()>
-    where
-        C: std::ops::Deref<Target = rusqlite::Connection>,
-    {
-        let name = target_name.as_bytes();
-        let changed = tx.execute(
-            r#"
-        UPDATE dentries
-        SET is_active = 0
-        WHERE parent_inode = ?1 AND name = ?2
-        "#,
-            rusqlite::params![parent_ino, name],
-        )?;
-
-        if changed != 1 {
-            bail!(
-                "set_entry_negative: expected to update 1 row for ino {}, updated {}",
-                parent_ino,
-                changed
-            );
-        }
-        Ok(())
-    }
-
-    pub fn get_inactive_dentries(conn: &rusqlite::Connection) -> anyhow::Result<Vec<Dentry>> {
-        let mut stmt = conn
-            .prepare(
-                r#"
-            SELECT parent_inode, target_inode, name, is_active
-            FROM dentries
-            WHERE is_active = 0
-            "#,
-            )
-            .context("failed to prepare statement for inactive dentries")?;
-
-        let rows = stmt
-            .query_map([], |row| {
-                let parent_inode: i64 = row.get(0)?;
-                let target_inode: i64 = row.get(1)?;
-                let name_blob: Vec<u8> = row.get(2)?;
-                let is_active: i64 = row.get(3)?;
-
-                Ok(Dentry {
-                    parent_ino: parent_inode as u64,
-                    target_ino: target_inode as u64,
-                    target_name: OsString::from_vec(name_blob),
-                    is_active: is_active != 0,
-                })
-            })
-            .context("failed to map inactive dentries")?;
-
-        let mut dentries = Vec::new();
-        for row in rows {
-            dentries.push(row?);
-        }
-
-        Ok(dentries)
-    }
-
-    /// `(parent_ino, target_ino, target_name)`
-    ///
-    /// Will also check nlinks and clean `inode_map` table where `nlink == 0`
-    /// 1 - Clean dentries with is_active = 0
-    /// 2 - Update nlinks in inode_map for the target_ino
-    /// 3 - Clean entries in inode_map with nlink = 0
-    pub fn cleanup_neg_entries<C>(conn: &C, entries: &[(u64, u64, OsString)]) -> anyhow::Result<()>
-    where
-        C: std::ops::Deref<Target = rusqlite::Connection>,
-    {
-        if entries.is_empty() {
-            return Ok(());
-        }
-
-        let mut affected: HashSet<i64> = HashSet::with_capacity(entries.len());
-
-        let mut stmt = conn.prepare(
-            r#"
-            DELETE FROM dentries
-            WHERE parent_inode = ?1
-              AND name = ?2
-              AND is_active = 0
-            "#,
-        )?;
-
-        for (parent_ino, target_ino, name) in entries {
-            let p = i64::try_from(*parent_ino)?;
-            let t = i64::try_from(*target_ino)?;
-            affected.insert(t);
-
-            let name_bytes = name.as_bytes();
-
-            stmt.execute(params![p, name_bytes])?;
-        }
-
-        let mut upd = conn.prepare(
-            "UPDATE inode_map
-        SET nlink = (SELECT COUNT(*) FROM dentries WHERE target_inode = ?1 AND is_active = 1)
-        WHERE inode = ?1",
-        )?;
-
-        for inode in &affected {
-            upd.execute(params![inode])?;
-        }
-
-        let mut q_prune = conn
-            .prepare("DELETE FROM inode_map WHERE inode = ?1 AND nlink = 0")
-            .context("prepare DELETE inode_map nlink=0")?;
-
-        for inode in &affected {
-            q_prune
-                .execute(params![inode])
-                .with_context(|| format!("delete inode_map row for inode {inode} with nlink=0"))?;
-        }
-
-        Ok(())
-    }
-
-    pub fn cleanup_dentry<C>(tx: &C, target_ino: u64) -> anyhow::Result<()>
-    where
-        C: std::ops::Deref<Target = rusqlite::Connection>,
-    {
-        let remaining_links: i64 = tx.query_row(
-            r#"
-        SELECT COUNT(*)
-        FROM dentries
-        WHERE target_inode = ?1
-        "#,
-            params![target_ino as i64],
-            |row| row.get(0),
-        )?;
-
-        if remaining_links == 0 {
-            tx.execute(
-                r#"
-            DELETE FROM inode_map
-            WHERE inode = ?1
-            "#,
-                params![target_ino as i64],
-            )
-            .context("Failed to delete from inode_map")?;
-        }
-
-        Ok(())
-    }
-
-    pub fn get_path_from_db(conn: &rusqlite::Connection, ino: u64) -> anyhow::Result<PathBuf> {
-        let mut stmt = conn.prepare(
-            "SELECT parent_inode, name
-               FROM dentries
-              WHERE target_inode = ?1 AND is_active = 1",
-        )?;
-        let mut components = Vec::new();
-        let mut curr = ino as i64;
-
-        loop {
-            let row: Option<(i64, OsString)> = stmt
-                .query_row(params![curr], |r| {
-                    rusqlite::Result::Ok((r.get(0)?, OsString::from_vec(r.get(1)?)))
-                })
-                .optional()?;
-
-            match row {
-                Some((parent, name)) => {
-                    components.push(name);
-                    curr = parent;
-                }
-                None => break,
+        if let Some(id_entry) = self.inodes_map.get(&node.attr.ino) {
+            let index = id_entry.value();
+            if let Some(map) = self.table[*index].write().as_mut() {
+                let inodedata = node.attr.into_storage(&node.name, node.parent_ino);
+                map.metadata = inodedata.metadata;
+                return DbReturn::Found { value: () };
             }
         }
-        if components.is_empty() && ino != ROOT_INO {
-            bail!(format!("Could not build path for {ino}"))
+        DbReturn::Missing
+    }
+
+    pub fn build_ctx_metadata(&self, target_ino: u64) -> DbReturn<BuildCtxMetadata> {
+        if let Some(id_entry) = self.inodes_map.get(&target_ino) {
+            let index = id_entry.value();
+            if let Some(map) = self.table[*index].read().as_ref() {
+                let name = if !map.dentry.is_empty() {
+                    map.dentry[0].name.clone()
+                } else {
+                    return DbReturn::Negative;
+                };
+
+                let ctx: BuildCtxMetadata = BuildCtxMetadata {
+                    kind: map.metadata.kind,
+                    oid: map.metadata.oid,
+                    name,
+                    ino_flag: map.metadata.ino_flag,
+                };
+                return DbReturn::Found { value: ctx };
+            }
+        }
+        DbReturn::Missing
+    }
+
+    pub fn ensure_root(&self, root_name: &OsStr) {
+        let mut root_attr: FileAttr = dir_attr(InoFlag::Root).into();
+        root_attr.ino = 1;
+        let inodedata = root_attr.into_storage(root_name, 1);
+        let idx = self.aloc_idx();
+        *self.table[idx].write() = Some(inodedata);
+        self.inodes_map.insert(1, idx);
+    }
+
+    pub fn read_children(&self, parent_ino: u64, build_dir: bool) -> DbReturn<Vec<DirectoryEntry>> {
+        if self.inodes_map.get(&parent_ino).is_none() {
+            return DbReturn::Missing;
         }
 
-        components.reverse();
+        let mut out: Vec<DirectoryEntry> = vec![];
 
-        Ok(components.iter().collect::<PathBuf>())
+        for entry in self.dentry_map.iter() {
+            let target = if entry.key().0 == parent_ino {
+                entry.value()
+            } else {
+                continue;
+            };
+            let Some(idx) = self.inodes_map.get(target).map(|e| *e.value()) else {
+                continue;
+            };
+
+            if let Some(inodedata) = self.table[idx].read().as_ref() {
+                if build_dir && inodedata.metadata.ino_flag != InoFlag::InsideBuild {
+                    continue;
+                };
+                let name = if !inodedata.dentry.is_empty() {
+                    inodedata.dentry[0].name.clone()
+                } else {
+                    continue;
+                };
+                let entry = DirectoryEntry {
+                    ino: *target,
+                    oid: inodedata.metadata.oid,
+                    name,
+                    kind: inodedata.metadata.kind,
+                };
+                out.push(entry);
+            };
+        }
+        DbReturn::Found { value: out }
     }
 
-    pub fn exists_by_name(
-        conn: &rusqlite::Connection,
-        parent: NormalIno,
-        name: &OsStr,
-    ) -> anyhow::Result<DbReturn<u64>> {
-        MetaDb::get_ino_from_db(conn, parent.into(), name)
+    pub fn count_children(&self, parent_ino: u64) -> usize {
+        if self.inodes_map.get(&parent_ino).is_none() {
+            return 0;
+        }
+        let mut count = 0;
+        for entry in self.dentry_map.iter() {
+            let target = if entry.key().0 == parent_ino {
+                entry.value()
+            } else {
+                continue;
+            };
+            let Some(idx) = self.inodes_map.get(target).map(|e| *e.value()) else {
+                continue;
+            };
+            if self.table[idx].read().is_some() {
+                count += 1;
+            };
+        }
+        count
     }
 
-    pub fn get_metadata_by_name(
-        conn: &rusqlite::Connection,
-        parent_ino: u64,
-        child_name: &OsStr,
-    ) -> anyhow::Result<DbReturn<FileAttr>> {
-        let target_ino = match MetaDb::get_ino_from_db(conn, parent_ino, child_name)? {
-            DbReturn::Found { value } => value,
-            DbReturn::Negative => return Ok(DbReturn::Negative),
-            DbReturn::Missing => return Ok(DbReturn::Missing),
-        };
-        MetaDb::get_metadata(conn, target_ino)
-    }
-
-    /// Looks into the dentries table and checks if the `target_ino` has any entries with is_active = true
-    fn check_active_inode(conn: &rusqlite::Connection, target_ino: u64) -> anyhow::Result<bool> {
-        let ino = i64::try_from(target_ino)?;
-
-        let exists: i64 = conn.query_row(
-            "SELECT EXISTS(
-             SELECT 1
-             FROM dentries
-             WHERE target_inode = ?1 AND is_active = 1
-         )",
-            params![ino],
-            |row| row.get(0),
-        )?;
-
-        Ok(exists != 0)
-    }
-
-    pub fn get_metadata(
-        conn: &rusqlite::Connection,
-        target_ino: u64,
-    ) -> anyhow::Result<DbReturn<FileAttr>> {
-        if let Ok(false) = MetaDb::check_active_inode(conn, target_ino) {
-            return Ok(DbReturn::Negative);
-        };
-
-        let mut stmt = conn.prepare(
-            r#"
-        SELECT
-            inode,
-            oid,
-            kind,
-            size,
-            inode_flag,
-            uid,
-            gid,
-            atime_secs,
-            atime_nsecs,
-            mtime_secs,
-            mtime_nsecs,
-            ctime_secs,
-            ctime_nsecs,
-            nlink,
-            rdev,
-            flags
-        FROM inode_map
-        WHERE inode = ?1
-        "#,
-        )?;
-
-        let res = stmt.query_row(params![i64::try_from(target_ino)?], |row| {
-            Ok((
-                row.get::<_, i64>(0)?,
-                row.get::<_, String>(1)?,
-                row.get::<_, i64>(2)?,
-                row.get::<_, i64>(3)?,
-                row.get::<_, i64>(4)?,
-                row.get::<_, i64>(5)?,
-                row.get::<_, i64>(6)?,
-                row.get::<_, i64>(7)?,
-                row.get::<_, i64>(8)?,
-                row.get::<_, i64>(9)?,
-                row.get::<_, i64>(10)?,
-                row.get::<_, i64>(11)?,
-                row.get::<_, i64>(12)?,
-                row.get::<_, i64>(13)?,
-                row.get::<_, i64>(14)?,
-                row.get::<_, i64>(15)?,
-            ))
-        });
-
-        let (
-            ino,
-            oid,
-            kind,
-            size,
-            inode_flag,
-            uid,
-            gid,
-            atime_secs,
-            atime_nsecs,
-            mtime_secs,
-            mtime_nsecs,
-            ctime_secs,
-            ctime_nsecs,
-            nlink,
-            rdev,
-            flags,
-        ) = match res {
-            Ok(row) => row,
-            Err(rusqlite::Error::QueryReturnedNoRows) => {
-                return Ok(DbReturn::Missing);
-            }
-            Err(e) => return Err(e.into()),
-        };
-
-        let oid = Oid::from_str(&oid)?;
-        let ino_flag = u64::try_from(inode_flag)?;
-        let ino_flag = InoFlag::try_from(ino_flag)?;
-        let kind = FileType::try_from(kind as u64)?;
-        let size = size as u64;
-        let blocks = size.div_ceil(512);
-        let atime = pair_to_system_time(atime_secs, atime_nsecs as i32);
-        let mtime = pair_to_system_time(mtime_secs, mtime_nsecs as i32);
-        let ctime = pair_to_system_time(ctime_secs, ctime_nsecs as i32);
-
-        let perm = 0o775;
-
-        let attr: FileAttr = FileAttr {
-            ino: ino as u64,
-            ino_flag,
-            oid,
-            size,
-            blocks,
-            atime,
-            mtime,
-            ctime,
-            crtime: ctime,
-            kind,
-            perm,
-            nlink: nlink as u32,
-            uid: uid as u32,
-            gid: gid as u32,
-            rdev: rdev as u32,
-            blksize: 4096,
-            flags: flags as u32,
-        };
-
-        Ok(DbReturn::Found { value: attr })
-    }
-
-    pub fn get_builctx_metadata(
-        conn: &rusqlite::Connection,
-        ino: u64,
-    ) -> anyhow::Result<BuildCtxMetadata> {
-        let sql = r#"
-        SELECT
-            m.kind, -- 0
-            m.oid, -- 1
-            m.inode_flag, -- 2
-            (SELECT d.name
-               FROM dentries d
-               WHERE d.target_inode = m.inode AND d.is_active = 1
-               LIMIT 1) AS name -- 3
-        FROM inode_map m
-        WHERE m.inode = ?1
-        LIMIT 1
-    "#;
-
-        let mut stmt = conn.prepare_cached(sql)?;
-        let row = stmt
-            .query_row(params![ino as i64], |row| {
-                let kind_i: i64 = row.get(0)?;
-                let oid_txt: String = row.get(1)?;
-                let flag_i: i64 = row.get(2)?;
-                let name_raw: Vec<u8> = row.get(3)?;
-
-                let kind =
-                    FileType::try_from(kind_i as u64).map_err(|_| rusqlite::Error::InvalidQuery)?;
-                let oid: Oid = oid_txt.parse().map_err(|_| rusqlite::Error::InvalidQuery)?;
-                let ino_flag = (flag_i as u64)
-                    .try_into()
-                    .map_err(|_| rusqlite::Error::InvalidQuery)?;
-
-                Ok(BuildCtxMetadata {
-                    kind,
-                    oid,
-                    ino_flag,
-                    name: OsString::from_vec(name_raw),
-                })
-            })
-            .optional()?
-            .ok_or_else(|| anyhow!("inode {} not found in inode_map", ino))?;
-
-        Ok(row)
+    pub fn update_oid_targets(&self, oid: Oid, targets: &[u64]) {
+        for ino in targets {
+            let Some(idx) = self.inodes_map.get(ino).map(|v| *v) else {
+                continue;
+            };
+            if let Some(inodedata) = self.table[idx].write().as_mut() {
+                inodedata.metadata.oid = oid;
+            };
+        }
     }
 }
