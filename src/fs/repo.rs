@@ -934,7 +934,7 @@ impl GitRepo {
             }
 
             if let Some(old_path) =
-                self.find_renamed_parent_path(&parent0_tree, &tree, &current_path)?
+                self.find_renamed_parent_path(&repo, &parent0_tree, &tree, &current_path)?
             {
                 current_path = old_path;
                 commit = parent0;
@@ -951,7 +951,9 @@ impl GitRepo {
                     advanced = true;
                     break;
                 }
-                if let Some(old_path) = self.find_renamed_parent_path(&pt, &tree, &current_path)? {
+                if let Some(old_path) =
+                    self.find_renamed_parent_path(&repo, &pt, &tree, &current_path)?
+                {
                     current_path = old_path;
                     commit = p;
                     advanced = true;
@@ -1008,12 +1010,11 @@ impl GitRepo {
 
     fn find_renamed_parent_path(
         &self,
+        repo: &Repository,
         parent_tree: &Tree,
         tree: &Tree,
         current_path: &str,
     ) -> anyhow::Result<Option<String>> {
-        let repo = &self.inner.lock();
-
         let mut diff_opts = git2::DiffOptions::new();
         diff_opts.include_typechange(true);
 
