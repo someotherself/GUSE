@@ -2,11 +2,9 @@
 
 ## Under development. See Usage for current functionality
 
-## Dependencies
+## Major Dependencies
 
-
-This project required fuse3 and uses [libgit2](https://libgit2.org/) (via the `git2` crate) and
-[SQLite](https://sqlite.org/) (via the `rusqlite` crate).
+This project required fuse3 and uses [libgit2](https://libgit2.org/) (via the `git2` crate).
 
 ## OS
 This project has support for linux/macOS. On windows, consider using WSL2.
