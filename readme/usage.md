@@ -6,6 +6,9 @@ Table of contents:
 
 - [Running a commit](#Compiling)
 
+See also:
+- git and Commit files [git/commits](git_and_commit_files.md)
+- How to run a guse chase [CHASE](chase.md)
 
 # Running
 
