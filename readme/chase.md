@@ -1,11 +1,26 @@
 # GUSE Chase
 
+## INFO: This feature is still experimental and is geting improved.
+
 ## Intro
 ```text
 The app has the ability to run automated builds for a list of commits.
 For each commit, a series of shell commands can be ran, including compilations and builds.
-Each commit can share the same target, to speed up subsequent builds (incremental compilations).
+By default, the files and folders created by one target, get moved to the next one to speed up subsequent builds (incremental compilations).
 The chase uses simple scripts written in Lua.
+```
+
+## Running a chase
+
+```text
+Once created, a script can be ran using:
+
+GUSE chase <REPO_NAME> <SCRIPT_NAME>
+
+To enable saving logs to file, use the '-l' flag.
+The logs will be saved in a folder named with a timestamp, next to the script.lua.
+
+GUSE chase <REPO_NAME> <SCRIPT_NAME> -l
 ```
 
 ## Managing scripts
@@ -18,7 +33,7 @@ $ GUSE script new REPO_NAME SCRIPT_NAME
 This will create the folder and place a blank script inside:
 > REPO_NAME/chase/SCRIPT_NAME/script.lua
 
-A script can then be deleted:
+A script can then be deleted (this will delete the entire script folder):
 $ GUSE script remove REPO_NAME SCRIPT_NAME
 
 It can also be renamed:
@@ -38,7 +53,7 @@ local run_mode = "Continuous"
 -- Sets the build mode. Can be "FirstFailure" or "Continuous"
 local stop_mode = "FirstFailure"
 
--- Load functions
+-- Load functions (Not to be changed by the user)
 for input_type, oid in pairs(commits) do
   if type(input_type) == "number" then 
     cfg.add_commit("commit", oid)

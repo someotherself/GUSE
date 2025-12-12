@@ -189,6 +189,7 @@ Find commit history of a file
 
 When inside a Snap folder, the cd command can also be used on a file.
 This will create a folder with all the versions of that file from the commit history.
+
 If this folder is then opened in an IDE, git will attempt to show the line diffs for each file.
 
 ```bash
@@ -244,6 +245,22 @@ This operation only works when the app us running
 
 ```bash
 guse repo remove tokio
+```
+
+# Updating a repo
+
+A new fetch can be done on an existing repo to update it.
+
+This operation only works when the app us running
+
+```bash
+guse repo update tokio
+```
+
+By default, this will use the remote name created by GUSE (upstream). A custom remote can be added optionally:
+
+```bash
+guse repo update tokio origin
 ```
 
 # Compiling
