@@ -13,16 +13,16 @@ They will also have an index set to the parent tree. When opened in a code edito
 
 ## Fetching
 
-More details about how GUSE fetches via mkdir, see fetching section here: [Fetching](usage.md###Fetching).
+More details about how guse fetches via mkdir, see fetching section here: [Fetching](usage.md###Fetching).
 
 ```text
-An empty repository will still have an empty, initialized repo and a regular fetch can still be done. But by default, a git fetch will not include PRs which are fetched by GUSE. After a manual fetch, a session restart will be needed to update the folder structure.
+An empty repository will still have an empty, initialized repo and a regular fetch can still be done. But by default, a git fetch will not include PRs which are fetched by guse. After a manual fetch, a session restart will be needed to update the folder structure.
 A git clone should not be performed here.
 ```
 
 ## Snap folders
 ```text
-GUSE is built to allow builds and compilations to be ran inside each Snap folder. This means that each Snap folders has write permissions, with some restrictions.
+guse is built to allow builds and compilations to be ran inside each Snap folder. This means that each Snap folders has write permissions, with some restrictions.
 
 The files and folders in a commit, cannot be deleted and files cannot be created inside a commit directory.
 However, the commit files can be modified and modifications will persist for the duration of the session.

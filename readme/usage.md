@@ -1,6 +1,6 @@
 Table of contents:
 
-- [How to install and run GUSE](#Running)
+- [How to install and run guse](#Running)
 
 - [Find commit history of a file](#Commit-history)
 
@@ -31,7 +31,7 @@ cargo install guse
             _ -> trace (default)
 ```
 
-GUSE will create 2 folders. In this example they are called:
+guse will create 2 folders. In this example they are called:
 - MOUNT: This is where the filesystem is mounted. This is what the user interacts with when the app is running. MOUNT will be empty when the app is not running.
 - data_dir: This is where the files are stored. Commands ran on MOUNT, will be applied on files in data_dir. Running cli commands directly in data_dir wil bypass the FUSE implemantation.
 
@@ -257,7 +257,7 @@ This operation only works when the app us running
 guse repo update tokio
 ```
 
-By default, this will use the remote name created by GUSE (upstream). A custom remote can be added optionally:
+By default, this will use the remote name created by guse (upstream). A custom remote can be added optionally:
 
 ```bash
 guse repo update tokio origin
@@ -273,8 +273,8 @@ Each commit can be compiled or ran, and tests can be performed.
 
 ```bash
 cd MOUNT
-mkdir mkdir github.someotherself.GUSE.git
-cd GUSE/2025-09/Snap140_4e66c30/
+mkdir mkdir github.someotherself.guse.git
+cd guse/2025-09/Snap140_4e66c30/
 ls 
 Cargo.lock  Cargo.toml  LICENSE  README.md  readme  src
 cargo test

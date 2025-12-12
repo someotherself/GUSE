@@ -1,4 +1,4 @@
-# GUSE Chase
+# guse Chase
 
 ## INFO: This feature is still experimental and is geting improved.
 
@@ -15,12 +15,12 @@ The chase uses simple scripts written in Lua.
 ```text
 Once created, a script can be ran using:
 
-GUSE chase <REPO_NAME> <SCRIPT_NAME>
+guse chase <REPO_NAME> <SCRIPT_NAME>
 
 To enable saving logs to file, use the '-l' flag.
 The logs will be saved in a folder named with a timestamp, next to the script.lua.
 
-GUSE chase <REPO_NAME> <SCRIPT_NAME> -l
+guse chase <REPO_NAME> <SCRIPT_NAME> -l
 ```
 
 ## Managing scripts
@@ -29,15 +29,15 @@ GUSE chase <REPO_NAME> <SCRIPT_NAME> -l
 Each repo will have a folder called chase where all the chase scripts and logs will be found.
 
 A new script template can be created using:
-$ GUSE script new REPO_NAME SCRIPT_NAME
+$ guse script new REPO_NAME SCRIPT_NAME
 This will create the folder and place a blank script inside:
 > REPO_NAME/chase/SCRIPT_NAME/script.lua
 
 A script can then be deleted (this will delete the entire script folder):
-$ GUSE script remove REPO_NAME SCRIPT_NAME
+$ guse script remove REPO_NAME SCRIPT_NAME
 
 It can also be renamed:
-$ GUSE script remove REPO_NAME OLD_SCRIPT_NAME NEW_SCRIPT_NAME
+$ guse script remove REPO_NAME OLD_SCRIPT_NAME NEW_SCRIPT_NAME
 ```
 
 A blank script will look like this:
