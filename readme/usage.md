@@ -32,6 +32,7 @@ cargo install guse
             0 -> info (-vv)
             1 -> debug (-v)
             _ -> trace (default)
+-t          - Disable the UnixSocket. Will also disable the guse commands.
 ```
 
 guse will create 2 folders. In this example they are called:
@@ -48,8 +49,8 @@ guse run MOUNT data_dir -o -vv
 
 There are 2 ways to start new reposities.
 ### 1. Empty repositories
-```bash
 Open a new cli after starting the app
+```bash
 cd MOUNT
 mkdir my_new_repository
 ls my_new_repository
