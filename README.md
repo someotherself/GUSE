@@ -1,10 +1,6 @@
 # GUSE (goo͞s) is a git based filesystem, written in rust and mouted with FUSE.
 
-## Under development. See Usage for current functionality
-
-## Major Dependencies
-
-This project required fuse3 and uses [libgit2](https://libgit2.org/) (via the `git2` crate).
+## Under development as a hobby project. See Usage for current functionality
 
 ## OS
 This project has support for linux/macOS. On windows, consider using WSL2.
@@ -15,12 +11,11 @@ This project has support for linux/macOS. On windows, consider using WSL2.
 - [GUSE chase and scripts](readme/chase.md)
 
 ## INFO
-GUSE is a learning project. It is built to allow user to interact with git directly from the filesystem, using normal filesystem cli commands.
+GUSE is built to map the entire git repo on the disk available at once. It allows navigating it with cli commands, along with other features.
 
 GUSE allows mounting of multiple repositories and manage them independently
 
 Git authentication is currently not supported
-
 
 ### The disk structure, as observed by the user is:
 ``` text
