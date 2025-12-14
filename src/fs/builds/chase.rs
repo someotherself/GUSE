@@ -9,6 +9,7 @@ use std::{
 use anyhow::bail;
 use git2::Oid;
 use parking_lot::Mutex;
+use serde::{Deserialize, Serialize};
 
 use crate::{
     fs::{
@@ -46,7 +47,15 @@ pub struct Chase {
     // Holds the path for the Snap folders and the ino of the snap folders
     pub commit_paths: HashMap<Oid, (PathBuf, u64)>,
     // Logging to file enabled/disabled
+    pub args: ChaseArgs,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "chase-args", rename_all = "snake_case")]
+/// Created by Clap to collect arguments and pass them on
+pub struct ChaseArgs {
     pub log: bool,
+    pub no_move: bool,
 }
 
 // Accepts a handshake between "client" and "server"
@@ -65,7 +74,7 @@ pub fn start_chase(
     repo_name: &str,
     script: &str,
     stream: &mut UnixStream,
-    log: bool,
+    args: ChaseArgs,
     chase_id: ChaseId,
 ) -> anyhow::Result<()> {
     if let CmdResult::Err(e) = ChaseHandle::start_run(chase_id) {
@@ -97,7 +106,7 @@ pub fn start_chase(
         run_mode: cfg.run_mode,
         stop_mode: cfg.stop_mode,
         commit_paths: paths,
-        log,
+        args,
     };
 
     // 6 - Cleanup any existing files

@@ -9,7 +9,10 @@ use std::{
 use anyhow::{anyhow, bail};
 use clap::{Arg, ArgAction, ArgMatches, Command, command, crate_authors, crate_version};
 
-use guse::internals::sock::{ControlReq, ControlRes, send_req, socket_path};
+use guse::{
+    fs::builds::chase::ChaseArgs,
+    internals::sock::{ControlReq, ControlRes, send_req, socket_path},
+};
 use tracing_subscriber::{EnvFilter, filter::Directive};
 
 fn main() -> anyhow::Result<()> {
@@ -57,6 +60,8 @@ fn main() -> anyhow::Result<()> {
                 .get_one::<String>("build")
                 .ok_or_else(|| anyhow!("Cannot parse argument"))?;
             let log = m.get_flag("log");
+            let no_move = m.get_flag("no-move");
+            let chase_args = ChaseArgs { log, no_move };
 
             // Send connection request
             let conn_req = ControlReq::Connect;
@@ -81,7 +86,7 @@ fn main() -> anyhow::Result<()> {
                 let chase_req = ControlReq::Chase {
                     repo: &repo_clone,
                     build: &build_clone,
-                    log,
+                    args: chase_args,
                     chase_id: id,
                 };
                 let _ = send_req(&work_sock, &chase_req);
@@ -254,6 +259,12 @@ fn handle_cli_args() -> ArgMatches {
                         .short('l')
                         .action(ArgAction::SetTrue)
                         .help("Enable logging chase results to disk (in chase folder).")
+                )
+                .arg(Arg::new("no-move")
+                        .long("no-move")
+                        .short('m')
+                        .action(ArgAction::SetTrue)
+                        .help("Disable moving files between targets during a GUSE chase")
                 )
         )
         .subcommand(

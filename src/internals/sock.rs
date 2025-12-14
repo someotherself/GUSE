@@ -16,7 +16,7 @@ use crate::{
     fs::{
         GitFs,
         builds::{
-            chase::{ChaseId, start_chase, start_chase_connection},
+            chase::{ChaseArgs, ChaseId, start_chase, start_chase_connection},
             chase_handle::{ChaseHandle, ChaseState},
             logger::CmdResult,
             reporter::Updater,
@@ -48,7 +48,7 @@ pub enum ControlReq<'a> {
     Chase {
         repo: &'a str,
         build: &'a str,
-        log: bool,
+        args: ChaseArgs,
         chase_id: ChaseId,
     },
     NewScript {
@@ -163,12 +163,12 @@ fn handle_client(
             ControlReq::Chase {
                 repo,
                 build,
-                log,
+                args,
                 chase_id,
             } => {
                 let repo = repo.strip_suffix("/").unwrap_or(repo);
                 let fs = inner.getfs();
-                let _ = start_chase(&fs, repo, build, &mut stream, log, chase_id);
+                let _ = start_chase(&fs, repo, build, &mut stream, args, chase_id);
                 Ok(ControlRes::Ok)
             }
             ControlReq::StopChase { id } => {

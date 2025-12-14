@@ -62,10 +62,10 @@ impl<'a, R: Updater> ChaseRunner<'a, R> {
         handle: Arc<ChaseHandle>,
     ) -> Self {
         // Folder where the logs will be saved
-        if chase.log && std::fs::create_dir(dir).is_err() {
+        if chase.args.log && std::fs::create_dir(dir).is_err() {
             // If the folder can't be created, don't try to log
             let _ = reporter.update(&color_red("COULD NOT CREATE LOGGING DIRECTORY.\n"));
-            chase.log = false;
+            chase.args.log = false;
         }
         Self {
             dir_path: dir.to_path_buf(),
@@ -110,6 +110,7 @@ impl<'a, R: Updater> ChaseRunner<'a, R> {
             // MOVE build contents from previous commit
             let cur_target: ChaseTarget = ChaseTarget::new(cur_ino);
             if let Some(ref prev_target) = prev_target
+                && !self.chase.args.no_move
                 && let Err(e) = move_chase_target(self.fs, prev_target, &cur_target)
             {
                 self.report(&format!(
@@ -146,7 +147,7 @@ impl<'a, R: Updater> ChaseRunner<'a, R> {
     }
 
     fn update_curr_log_file(&mut self, curr_run: usize, oid: Oid) {
-        if self.chase.log {
+        if self.chase.args.log {
             let name = format!("{:02}_{oid:.7}", curr_run);
             if let Ok(file) = std::fs::OpenOptions::new()
                 .write(true)

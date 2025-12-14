@@ -2039,7 +2039,7 @@ impl GitFs {
     }
 
     fn get_kind_from_db(&self, ino: NormalIno) -> anyhow::Result<FileType> {
-        if ino.to_norm_u64() == 0 {
+        if ino.to_norm_u64() == ROOT_INO {
             return Ok(FileType::Directory);
         }
         let repo = self.get_repo(ino.into())?;
