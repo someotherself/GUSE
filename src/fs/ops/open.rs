@@ -428,8 +428,10 @@ fn open_injected_file(
 ) -> anyhow::Result<Handle> {
     let path = if let Some(build_meta) = &metadata.build {
         build_meta.path.as_path()
+    } else if let Some(inj_file) = &metadata.modified {
+        inj_file.path.as_path()
     } else {
-        metadata.modified.path.as_path()
+        bail!(std::io::Error::from_raw_os_error(libc::ENOENT))
     };
     // TODO: If file is missing on disk, add fallback to create new.
     let file = OpenOptions::new().read(true).write(true).open(path)?;

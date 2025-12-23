@@ -4,6 +4,14 @@ local commits = {
 local commands = {
 }
 
+local patches = {{
+  path = "",
+  code = [[
+
+]]
+  },
+}
+
 -- Sets the run mode. For the moment, only "Continuous" mode is implemented. "Binary" mode is a work in progress.
 local run_mode = "Continuous"
 -- Sets the build mode. Can be "FirstFailure" or "Continuous"
@@ -26,6 +34,10 @@ end
 
 for _, command in ipairs(commands) do
   cfg.add_command(command)
+end
+
+for _, p in ipairs(patches) do
+  cfg.add_patch(p.path, p.code)
 end
 
 if run_mode ~= nil then

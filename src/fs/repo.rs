@@ -753,8 +753,7 @@ impl GitRepo {
                 name_len as u16
             };
 
-            #[allow(clippy::identity_op)]
-            let flags: u16 = (0b00u16 << 12) | name_len_field;
+            let flags: u16 = name_len_field;
 
             e.extend(flags.to_be_bytes());
 

@@ -1,9 +1,10 @@
 use std::{
-    path::Path,
-    sync::{Arc, Mutex},
+    path::{Path, PathBuf},
+    sync::Arc,
 };
 
 use mlua::Lua;
+use parking_lot::Mutex;
 
 use crate::fs::builds::reporter::{ChaseError, GuseResult};
 
@@ -79,6 +80,7 @@ pub struct LuaConfig {
     pub commands: Vec<String>,
     pub run_mode: ChaseRunMode,
     pub stop_mode: ChaseStopMode,
+    pub patches: Vec<(PathBuf, String)>,
 }
 
 impl LuaConfig {
@@ -97,12 +99,13 @@ impl LuaConfig {
                 msg: "Could not create cfg table: ".to_string(),
             })?;
 
+            // ADD_COMMITS
             {
                 let commits_ref = Arc::clone(&lua_config);
                 let add_commit = scope
                     .create_function(move |_, (input_type, oid): (String, String)| {
                         let input_type = InputTypes::from_str(&input_type);
-                        commits_ref.lock().unwrap().commits.push((input_type, oid));
+                        commits_ref.lock().commits.push((input_type, oid));
                         Ok(())
                     })
                     .map_err(|e| ChaseError::LuaError {
@@ -116,11 +119,12 @@ impl LuaConfig {
                     })?;
             }
 
+            // ADD_COMMANDS
             {
                 let commands_ref = Arc::clone(&lua_config);
                 let add_command = scope
                     .create_function(move |_, command: String| {
-                        commands_ref.lock().unwrap().commands.push(command);
+                        commands_ref.lock().commands.push(command);
                         Ok(())
                     })
                     .map_err(|e| ChaseError::LuaError {
@@ -134,13 +138,14 @@ impl LuaConfig {
                     })?;
             }
 
+            // RUN_MODE
             {
                 let run_mode_ref = Arc::clone(&lua_config);
                 let set_run_mode = scope
                     .create_function(move |_, run_mode: String| {
                         let chase_run_mode = ChaseRunMode::from_str(&run_mode);
                         let run_opt = chase_run_mode.unwrap_or_default();
-                        run_mode_ref.lock().unwrap().run_mode = run_opt;
+                        run_mode_ref.lock().run_mode = run_opt;
                         Ok(())
                     })
                     .map_err(|e| ChaseError::LuaError {
@@ -154,13 +159,14 @@ impl LuaConfig {
                     })?;
             }
 
+            // STOP_MODE
             {
                 let stop_mode_ref = Arc::clone(&lua_config);
                 let set_stop_mode = scope
                     .create_function(move |_, stop_mode: String| {
                         let chase_mode = ChaseStopMode::from_str(&stop_mode);
                         let stop_opt = chase_mode.unwrap_or_default();
-                        stop_mode_ref.lock().unwrap().stop_mode = stop_opt;
+                        stop_mode_ref.lock().stop_mode = stop_opt;
                         Ok(())
                     })
                     .map_err(|e| ChaseError::LuaError {
@@ -168,6 +174,28 @@ impl LuaConfig {
                         msg: "Could not create set_stop_mode function".to_string(),
                     })?;
                 cfg.set("set_stop_mode", set_stop_mode)
+                    .map_err(|e| ChaseError::LuaError {
+                        source: e,
+                        msg: "Error setting cfg table: ".to_string(),
+                    })?;
+            }
+
+            // ADD_
+            {
+                let patches_ref = Arc::clone(&lua_config);
+                let set_patches = scope
+                    .create_function(move |_, (path, patch): (String, String)| {
+                        patches_ref
+                            .lock()
+                            .patches
+                            .push((PathBuf::from(path), patch));
+                        Ok(())
+                    })
+                    .map_err(|e| ChaseError::LuaError {
+                        source: e,
+                        msg: "Could not create add_patch function".to_string(),
+                    })?;
+                cfg.set("add_patch", set_patches)
                     .map_err(|e| ChaseError::LuaError {
                         source: e,
                         msg: "Error setting cfg table: ".to_string(),
@@ -207,7 +235,7 @@ impl LuaConfig {
             msg: "Could not run lua GC: ".to_string(),
         })?;
 
-        let config = Arc::try_unwrap(lua_config).unwrap().into_inner().unwrap();
+        let config = Arc::try_unwrap(lua_config).unwrap().into_inner();
         config.check_config_fields()?;
         Ok(config)
     }

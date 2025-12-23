@@ -20,10 +20,12 @@ use crate::{
                 cleanup_builds, resolve_path_for_refs, validate_commit_refs, validate_commits,
             },
             chase_runner::ChaseRunner,
+            inject::InjectedMetadata,
             logger::CmdResult,
             reporter::{ErrorResolver, Updater},
             runtime::{ChaseRunMode, ChaseStopMode, LuaConfig},
         },
+        fileattr::FileType,
     },
     internals::sock::ControlRes,
 };
@@ -47,6 +49,7 @@ pub struct Chase {
     // Holds the path for the Snap folders and the ino of the snap folders
     pub commit_paths: HashMap<Oid, (PathBuf, u64)>,
     // Logging to file enabled/disabled
+    pub patches: Vec<(PathBuf, String)>,
     pub args: ChaseArgs,
 }
 
@@ -106,13 +109,17 @@ pub fn start_chase(
         run_mode: cfg.run_mode,
         stop_mode: cfg.stop_mode,
         commit_paths: paths,
+        patches: cfg.patches,
         args,
     };
 
     // 6 - Cleanup any existing files
     cleanup_builds(fs, repo_ino, &chase)?;
 
-    // 7 - run chase
+    // 7 - Modify files if needed
+    check_patches(fs, &chase)?;
+
+    // 8 - run chase
     // Name of a folder to save logs to (if enabled)
     let name = format!("{}", chrono::offset::Utc::now());
     let dir_path = script_path.join(name);
@@ -123,10 +130,53 @@ pub fn start_chase(
         ChaseRunner::new(&dir_path, fs, stream, chase.clone(), handle);
     let _ = chase_runner.run();
 
-    // 8 - Cleanup all the files created during the chase
+    // 9 - Cleanup all the files created during the chase
     cleanup_builds(fs, repo_ino, &chase)?;
 
     ChaseHandle::deregister_chase_id(chase_id);
+    Ok(())
+}
+
+fn check_patches(fs: &GitFs, chase: &Chase) -> anyhow::Result<()> {
+    for (_, snap_ino) in chase.commit_paths.values() {
+        for (path, patch) in &chase.patches {
+            let mut parent_ino = *snap_ino;
+            let mut target_ino = None;
+            let components = path.components();
+            for comp in components {
+                let comp_name = comp.as_os_str();
+                fs.readdir(parent_ino)?;
+                let Some(attr) = fs.lookup(parent_ino, comp_name)? else {
+                    tracing::error!("Patch target not found: {}", path.display());
+                    bail!("Patch target not found: {}", path.display())
+                };
+                if attr.kind == FileType::RegularFile {
+                    target_ino = Some(attr.ino);
+                    break;
+                }
+                parent_ino = attr.ino;
+            }
+            if let Some(target_ino) = target_ino {
+                patch_target(fs, patch, target_ino)?;
+            } else {
+                tracing::warn!("Patch target not found: {}", path.display());
+                bail!("Patch target not found: {}", path.display())
+            }
+        }
+    }
+    Ok(())
+}
+
+fn patch_target(fs: &GitFs, patch: &str, target_ino: u64) -> anyhow::Result<()> {
+    let attr = fs.getattr(target_ino)?;
+    InjectedMetadata::create_build(fs, attr.oid, target_ino)?;
+    let fh = fs.open(target_ino, true, true, false)?;
+    let n = fs.write(target_ino, attr.size, patch.as_bytes(), fh)?;
+    if n < patch.len() {
+        tracing::warn!("Failed to write patch");
+        bail!("Failed to write patch")
+    };
+    fs.release(fh)?;
     Ok(())
 }
 

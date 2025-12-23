@@ -11,6 +11,7 @@ use crate::fs::{
     self, GitFs,
     builds::{
         chase::Chase,
+        inject::InjectedMetadata,
         reporter::{ChaseFsError, ChaseGitError, GuseFsResult, GuseGitResult},
         runtime::InputTypes,
     },
@@ -449,6 +450,8 @@ fn find_path_in_pr(
 }
 
 pub fn cleanup_builds(fs: &GitFs, repo_ino: u64, chase: &Chase) -> anyhow::Result<()> {
+    // TODO: Delete build files
+    InjectedMetadata::cleanup_builds(fs, repo_ino)?;
     let repo = fs.get_repo(repo_ino)?;
     for oid in chase.commits.iter() {
         let guard = repo.inostate.read();
