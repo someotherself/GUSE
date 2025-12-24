@@ -88,6 +88,9 @@ pub trait Reporter {
 }
 
 impl<'a, R: Updater> Reporter for ChaseRunner<'a, R> {
+    /// Called only from inside a ChaseRunner::run
+    ///
+    /// It will write to a log file, and the log file only exists when the chase started for that commit.
     fn report(&mut self, log: &str) -> anyhow::Result<()> {
         if let Some(file_ref) = &self.curr_log_file
             && let Ok(mut file) = file_ref.try_clone()
@@ -103,6 +106,7 @@ impl<'a, R: Updater> Reporter for ChaseRunner<'a, R> {
 pub trait Updater {
     /// Sends a line of text, to be immediately displayed to the cli
     fn update(&mut self, msg: &str) -> anyhow::Result<()>;
+    /// Do not use
     fn refresh_cli(&mut self, log: Vec<LogLine>) -> anyhow::Result<()>;
 }
 

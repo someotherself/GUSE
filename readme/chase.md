@@ -1,6 +1,7 @@
 # guse Chase
 
 ## INFO: This feature is still experimental and is geting improved.
+## SAFETY: The safety will execute cli commands that you pass in. The safety of this feature is the same as anything else you run on your computer. Do not copy and run code or cli commands that you do not understand.
 
 ## Intro
 ```text
@@ -89,6 +90,9 @@ local commits = {Branch = "branch_name", Range = "b074789..b2e00c3", "10a4g89" }
 ```
 
 ### Adding commands
+
+Guse does not modify or check the commands the commands you pass in. They are parsed using the  [shell_words](https://crates.io/crates/shell-words) crate and passed in directly to `std::process::Command`.
+
 Example:
 ```lua
 local commands = { "echo some", "pwd", "cargo test" }
@@ -108,4 +112,35 @@ Stop mode is the failure behavious, in case of a exit failure from the cli.
 This field is optional. The default value will be Continuous
 - Continuous will not stop for failures and run through the whole list
 - FirstFailure will stop at the first exit failure.
+```
+
+## Patches
+
+```text
+Patches are a way to automatically add code to the files in a commit, to aid during a chase, typically, tests.
+Currently, all the code is added at the bottom of the file. The path to the file is inserted once, and the patch will be inserted in all the versions of the file in each commit added to the chase.
+The files will be restored to the original state once the chase is over.
+If the file is not found in any of the commits, the chase will fail.
+```
+
+Example:
+
+```lua
+
+local patches = {{
+  path = "src/fs/tests.rs", code = [[
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn it_works() {
+        let result = add(2, 2);
+        assert_eq!(result, 4);
+    }
+}
+]]
+  },
+}
 ```

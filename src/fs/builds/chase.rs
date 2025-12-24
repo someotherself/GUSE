@@ -117,7 +117,7 @@ pub fn start_chase(
     cleanup_builds(fs, repo_ino, &chase)?;
 
     // 7 - Modify files if needed
-    check_patches(fs, &chase)?;
+    check_patches(fs, &chase, stream)?;
 
     // 8 - run chase
     // Name of a folder to save logs to (if enabled)
@@ -137,7 +137,7 @@ pub fn start_chase(
     Ok(())
 }
 
-fn check_patches(fs: &GitFs, chase: &Chase) -> anyhow::Result<()> {
+fn check_patches(fs: &GitFs, chase: &Chase, stream: &mut UnixStream) -> anyhow::Result<()> {
     for (_, snap_ino) in chase.commit_paths.values() {
         for (path, patch) in &chase.patches {
             let mut parent_ino = *snap_ino;
@@ -147,7 +147,7 @@ fn check_patches(fs: &GitFs, chase: &Chase) -> anyhow::Result<()> {
                 let comp_name = comp.as_os_str();
                 fs.readdir(parent_ino)?;
                 let Some(attr) = fs.lookup(parent_ino, comp_name)? else {
-                    tracing::error!("Patch target not found: {}", path.display());
+                    stream.update(&format!("Patch target not found: {}", path.display()))?;
                     bail!("Patch target not found: {}", path.display())
                 };
                 if attr.kind == FileType::RegularFile {
@@ -157,9 +157,9 @@ fn check_patches(fs: &GitFs, chase: &Chase) -> anyhow::Result<()> {
                 parent_ino = attr.ino;
             }
             if let Some(target_ino) = target_ino {
-                patch_target(fs, patch, target_ino)?;
+                patch_target(fs, patch, target_ino, stream)?;
             } else {
-                tracing::warn!("Patch target not found: {}", path.display());
+                stream.update(&format!("Patch target not found: {}", path.display()))?;
                 bail!("Patch target not found: {}", path.display())
             }
         }
@@ -167,13 +167,18 @@ fn check_patches(fs: &GitFs, chase: &Chase) -> anyhow::Result<()> {
     Ok(())
 }
 
-fn patch_target(fs: &GitFs, patch: &str, target_ino: u64) -> anyhow::Result<()> {
+fn patch_target(
+    fs: &GitFs,
+    patch: &str,
+    target_ino: u64,
+    stream: &mut UnixStream,
+) -> anyhow::Result<()> {
     let attr = fs.getattr(target_ino)?;
     InjectedMetadata::create_build(fs, attr.oid, target_ino)?;
     let fh = fs.open(target_ino, true, true, false)?;
     let n = fs.write(target_ino, attr.size, patch.as_bytes(), fh)?;
     if n < patch.len() {
-        tracing::warn!("Failed to write patch");
+        stream.update("Failed to write patch")?;
         bail!("Failed to write patch")
     };
     fs.release(fh)?;
