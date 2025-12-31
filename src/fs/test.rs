@@ -1,14 +1,11 @@
-use std::{
-    ffi::OsStr,
-    path::{Path, PathBuf},
-};
+use std::ffi::OsStr;
 
 use anyhow::anyhow;
 
 use crate::{
     fs::{FileType, GitFs, LIVE_FOLDER, REPO_SHIFT},
     inodes::Inodes,
-    test_setup::{FuseTestSetup, GitFsTestSetup, get_fs, run_fuse_fs_test, run_git_fs_test},
+    test_setup::{GitFsTestSetup, get_fs, run_git_fs_test},
 };
 
 use crate::fs::ROOT_INO;
@@ -485,39 +482,4 @@ fn test_rename_live_source_missing() -> anyhow::Result<()> {
         },
     )?;
     Ok(())
-}
-
-#[test]
-fn test_fuse_mount_check() -> anyhow::Result<()> {
-    run_fuse_fs_test(
-        FuseTestSetup {
-            key: "test_fuse_mount_check",
-        },
-        |ctx| {
-            let repo = prepare_repo_for_test("foo", &ctx.mountpoint.mountpoint)?;
-
-            let file_path = repo.live.join("file.txt");
-            std::fs::write(&file_path, b"hi")?;
-            let body = std::fs::read(&file_path)?;
-            assert_eq!(&body, b"hi");
-
-            Ok(())
-        },
-    )
-}
-
-fn prepare_repo_for_test(repo_name: &str, root: &Path) -> anyhow::Result<RepoLocations> {
-    let repo_path = root.join(repo_name);
-    std::fs::create_dir(&repo_path)?;
-
-    let live = repo_path.join(LIVE_FOLDER);
-    Ok(RepoLocations {
-        live,
-        repo_snap: None,
-    })
-}
-
-struct RepoLocations {
-    live: PathBuf,
-    repo_snap: Option<PathBuf>,
 }

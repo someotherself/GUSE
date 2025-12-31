@@ -6,7 +6,6 @@ use std::{
 };
 
 use anyhow::bail;
-use thiserror::Error;
 
 use crate::{
     fs::builds::{chase_runner::ChaseRunner, logger::LogLine},
@@ -15,66 +14,56 @@ use crate::{
 
 pub type GuseResult<T> = core::result::Result<T, ChaseError>;
 
-#[derive(Error, Debug)]
 pub enum ChaseError {
-    #[error("Error parsing script")]
     ParsingMisc { msg: String },
-    #[error("Script not found at path")]
     ScriptNotFound { path: PathBuf },
-    #[error("")]
-    LuaError {
-        #[source]
-        source: mlua::Error,
-        msg: String,
-    },
-    #[error("No commits provided")]
+    LuaError { source: mlua::Error, msg: String },
     NoCommits,
-    #[error("No commands provided")]
     NoCommands,
-    #[error("")]
     BadInputType { input: String, oid: String },
 }
 
 pub type GuseGitResult<T> = core::result::Result<T, ChaseGitError>;
 
-#[derive(Error, Debug)]
 pub enum ChaseGitError {
-    #[error("Ambiguous commit hash")] // git2::ErrorCode::Ambiguous
-    GitAmbiguousCommit { commit: String },
-    #[error("Commit not found")] // git2::ErrorCode::NotFound
-    CommitNotFound { commit: String },
-    #[error("Git error")] // Other git errors
+    // git2::ErrorCode::Ambiguous
+    GitAmbiguousCommit {
+        commit: String,
+    },
+    // git2::ErrorCode::NotFound
+    CommitNotFound {
+        commit: String,
+    },
+    // Other git errors
     GitError {
         message: String,
-        #[source]
         source: git2::Error,
     },
-    #[error("No results in snaps_to_ref")]
     NoRefKindsFound,
-    #[error("Snap folder not found")]
-    RefKindNotFound { commit: String },
-    #[error("GitFs error")]
-    FsError { msg: String },
-    #[error("")]
+    RefKindNotFound {
+        commit: String,
+    },
+    FsError {
+        msg: String,
+    },
     BranchNotFound {
         branch_type: String,
         branch_name: String,
     },
-    #[error("")]
-    BadCommitRange { input: String },
-    #[error("")]
-    NoCommonRef { oid1: String, oid2: String },
+    BadCommitRange {
+        input: String,
+    },
+    NoCommonRef {
+        oid1: String,
+        oid2: String,
+    },
 }
 
 pub type GuseFsResult<T> = core::result::Result<T, ChaseFsError>;
 
-#[derive(Error, Debug)]
 pub enum ChaseFsError {
-    #[error("Lookup returned None")]
     NoneFound { target: OsString },
-    #[error("Snap not found")]
     SnapNotFound { msg: String },
-    #[error("GitFs error")]
     FsError { msg: String },
 }
 

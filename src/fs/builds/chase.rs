@@ -86,23 +86,23 @@ pub fn start_chase(
     let repo_ino = get_repo_ino(fs, repo_name, stream)?;
     let repo = fs.get_repo(repo_ino)?;
 
-    // 1 - Get script path
+    // Get script path
     let script_path = repo.chase_dir.join(script);
     stream.update(&start_message(script))?;
 
-    // 2 - Read and parse the script
+    // Read and parse the script
     let cfg = LuaConfig::read_lua(&script_path).resolve(stream)?;
 
-    // 3 - Validate the commits, find the Oid
+    // Validate the commits, find the Oid
     let commits = validate_commits(fs, repo_ino, &cfg.commits).resolve(stream)?;
     let commands: VecDeque<String> = cfg.commands.into();
     let c_oid_vec = commits.iter().collect::<Vec<&Oid>>();
 
-    // 4 - Find the Snap folders on disk
-    let c_refs = validate_commit_refs(fs, repo_ino, &c_oid_vec)?;
-    let paths = resolve_path_for_refs(fs, repo_ino, c_refs)?;
+    // Find the Snap folders on disk
+    let c_refs = validate_commit_refs(fs, repo_ino, &c_oid_vec).resolve(stream)?;
+    let paths = resolve_path_for_refs(fs, repo_ino, c_refs).resolve(stream)?;
 
-    // 5 - Prepare the build ctx
+    // Prepare the build ctx
     let chase: Chase = Chase {
         commits,
         commands,
@@ -113,15 +113,15 @@ pub fn start_chase(
         args,
     };
 
-    // 6 - Cleanup any existing files
+    // Cleanup any existing files
     cleanup_builds(fs, repo_ino, &chase)?;
 
-    // 7 - Modify files if needed
+    // Modify files if needed
     check_patches(fs, &chase, stream)?;
 
-    // 8 - run chase
-    // Name of a folder to save logs to (if enabled)
+    // run chase
     let name = format!("{}", chrono::offset::Utc::now());
+    // Folder to save logs to (if enabled)
     let dir_path = script_path.join(name);
     let Some(handle) = ChaseHandle::get_handle(&chase_id) else {
         bail!("Error. Chase handle does not exist for id {chase_id}")
@@ -130,7 +130,7 @@ pub fn start_chase(
         ChaseRunner::new(&dir_path, fs, stream, chase.clone(), handle);
     let _ = chase_runner.run();
 
-    // 9 - Cleanup all the files created during the chase
+    // Cleanup all the files created during the chase
     cleanup_builds(fs, repo_ino, &chase)?;
 
     ChaseHandle::deregister_chase_id(chase_id);
