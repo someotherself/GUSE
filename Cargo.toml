@@ -17,7 +17,7 @@ clap = { version = "4.5.53", features = ["cargo"] }
 libc = "0.2.175"
 tracing = { version = "0.1.41", features = ["max_level_trace", "release_max_level_trace"] }
 tracing-subscriber = { version = "0.3.22", features = ["env-filter"] }
-git2 = { version = "0.20.3", features = ["vendored-openssl"] }
+git2 = { version = "0.20.4", features = ["vendored-openssl"] }
 fuser = { version = "0.16.0", features = ["abi-7-28"] }
 chrono = "0.4.42"
 tempfile = "3.24.0"
