@@ -1062,8 +1062,8 @@ impl MetaDb {
     {
         let mut stmt = tx.prepare(
             r#"UPDATE inode_map
-         SET oid = 1?
-         WHERE inode = 2?
+         SET oid = ?1
+         WHERE inode = ?2
          "#,
         )?;
 
