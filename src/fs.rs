@@ -1778,22 +1778,6 @@ impl GitFs {
 
     fn ensure_base_dirs_exist(&self) -> anyhow::Result<()> {
         if !self.repos_dir.exists() {
-            let mut attr: FileAttr = CreateFileAttr {
-                kind: FileType::Directory,
-                ino_flag: InoFlag::Root,
-                perm: 0o775,
-                mode: libc::S_IFDIR,
-                uid: 0,
-                gid: 0,
-                rdev: 0,
-                flags: 0,
-            }
-            .into();
-            unsafe {
-                attr.uid = libc::getuid();
-                attr.gid = libc::getgid();
-            }
-
             let repos_dir = &self.repos_dir;
             std::fs::create_dir_all(repos_dir)?;
         }
