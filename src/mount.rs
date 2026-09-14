@@ -1,34 +1,23 @@
-#![allow(unused_imports, unused_variables)]
 
-use anyhow::{Context, anyhow};
-use fuser::consts::{FUSE_ASYNC_READ, FUSE_WRITEBACK_CACHE};
 use fuser::{
-    BackgroundSession, MountOption, ReplyAttr, ReplyData, ReplyEntry, ReplyOpen, ReplyWrite,
-    TimeOrNow, consts,
+    MountOption, ReplyAttr, ReplyData, ReplyEntry, ReplyOpen, ReplyWrite, TimeOrNow, consts,
 };
 use git2::Oid;
-use libc::{EACCES, EIO, EISDIR, ENOENT, ENOTDIR, ENOTTY, O_DIRECTORY};
-use tracing::{Level, Span, info, instrument};
-use tracing::{debug, error, trace, warn};
+use libc::{EIO, EISDIR, ENOENT, ENOTTY};
+use tracing::error;
+use tracing::instrument;
 
 use std::ffi::{OsStr, OsString};
-use std::io::{BufRead, BufReader, Read, Write};
-use std::os::linux::fs;
-use std::os::unix::ffi::OsStrExt;
-use std::os::unix::fs::PermissionsExt;
-use std::os::unix::net::{UnixListener, UnixStream};
+use std::io::{BufRead, BufReader};
 use std::path::Path;
-use std::sync::{Arc, Mutex, OnceLock};
-use std::thread;
+use std::path::PathBuf;
+use std::sync::{Arc, OnceLock};
 use std::time::{Duration, SystemTime};
-use std::{num::NonZeroU32, path::PathBuf};
 
-use crate::fs::fileattr::{
-    FileAttr, FileType, InoFlag, SetFileAttr, dir_attr, pair_to_system_time, system_time_to_pair,
-};
+use crate::fs::fileattr::{FileAttr, FileType, SetFileAttr, dir_attr};
 use crate::fs::meta_db::DbReturn;
 use crate::fs::ops::readdir::{DirectoryEntry, DirectoryEntryPlus};
-use crate::fs::{GitFs, REPO_SHIFT, ROOT_INO, SourceTypes, repo};
+use crate::fs::{GitFs, ROOT_INO, SourceTypes};
 use crate::internals::sock::{socket_path, start_control_server};
 
 const TTL: Duration = Duration::from_secs(15);
@@ -220,7 +209,7 @@ impl fuser::Filesystem for GitFsAdapter {
 
     fn destroy(&mut self) {}
 
-    fn lookup(&mut self, req: &fuser::Request<'_>, parent: u64, name: &OsStr, reply: ReplyEntry) {
+    fn lookup(&mut self, _req: &fuser::Request<'_>, parent: u64, name: &OsStr, reply: ReplyEntry) {
         let fs = self.getfs();
         let attr_result = fs.getattr(parent);
         match attr_result {
@@ -251,7 +240,6 @@ impl fuser::Filesystem for GitFsAdapter {
 
         match fs.lookup(parent, name) {
             Ok(Some(attr)) => {
-                let ino = attr.ino;
                 reply.entry(&TTL, &attr.into(), 0);
             }
             Ok(None) => {
@@ -269,12 +257,12 @@ impl fuser::Filesystem for GitFsAdapter {
     fn ioctl(
         &mut self,
         _req: &fuser::Request<'_>,
-        ino: u64,
-        fh: u64,
-        flags: u32,
-        cmd: u32,
-        in_data: &[u8],
-        out_size: u32,
+        _ino: u64,
+        _fh: u64,
+        _flags: u32,
+        _cmd: u32,
+        _in_data: &[u8],
+        _out_size: u32,
         reply: fuser::ReplyIoctl,
     ) {
         reply.error(ENOTTY);
@@ -283,7 +271,7 @@ impl fuser::Filesystem for GitFsAdapter {
     fn getattr(&mut self, _req: &fuser::Request<'_>, ino: u64, _fh: Option<u64>, reply: ReplyAttr) {
         let fs = self.getfs();
         match fs.getattr(ino) {
-            Err(err) => reply.error(ENOENT),
+            Err(_) => reply.error(ENOENT),
             Ok(attr) => reply.attr(&TTL, &attr.into()),
         }
     }
@@ -385,7 +373,7 @@ impl fuser::Filesystem for GitFsAdapter {
         name: &OsStr,
         newparent: u64,
         newname: &OsStr,
-        flags: u32,
+        _flags: u32,
         reply: fuser::ReplyEmpty,
     ) {
         let fs = self.getfs();
@@ -393,14 +381,14 @@ impl fuser::Filesystem for GitFsAdapter {
         let res = fs.rename(parent, name, newparent, newname);
         match res {
             Ok(()) => reply.ok(),
-            Err(e) => {
+            Err(_) => {
                 tracing::error!("RENAME {parent} {}", name.display());
                 reply.error(ENOENT)
             }
         }
     }
 
-    fn open(&mut self, req: &fuser::Request<'_>, ino: u64, flags: i32, reply: ReplyOpen) {
+    fn open(&mut self, _req: &fuser::Request<'_>, ino: u64, flags: i32, reply: ReplyOpen) {
         let fs = self.getfs();
 
         if ino == ROOT_INO {
@@ -427,7 +415,7 @@ impl fuser::Filesystem for GitFsAdapter {
 
         match fs.open(ino, read, write, truncate) {
             Ok(fh) => reply.opened(fh, 0),
-            Err(e) => reply.error(libc::ENOENT),
+            Err(_) => reply.error(libc::ENOENT),
         }
     }
 
@@ -524,7 +512,7 @@ impl fuser::Filesystem for GitFsAdapter {
                 let Some((cookie, _)) = entries
                     .iter()
                     .enumerate()
-                    .find(|(idx, e)| e.name == next_name)
+                    .find(|(_, e)| e.name == next_name)
                 else {
                     reply.error(libc::EIO);
                     return;
@@ -540,7 +528,7 @@ impl fuser::Filesystem for GitFsAdapter {
             .iter()
             .enumerate()
             .skip(cookie)
-            .map(|(idx, e)| e.name.clone())
+            .map(|(_, e)| e.name.clone())
             .collect::<Vec<OsString>>();
 
         for (i, entry) in entries.iter().enumerate().skip(cookie) {
@@ -569,7 +557,7 @@ impl fuser::Filesystem for GitFsAdapter {
         &mut self,
         _req: &fuser::Request<'_>,
         ino: u64,
-        fh: u64,
+        _fh: u64,
         offset: i64,
         mut reply: fuser::ReplyDirectoryPlus,
     ) {
@@ -632,9 +620,9 @@ impl fuser::Filesystem for GitFsAdapter {
     fn fsyncdir(
         &mut self,
         _req: &fuser::Request<'_>,
-        ino: u64,
-        fh: u64,
-        datasync: bool,
+        _ino: u64,
+        _fh: u64,
+        _datasync: bool,
         reply: fuser::ReplyEmpty,
     ) {
         reply.ok();
@@ -643,9 +631,9 @@ impl fuser::Filesystem for GitFsAdapter {
     fn fsync(
         &mut self,
         _req: &fuser::Request<'_>,
-        ino: u64,
-        fh: u64,
-        datasync: bool,
+        _ino: u64,
+        _fh: u64,
+        _datasync: bool,
         reply: fuser::ReplyEmpty,
     ) {
         reply.ok();
@@ -661,7 +649,7 @@ impl fuser::Filesystem for GitFsAdapter {
         fh_out: u64,
         offset_out: i64,
         len: u64,
-        flags: u32,
+        _flags: u32,
         reply: ReplyWrite,
     ) {
         let fs = self.getfs();
@@ -683,10 +671,10 @@ impl fuser::Filesystem for GitFsAdapter {
     fn lseek(
         &mut self,
         _req: &fuser::Request<'_>,
-        ino: u64,
-        fh: u64,
-        offset: i64,
-        whence: i32,
+        _ino: u64,
+        _fh: u64,
+        _offset: i64,
+        _whence: i32,
         reply: fuser::ReplyLseek,
     ) {
         reply.error(libc::ENOSYS);
@@ -695,9 +683,9 @@ impl fuser::Filesystem for GitFsAdapter {
     fn getxattr(
         &mut self,
         _req: &fuser::Request<'_>,
-        ino: u64,
-        name: &OsStr,
-        size: u32,
+        _ino: u64,
+        _name: &OsStr,
+        _size: u32,
         reply: fuser::ReplyXattr,
     ) {
         reply.error(libc::EOPNOTSUPP);
@@ -706,8 +694,8 @@ impl fuser::Filesystem for GitFsAdapter {
     fn listxattr(
         &mut self,
         _req: &fuser::Request<'_>,
-        ino: u64,
-        size: u32,
+        _ino: u64,
+        _size: u32,
         reply: fuser::ReplyXattr,
     ) {
         reply.error(libc::EOPNOTSUPP);
@@ -716,8 +704,8 @@ impl fuser::Filesystem for GitFsAdapter {
     fn removexattr(
         &mut self,
         _req: &fuser::Request<'_>,
-        ino: u64,
-        name: &OsStr,
+        _ino: u64,
+        _name: &OsStr,
         reply: fuser::ReplyEmpty,
     ) {
         reply.error(libc::EOPNOTSUPP);
@@ -730,8 +718,8 @@ impl fuser::Filesystem for GitFsAdapter {
         fh: u64,
         offset: i64,
         size: u32,
-        flags: i32,
-        lock_owner: Option<u64>,
+        _flags: i32,
+        _lock_owner: Option<u64>,
         reply: ReplyData,
     ) {
         let fs = self.getfs();
@@ -750,9 +738,9 @@ impl fuser::Filesystem for GitFsAdapter {
         fh: u64,
         offset: i64,
         data: &[u8],
-        write_flags: u32,
-        flags: i32,
-        lock_owner: Option<u64>,
+        _write_flags: u32,
+        _flags: i32,
+        _lock_owner: Option<u64>,
         reply: ReplyWrite,
     ) {
         let fs = self.getfs();
@@ -779,14 +767,14 @@ impl fuser::Filesystem for GitFsAdapter {
         &mut self,
         _req: &fuser::Request<'_>,
         ino: u64,
-        mode: Option<u32>,
+        _mode: Option<u32>,
         uid: Option<u32>,
         gid: Option<u32>,
         size: Option<u64>,
         atime: Option<fuser::TimeOrNow>,
         mtime: Option<fuser::TimeOrNow>,
         ctime: Option<SystemTime>,
-        fh: Option<u64>,
+        _fh: Option<u64>,
         _crtime: Option<SystemTime>,
         _chgtime: Option<SystemTime>,
         _bkuptime: Option<SystemTime>,
@@ -847,7 +835,7 @@ impl fuser::Filesystem for GitFsAdapter {
     fn releasedir(
         &mut self,
         _req: &fuser::Request<'_>,
-        ino: u64,
+        _ino: u64,
         fh: u64,
         _flags: i32,
         reply: fuser::ReplyEmpty,
@@ -868,7 +856,7 @@ impl fuser::Filesystem for GitFsAdapter {
         fh: u64,
         _flags: i32,
         _lock_owner: Option<u64>,
-        flush: bool,
+        _flush: bool,
         reply: fuser::ReplyEmpty,
     ) {
         let fs = self.getfs();
@@ -883,9 +871,9 @@ impl fuser::Filesystem for GitFsAdapter {
     fn flush(
         &mut self,
         _req: &fuser::Request<'_>,
-        ino: u64,
-        fh: u64,
-        lock_owner: u64,
+        _ino: u64,
+        _fh: u64,
+        _lock_owner: u64,
         reply: fuser::ReplyEmpty,
     ) {
         reply.ok();
@@ -928,11 +916,11 @@ impl fuser::Filesystem for GitFsAdapter {
 
     fn create(
         &mut self,
-        req: &fuser::Request<'_>,
+        _req: &fuser::Request<'_>,
         parent: u64,
         name: &OsStr,
-        mode: u32,
-        umask: u32,
+        _mode: u32,
+        _umask: u32,
         flags: i32,
         reply: fuser::ReplyCreate,
     ) {
