@@ -1,3 +1,4 @@
 /target
 /data_dir
 /MOUNT
+/.cargo/*
